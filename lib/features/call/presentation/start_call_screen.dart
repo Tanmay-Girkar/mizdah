@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../data/repositories/mizdah_repository.dart';
 import '../../../data/models/models.dart';
+import '../../../core/widgets/glass_card.dart';
+import '../../../core/widgets/mizdah_button.dart';
+import '../../../core/theme/theme_provider.dart';
 
 class StartCallScreen extends ConsumerWidget {
   const StartCallScreen({super.key});
@@ -11,102 +14,153 @@ class StartCallScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final contactsAsync = ref.watch(contactsProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(
-        title: TextField(
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Enter name or email',
-            border: InputBorder.none,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: isDark ? MizdahTheme.darkGradient : null,
+          color: isDark ? null : MizdahTheme.lightBackground,
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              _CustomAppBar(),
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: GlassCard(
+                  child: Column(
+                    children: [
+                      _QuickActionTile(
+                        icon: Icons.link,
+                        title: 'Create a meeting for later',
+                        onTap: () => _createMeeting(context, ref, 'Share'),
+                      ),
+                      const Divider(height: 1),
+                      _QuickActionTile(
+                        icon: Icons.video_call_rounded,
+                        title: 'Start an instant meeting',
+                        onTap: () => _createMeeting(context, ref, 'Join'),
+                      ),
+                      const Divider(height: 1),
+                      _QuickActionTile(
+                        icon: Icons.calendar_today_rounded,
+                        title: 'Schedule in Google Calendar',
+                        onTap: () => context.push('/schedule'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const _SectionHeader(title: 'Suggestions'),
+              Expanded(
+                child: contactsAsync.when(
+                  data: (contacts) => ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: contacts.length,
+                    itemBuilder: (context, index) {
+                      final contact = contacts[index];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+                            child: Text(contact.name[0], style: const TextStyle(color: MizdahTheme.primaryBlue)),
+                          ),
+                          title: Text(contact.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(contact.email, style: const TextStyle(fontSize: 12)),
+                          onTap: () => context.push('/meeting/direct-${contact.id}'),
+                        ),
+                      );
+                    },
+                  ),
+                  loading: () => const Center(child: CircularProgressIndicator()),
+                  error: (err, stack) => Center(child: Text('Error: $err')),
+                ),
+              ),
+            ],
           ),
-          onChanged: (value) {
-            // Filter contacts (To be implemented)
-          },
         ),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+
+  void _createMeeting(BuildContext context, WidgetRef ref, String mode) async {
+    final repository = ref.read(mizdahRepositoryProvider);
+    final meeting = await repository.createMeeting('Instant Meeting', DateTime.now());
+    
+    if (!context.mounted) return;
+    
+    if (mode == 'Share') {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (context) => ShareLinkModal(meeting: meeting),
+      );
+    } else {
+      context.push('/meeting/${meeting.id}');
+    }
+  }
+}
+
+class _CustomAppBar extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _QuickActionItem(
-                  icon: Icons.link,
-                  label: 'Create link',
-                  onTap: () => _showShareLinkModal(context, ref),
-                ),
-                _QuickActionItem(
-                  icon: Icons.calendar_month_outlined,
-                  label: 'Schedule',
-                  onTap: () => context.push('/schedule'),
-                ),
-                _QuickActionItem(
-                  icon: Icons.group_add_outlined,
-                  label: 'Group call',
-                  onTap: () {
-                    // Group selection
-                  },
-                ),
-              ],
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text(
-              'Suggestions',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-            ),
-          ),
-          Expanded(
-            child: contactsAsync.when(
-              data: (contacts) => ListView.builder(
-                itemCount: contacts.length,
-                itemBuilder: (context, index) {
-                  final contact = contacts[index];
-                  return ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(
-                        context,
-                      ).colorScheme.primaryContainer,
-                      child: Text(contact.name[0]),
-                    ),
-                    title: Text(contact.name),
-                    subtitle: Text(contact.email),
-                    onTap: () {
-                      // Navigate to Lobby/Meeting
-                      context.push('/meeting/direct-${contact.id}');
-                    },
-                  );
-                },
+          IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop()),
+          const Expanded(
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'Search people or dial',
+                border: InputBorder.none,
               ),
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, stack) => Center(child: Text('Error: $err')),
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  void _showShareLinkModal(BuildContext context, WidgetRef ref) async {
-    final repository = ref.read(mizdahRepositoryProvider);
-    final meeting = await repository.createMeeting(
-      'New Meeting',
-      DateTime.now(),
+class _QuickActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+
+  const _QuickActionTile({required this.icon, required this.title, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: MizdahTheme.primaryBlue),
+      title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      onTap: onTap,
     );
+  }
+}
 
-    if (!context.mounted) return;
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader({required this.title});
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey),
+        ),
       ),
-      builder: (context) => ShareLinkModal(meeting: meeting),
     );
   }
 }
@@ -115,126 +169,63 @@ final contactsProvider = FutureProvider<List<Contact>>((ref) {
   return ref.watch(mizdahRepositoryProvider).getContacts();
 });
 
-class _QuickActionItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _QuickActionItem({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(
-                context,
-              ).colorScheme.primaryContainer.withOpacity(0.3),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: Theme.of(context).colorScheme.primary),
-          ),
-          const SizedBox(height: 8),
-          Text(label, style: const TextStyle(fontSize: 12)),
-        ],
-      ),
-    );
-  }
-}
-
 class ShareLinkModal extends StatelessWidget {
   final Meeting meeting;
   const ShareLinkModal({super.key, required this.meeting});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return GlassCard(
+      radius: 32,
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Here\'s the link to your meeting',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
+          const Text(
+            'Meeting Link Ready',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Text(
-            'Copy this link and send it to people you want to meet with. Be sure to save it so you can use it later, too.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.outline,
-            ),
+            'Share this link with participants you want in the meeting.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey[400]),
           ),
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceVariant,
-              borderRadius: BorderRadius.circular(12),
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
             ),
             child: Row(
               children: [
-                Expanded(
-                  child: Text(
-                    meeting.code,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
+                Expanded(child: Text(meeting.code, style: const TextStyle(fontFamily: 'monospace'))),
                 IconButton(
-                  icon: const Icon(Icons.copy_outlined),
+                  icon: const Icon(Icons.copy),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: meeting.code));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Link copied')),
-                    );
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied!')));
                   },
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                // Share functionality (would use share_plus in real app)
-              },
-              icon: const Icon(Icons.share_outlined),
-              label: const Text('Share invite'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
+          const SizedBox(height: 32),
+          MizdahButton(
+            label: 'Share Invite',
+            icon: Icons.share_rounded,
+            onTap: () {},
           ),
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: () {
-                Navigator.pop(context);
-                context.push('/meeting/${meeting.id}');
-              },
-              child: const Text('Join meeting'),
-            ),
+          MizdahButton(
+            label: 'Join Meeting',
+            backgroundColor: Colors.white10,
+            onTap: () {
+              Navigator.pop(context);
+              context.push('/meeting/${meeting.id}');
+            },
           ),
         ],
       ),
