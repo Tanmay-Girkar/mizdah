@@ -49,6 +49,7 @@ dependencies:
   shimmer: ^3.0.0
   animations: ^2.0.15
   flutter_blurhash: ^0.8.2
+  socket_io_client: ^3.1.4
 
 dev_dependencies:
   flutter_test:
@@ -73,8 +74,8 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
+  assets:
+    - assets/images/mizdahlogo.png
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

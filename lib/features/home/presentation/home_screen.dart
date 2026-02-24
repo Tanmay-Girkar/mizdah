@@ -7,6 +7,7 @@ import '../../../data/models/models.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/theme/theme_provider.dart';
+import '../../auth/auth_provider.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -16,6 +17,8 @@ class HomeScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final callHistoryAsync = ref.watch(callHistoryProvider);
+    final authState = ref.watch(authProvider);
+
 
     return Scaffold(
       drawer: const MizdahDrawer(),
@@ -27,9 +30,9 @@ class HomeScreen extends ConsumerWidget {
         child: SafeArea(
           child: Column(
             children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: MizdahAppBar(),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: MizdahAppBar(user: authState.user),
               ),
               Expanded(
                 child: RefreshIndicator(
@@ -45,7 +48,7 @@ class HomeScreen extends ConsumerWidget {
                               title: 'New Meeting',
                               icon: Icons.video_call_rounded,
                               color: MizdahTheme.primaryBlue,
-                              onTap: () => context.push('/start-call'),
+                              onTap: () => _handleNewMeeting(context, ref),
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -54,7 +57,7 @@ class HomeScreen extends ConsumerWidget {
                               title: 'Join with code',
                               icon: Icons.keyboard_rounded,
                               color: Colors.white24,
-                              onTap: () => _showJoinCodeDialog(context),
+                              onTap: () => _showJoinCodeDialog(context, ref),
                             ),
                           ),
                         ],
@@ -64,7 +67,7 @@ class HomeScreen extends ConsumerWidget {
                       const SizedBox(height: 32),
 
                       // Recent History Section
-                      const _SectionHeader(title: 'Recent activity'),
+                      _SectionHeader(title: 'Recent activity'),
                       const SizedBox(height: 16),
                       callHistoryAsync.when(
                         data: (history) => history.isEmpty
@@ -73,7 +76,7 @@ class HomeScreen extends ConsumerWidget {
                                 children: history.map((item) => HistoryTile(item: item)).toList(),
                               ),
                         loading: () => const Center(child: CircularProgressIndicator()),
-                        error: (err, stack) => Text('Error: $err'),
+                        error: (err, stack) => Center(child: Text('Failed to load history')),
                       ),
                     ],
                   ),
@@ -86,7 +89,21 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  void _showJoinCodeDialog(BuildContext context) {
+  Future<void> _handleNewMeeting(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(mizdahRepositoryProvider);
+    try {
+      final meeting = await repo.createMeeting('Instant Meeting', DateTime.now());
+      if (context.mounted) {
+        context.push('/pre-join/${meeting.code}');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to create meeting')));
+      }
+    }
+  }
+
+  void _showJoinCodeDialog(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
       builder: (context) => const JoinCodeDialog(),
@@ -211,21 +228,40 @@ class HistoryTile extends StatelessWidget {
           style: const TextStyle(fontSize: 12),
         ),
         trailing: Icon(Icons.chevron_right, color: Colors.grey.withOpacity(0.5)),
-        onTap: () => context.push('/meeting/${item.id}'),
+        onTap: () => context.push('/pre-join/${item.id}'),
       ),
     );
   }
 }
 
-class JoinCodeDialog extends StatefulWidget {
+class JoinCodeDialog extends ConsumerStatefulWidget {
   const JoinCodeDialog({super.key});
 
   @override
-  State<JoinCodeDialog> createState() => _JoinCodeDialogState();
+  ConsumerState<JoinCodeDialog> createState() => _JoinCodeDialogState();
 }
 
-class _JoinCodeDialogState extends State<JoinCodeDialog> {
+class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
   final _controller = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _onJoin() async {
+    if (_controller.text.isEmpty) return;
+    
+    setState(() => _isLoading = true);
+    final repo = ref.read(mizdahRepositoryProvider);
+    final meeting = await repo.getMeetingByCode(_controller.text);
+    
+    if (mounted) {
+      setState(() => _isLoading = false);
+      if (meeting != null) {
+        Navigator.pop(context);
+        context.push('/pre-join/${meeting.code}');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid meeting code')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -234,49 +270,29 @@ class _JoinCodeDialogState extends State<JoinCodeDialog> {
       content: TextField(
         controller: _controller,
         decoration: const InputDecoration(
-          hintText: 'Example: vpm-mwrh-fjc',
+          hintText: 'Example: abc-defg-hij',
           border: OutlineInputBorder(),
         ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(
-          onPressed: () {
-            if (_controller.text.isNotEmpty) {
-              Navigator.pop(context);
-              context.push('/meeting/${_controller.text}');
-            }
-          },
-          child: const Text('Join'),
-        ),
+        _isLoading
+          ? const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+          : ElevatedButton(
+              onPressed: _onJoin,
+              child: const Text('Join'),
+            ),
       ],
     );
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-    );
-  }
-}
-
-final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) {
-  return ref.watch(mizdahRepositoryProvider).getCallHistory();
-});
-
 class MizdahAppBar extends StatelessWidget {
-  const MizdahAppBar({super.key});
+  final User? user;
+  const MizdahAppBar({super.key, this.user});
 
   @override
   Widget build(BuildContext context) {
-    
     return Row(
       children: [
         IconButton(
@@ -291,34 +307,39 @@ class MizdahAppBar extends StatelessWidget {
             ),
           ),
         ),
-        const CircleAvatar(
+        CircleAvatar(
           radius: 18,
           backgroundColor: Colors.blue,
-          child: Icon(Icons.person, color: Colors.white, size: 20),
+          child: user != null 
+            ? Text(user!.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+            : const Icon(Icons.person, color: Colors.white, size: 20),
         ),
       ],
     );
   }
 }
 
-class MizdahDrawer extends StatelessWidget {
+class MizdahDrawer extends ConsumerWidget {
   const MizdahDrawer({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authProvider);
+    final user = authState.user;
+
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
         children: [
-          const DrawerHeader(
-            decoration: BoxDecoration(color: MizdahTheme.darkBackgroundTop),
+          DrawerHeader(
+            decoration: const BoxDecoration(color: MizdahTheme.darkBackgroundTop),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CircleAvatar(radius: 30, child: Icon(Icons.person)),
-                SizedBox(height: 12),
-                Text('User Name', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                Text('user@example.com', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const CircleAvatar(radius: 30, child: Icon(Icons.person)),
+                const SizedBox(height: 12),
+                Text(user?.name ?? 'Guest User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(user?.email ?? '', style: const TextStyle(color: Colors.white70, fontSize: 12)),
               ],
             ),
           ),
@@ -331,6 +352,15 @@ class MizdahDrawer extends StatelessWidget {
             leading: const Icon(Icons.privacy_tip_outlined),
             title: const Text('Privacy'),
             onTap: () => context.push('/privacy'),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text('Logout', style: TextStyle(color: Colors.red)),
+            onTap: () {
+              ref.read(authProvider.notifier).logout();
+              context.go('/login');
+            },
           ),
         ],
       ),
@@ -355,3 +385,23 @@ class EmptyStateView extends StatelessWidget {
     );
   }
 }
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+  }
+}
+
+final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
+  final repo = ref.watch(mizdahRepositoryProvider);
+  return repo.getCallHistory();
+});

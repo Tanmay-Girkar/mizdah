@@ -1,3 +1,35 @@
+class User {
+  final String id;
+  final String email;
+  final String name;
+  final String role;
+
+  User({
+    required this.id,
+    required this.email,
+    required this.name,
+    required this.role,
+  });
+
+  factory User.fromJson(Map<String, dynamic> json) {
+    return User(
+      id: json['id'] ?? '',
+      email: json['email'] ?? '',
+      name: json['name'] ?? '',
+      role: json['role'] ?? 'USER',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'name': name,
+      'role': role,
+    };
+  }
+}
+
 class Contact {
   final String id;
   final String name;
@@ -10,6 +42,15 @@ class Contact {
     this.avatarUrl,
     required this.email,
   });
+
+  factory Contact.fromJson(Map<String, dynamic> json) {
+    return Contact(
+      id: json['id'] ?? '',
+      name: json['name'] ?? '',
+      avatarUrl: json['avatarUrl'],
+      email: json['email'] ?? '',
+    );
+  }
 }
 
 class Meeting {
@@ -26,6 +67,16 @@ class Meeting {
     required this.code,
     required this.participants,
   });
+
+  factory Meeting.fromJson(Map<String, dynamic> json) {
+    return Meeting(
+      id: json['id'] ?? '',
+      title: json['title'] ?? json['meeting_code'] ?? 'Untitled Meeting',
+      dateTime: DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
+      code: json['meeting_code'] ?? '',
+      participants: (json['participants'] as List?)?.map((e) => e.toString()).toList() ?? [],
+    );
+  }
 }
 
 class CallHistory {
@@ -42,4 +93,14 @@ class CallHistory {
     required this.duration,
     required this.isMissed,
   });
+
+  factory CallHistory.fromJson(Map<String, dynamic> json) {
+    return CallHistory(
+      id: json['id'] ?? '',
+      title: json['meeting_id'] ?? 'Past Meeting',
+      timestamp: DateTime.tryParse(json['joined_at'] ?? '') ?? DateTime.now(),
+      duration: json['duration'] != null ? Duration(seconds: json['duration']) : Duration.zero,
+      isMissed: false, // Could be determined by duration or left_at
+    );
+  }
 }

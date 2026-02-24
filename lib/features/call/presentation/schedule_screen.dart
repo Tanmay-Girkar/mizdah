@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../data/repositories/mizdah_repository.dart';
+import 'start_call_screen.dart';
 
-class ScheduleScreen extends StatefulWidget {
+class ScheduleScreen extends ConsumerStatefulWidget {
   const ScheduleScreen({super.key});
 
   @override
-  State<ScheduleScreen> createState() => _ScheduleScreenState();
+  ConsumerState<ScheduleScreen> createState() => _ScheduleScreenState();
 }
 
-class _ScheduleScreenState extends State<ScheduleScreen> {
+class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
   final _titleController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  
   DateTime _startDate = DateTime.now();
   TimeOfDay _startTime = TimeOfDay.now();
   DateTime _endDate = DateTime.now().add(const Duration(hours: 1));
@@ -18,6 +23,35 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     DateTime.now().add(const Duration(hours: 1)),
   );
   bool _allDay = false;
+
+  String _repeatOption = 'Does not repeat';
+  Color _selectedColor = Colors.blue;
+
+  final List<String> _repeatOptions = [
+    'Does not repeat',
+    'Every day',
+    'Every week',
+    'Every month',
+    'Every year'
+  ];
+
+  final List<Color> _availableColors = [
+    Colors.blue,
+    Colors.red,
+    Colors.green,
+    Colors.orange,
+    Colors.purple,
+    Colors.teal,
+  ];
+
+  final Map<Color, String> _colorNames = {
+    Colors.blue: 'Default color',
+    Colors.red: 'Tomato',
+    Colors.green: 'Basil',
+    Colors.orange: 'Tangerine',
+    Colors.purple: 'Grape',
+    Colors.teal: 'Peacock',
+  };
 
   Future<void> _selectDate(BuildContext context, bool isStart) async {
     final DateTime? picked = await showDatePicker(
@@ -30,6 +64,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       setState(() {
         if (isStart) {
           _startDate = picked;
+          // Auto adjust end date if it is before start date
+          if (_endDate.isBefore(_startDate)) {
+            _endDate = _startDate;
+          }
         } else {
           _endDate = picked;
         }
@@ -53,6 +91,101 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     }
   }
 
+  Future<void> _showRepeatDialog() async {
+    final String? result = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Repeat'),
+          contentPadding: const EdgeInsets.only(top: 12.0, bottom: 12.0),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _repeatOptions.map((option) {
+              return RadioListTile<String>(
+                title: Text(option),
+                value: option,
+                groupValue: _repeatOption,
+                onChanged: (String? value) {
+                  Navigator.of(context).pop(value);
+                },
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+
+    if (result != null) {
+      setState(() {
+        _repeatOption = result;
+      });
+    }
+  }
+
+  Future<void> _showColorDialog() async {
+    final Color? result = await showDialog<Color>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Event color'),
+          contentPadding: const EdgeInsets.only(top: 12.0, bottom: 12.0),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _availableColors.map((color) {
+              return ListTile(
+                leading: Icon(Icons.circle, color: color),
+                title: Text(_colorNames[color] ?? 'Color'),
+                trailing: _selectedColor == color ? const Icon(Icons.check) : null,
+                onTap: () {
+                  Navigator.of(context).pop(color);
+                },
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+
+    if (result != null) {
+      setState(() {
+        _selectedColor = result;
+      });
+    }
+  }
+
+  Future<void> _saveMeeting() async {
+    final title = _titleController.text.trim().isEmpty ? 'Untitled Meeting' : _titleController.text.trim();
+    final scheduledDate = DateTime(
+      _startDate.year,
+      _startDate.month,
+      _startDate.day,
+      _startTime.hour,
+      _startTime.minute,
+    );
+    
+    // Save to repository
+    final repository = ref.read(mizdahRepositoryProvider);
+    final meeting = await repository.createMeeting(title, scheduledDate);
+    
+    if (!mounted) return;
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Meeting scheduled successfully')),
+    );
+    
+    // Present the Link share modal to complete the E2E flow
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => ShareLinkModal(meeting: meeting),
+    ).then((_) {
+      if (mounted) {
+        context.pop();
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -64,13 +197,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         title: const Text('New meeting'),
         actions: [
           TextButton(
-            onPressed: () {
-              // Save meeting logic
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Meeting scheduled')),
-              );
-              context.pop();
-            },
+            onPressed: _saveMeeting,
             child: const Text('Save'),
           ),
         ],
@@ -114,22 +241,41 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             },
           ),
           const Divider(),
-          const ListTile(
-            leading: Icon(Icons.loop),
-            title: Text('Does not repeat'),
-            onTap: null,
+          ListTile(
+            leading: const Icon(Icons.loop),
+            title: Text(_repeatOption),
+            onTap: _showRepeatDialog,
           ),
-          const ListTile(
-            leading: Icon(Icons.circle, color: Colors.blue),
-            title: Text('Default color'),
-            onTap: null,
+          ListTile(
+            leading: Icon(Icons.circle, color: _selectedColor),
+            title: Text(_colorNames[_selectedColor] ?? 'Default color'),
+            onTap: _showColorDialog,
           ),
           const Divider(),
-          const ListTile(
-            leading: Icon(Icons.description_outlined),
-            title: Text('Add description'),
-            onTap: null,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 12.0, right: 32.0),
+                  child: Icon(Icons.description_outlined, color: Colors.grey),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _descriptionController,
+                    maxLines: null,
+                    keyboardType: TextInputType.multiline,
+                    decoration: const InputDecoration(
+                      hintText: 'Add description',
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );

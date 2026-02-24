@@ -7,37 +7,34 @@ import '../../core/widgets/mizdah_text_field.dart';
 import '../../core/theme/theme_provider.dart';
 import 'auth_provider.dart';
 
-class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+class RegisterScreen extends ConsumerStatefulWidget {
+  const RegisterScreen({super.key});
 
   @override
-  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   @override
   void dispose() {
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  void _onLogin() {
-    if (_formKey.currentState!.validate()) {
-      ref.read(authProvider.notifier).login(
-        _emailController.text,
-        _passwordController.text,
-      );
-    }
+  void _onRegister() {
+    // Bypassing registration and validation for now as requested
+    context.go('/');
   }
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authProvider);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -54,35 +51,37 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Logo / Header
-                  Icon(
-                    Icons.videocam_rounded,
-                    size: 80,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(height: 16),
                   Text(
-                    'Welcome to Mizdah',
+                    'Create Account',
                     style: theme.textTheme.headlineLarge?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: isDark ? Colors.white : Colors.black87,
                     ),
                   ),
                   Text(
-                    'Premium video conferencing',
+                    'Join the Mizdah community',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: isDark ? Colors.white70 : Colors.black54,
                     ),
                   ),
                   const SizedBox(height: 48),
 
-                  // Login Form Card
+                  // Register Form Card
                   GlassCard(
                     child: Form(
                       key: _formKey,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          MizdahTextField(
+                            label: 'Full Name',
+                            hintText: 'Enter your full name',
+                            controller: _nameController,
+                            prefixIcon: Icons.person_outline,
+                            validator: (val) => (val == null || val.isEmpty) 
+                                ? 'Enter your name' : null,
+                          ),
+                          const SizedBox(height: 20),
                           MizdahTextField(
                             label: 'Email',
                             hintText: 'Enter your email',
@@ -102,32 +101,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             validator: (val) => (val == null || val.length < 6) 
                                 ? 'Min 6 characters' : null,
                           ),
-                          if (authState.errorMessage != null) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              authState.errorMessage!,
-                              style: const TextStyle(color: Colors.red, fontSize: 13),
-                            ),
-                          ],
                           const SizedBox(height: 32),
                           MizdahButton(
-                            label: 'Log In',
-                            onTap: authState.status == AuthStatus.authenticating 
-                                ? null : _onLogin,
-                            isLoading: authState.status == AuthStatus.authenticating,
+                            label: 'Register',
+                            onTap: _onRegister,
                           ),
                           const SizedBox(height: 16),
                           Center(
                             child: TextButton(
-                              onPressed: () => context.go('/register'),
-                              child: const Text("Don't have an account? Register"),
+                              onPressed: () => context.go('/login'),
+                              child: const Text('Already have an account? Sign in'),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-
                 ],
               ),
             ),

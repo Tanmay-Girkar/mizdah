@@ -6,6 +6,7 @@ abstract class MizdahRepository {
   Future<List<Meeting>> getMeetings();
   Future<List<CallHistory>> getCallHistory();
   Future<Meeting> createMeeting(String title, DateTime dateTime);
+  Future<Meeting?> getMeetingByCode(String code);
 }
 
 class MockMizdahRepository implements MizdahRepository {
@@ -15,33 +16,38 @@ class MockMizdahRepository implements MizdahRepository {
     return [
       Contact(id: '1', name: 'Zohaib Ali', email: 'zohaib@example.com'),
       Contact(id: '2', name: 'Ayesha Khan', email: 'ayesha@example.com'),
-      Contact(id: '3', name: 'Hamza Sheikh', email: 'hamza@example.com'),
-      Contact(id: '4', name: 'Sana Fatima', email: 'sana@example.com'),
+      Contact(id: '3', name: 'Mustafa Omen', email: 'mustafa@example.com'),
     ];
   }
 
   @override
   Future<List<Meeting>> getMeetings() async {
-    await Future.delayed(const Duration(milliseconds: 500));
     return [];
   }
 
   @override
   Future<List<CallHistory>> getCallHistory() async {
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 800));
     return [
       CallHistory(
-        id: 'h1',
+        id: '1',
         title: 'Project Sync',
         timestamp: DateTime.now().subtract(const Duration(hours: 2)),
         duration: const Duration(minutes: 45),
         isMissed: false,
       ),
       CallHistory(
-        id: 'h2',
-        title: 'Design Review',
+        id: '2',
+        title: 'UI Review',
         timestamp: DateTime.now().subtract(const Duration(days: 1)),
         duration: const Duration(minutes: 30),
+        isMissed: false,
+      ),
+      CallHistory(
+        id: '3',
+        title: 'Interview',
+        timestamp: DateTime.now().subtract(const Duration(days: 2)),
+        duration: const Duration(minutes: 15),
         isMissed: true,
       ),
     ];
@@ -49,14 +55,27 @@ class MockMizdahRepository implements MizdahRepository {
 
   @override
   Future<Meeting> createMeeting(String title, DateTime dateTime) async {
-    await Future.delayed(const Duration(milliseconds: 800));
     return Meeting(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: 'mock-123',
       title: title,
+      code: 'abc-defg-hij',
       dateTime: dateTime,
-      code: 'vpm-mwrh-fjc',
-      participants: [],
+      participants: ['host-1'],
     );
+  }
+
+  @override
+  Future<Meeting?> getMeetingByCode(String code) async {
+    if (code.toLowerCase() == 'abc-defg-hij') {
+      return Meeting(
+        id: 'mock-123',
+        title: 'Mock Meeting',
+        code: 'abc-defg-hij',
+        dateTime: DateTime.now(),
+        participants: ['host-1'],
+      );
+    }
+    return null;
   }
 }
 

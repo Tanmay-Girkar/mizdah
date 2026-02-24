@@ -66,19 +66,24 @@ class _GeneralSettings extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Text('Appearance', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        Text(
+          'Appearance', 
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)
+        ),
         const SizedBox(height: 16),
         GlassCard(
           child: Column(
             children: [
-              _ThemeTile(title: 'Light', mode: ThemeMode.light, current: themeMode, ref: ref),
-              const Divider(height: 1, color: Colors.white10),
-              _ThemeTile(title: 'Dark', mode: ThemeMode.dark, current: themeMode, ref: ref),
-              const Divider(height: 1, color: Colors.white10),
-              _ThemeTile(title: 'System Default', mode: ThemeMode.system, current: themeMode, ref: ref),
+              _ThemeTile(title: 'Light', mode: ThemeMode.light, current: themeMode, ref: ref, isDark: isDark),
+              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
+              _ThemeTile(title: 'Dark', mode: ThemeMode.dark, current: themeMode, ref: ref, isDark: isDark),
+              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
+              _ThemeTile(title: 'System Default', mode: ThemeMode.system, current: themeMode, ref: ref, isDark: isDark),
             ],
           ),
         ),
@@ -92,13 +97,14 @@ class _ThemeTile extends StatelessWidget {
   final ThemeMode mode;
   final ThemeMode current;
   final WidgetRef ref;
+  final bool isDark;
 
-  const _ThemeTile({required this.title, required this.mode, required this.current, required this.ref});
+  const _ThemeTile({required this.title, required this.mode, required this.current, required this.ref, this.isDark = true});
 
   @override
   Widget build(BuildContext context) {
     return RadioListTile<ThemeMode>(
-      title: Text(title, style: const TextStyle(color: Colors.white)),
+      title: Text(title, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
       value: mode,
       groupValue: current,
       activeColor: MizdahTheme.primaryBlue,
@@ -110,24 +116,26 @@ class _ThemeTile extends StatelessWidget {
 class _AudioSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Text('Microphone', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        Text('Microphone', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 16),
         GlassCard(
           child: ListTile(
-            title: const Text('Built-in Microphone', style: TextStyle(color: Colors.white)),
+            title: Text('Built-in Microphone', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
             trailing: const Icon(Icons.check, color: MizdahTheme.primaryBlue),
             onTap: () {},
           ),
         ),
         const SizedBox(height: 24),
-        const Text('Speakers', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        Text('Speakers', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 16),
         GlassCard(
           child: ListTile(
-            title: const Text('Built-in Output', style: TextStyle(color: Colors.white)),
+            title: Text('Built-in Output', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
             trailing: const Icon(Icons.volume_up, color: MizdahTheme.primaryBlue),
             onTap: () {},
           ),
@@ -140,10 +148,12 @@ class _AudioSettings extends StatelessWidget {
 class _VideoSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Text('Camera', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        Text('Camera', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 16),
         AspectRatio(
           aspectRatio: 16 / 9,
@@ -167,7 +177,7 @@ class _VideoSettings extends StatelessWidget {
         const SizedBox(height: 24),
         GlassCard(
           child: ListTile(
-            title: const Text('FaceTime HD Camera', style: TextStyle(color: Colors.white)),
+            title: Text('FaceTime HD Camera', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
             trailing: const Icon(Icons.check, color: MizdahTheme.primaryBlue),
             onTap: () {},
           ),
@@ -187,15 +197,17 @@ class _NotificationSettingsState extends State<_NotificationSettings> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Text('Notifications', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        Text('Notifications', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 16),
         GlassCard(
           child: SwitchListTile.adaptive(
-            title: const Text('Push Notifications', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Get notified about upcoming meetings', style: TextStyle(color: Colors.white70)),
+            title: Text('Push Notifications', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+            subtitle: Text('Get notified about upcoming meetings', style: TextStyle(color: isDark ? Colors.white70 : Colors.black54)),
             value: _pushEnabled,
             activeColor: MizdahTheme.primaryBlue,
             onChanged: (v) => setState(() => _pushEnabled = v),
