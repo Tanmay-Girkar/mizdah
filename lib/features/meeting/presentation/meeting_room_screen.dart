@@ -1,7 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
+import '../../../data/repositories/file_repository.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../meeting_provider.dart';
 import '../../auth/auth_provider.dart';
 import '../../../core/widgets/control_icon_button.dart';
@@ -10,6 +14,10 @@ import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'widgets/captions_view.dart';
+import 'widgets/whiteboard_view.dart';
+import '../providers/meeting_services_provider.dart';
+import '../../../../core/services/recording_service.dart';
 
 class MeetingRoomScreen extends ConsumerStatefulWidget {
   final String meetingId;
@@ -31,11 +39,14 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final user = ref.read(authProvider).user;
+      final authState = ref.read(authProvider);
+      final user = authState.user;
+      final jwtToken = authState.token ?? '';
       ref.read(meetingProvider(widget.meetingId).notifier).joinMeeting(
         widget.meetingId,
         user?.id ?? 'guest',
         user?.name ?? 'Guest',
+        jwtToken,
       );
     });
   }
@@ -71,6 +82,14 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               _MeetingTopBar(
                 meetingId: widget.meetingId,
                 isRecording: meetingState.isRecording,
+              ),
+
+              // Captions Overlay
+              const Positioned(
+                bottom: 140, // above controls
+                left: 16,
+                right: 16,
+                child: CaptionsView(),
               ),
 
               // PIP for Self if solitary
@@ -111,8 +130,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     );
   }
 
-  int _participantCount(MeetingState state) => 
-      state.remoteRenderers.isNotEmpty ? state.remoteRenderers.length : state.mockParticipantCount;
+  int _participantCount(MeetingState state) => state.participants.length;
   String? _activePanel; 
 
   void _showOptionsBottomSheet(BuildContext context) {
@@ -130,6 +148,20 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           Navigator.pop(context);
           setState(() => _activePanel = 'chat');
         },
+        onOpenWhiteboard: () {
+          Navigator.pop(context);
+          setState(() => _activePanel = 'whiteboard');
+        },
+        onToggleScreenShare: () {
+          Navigator.pop(context);
+          ref.read(meetingProvider(widget.meetingId).notifier).toggleScreenShare();
+        },
+        onToggleCaptions: () {
+          Navigator.pop(context);
+          ref.read(captionServiceProvider(widget.meetingId).notifier).toggleCaptions();
+        },
+        isScreenSharing: ref.watch(meetingProvider(widget.meetingId)).isScreenSharing,
+        isCaptionsEnabled: ref.watch(captionServiceProvider(widget.meetingId)).isEnabled,
       ),
     );
   }
@@ -144,6 +176,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         return 'Host Controls';
       case 'breakout':
         return 'Breakout Rooms';
+      case 'whiteboard':
+        return 'Whiteboard';
       default:
         return '';
     }
@@ -155,22 +189,34 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         final meetingState = ref.watch(meetingProvider(widget.meetingId));
         return _ChatView(
           messages: meetingState.chatMessages,
-          onSend: (text) {
+          onSend: (text, {attachmentUrl}) {
             final user = ref.read(authProvider).user;
-            ref.read(meetingProvider(widget.meetingId).notifier).sendMessage(text, user?.name ?? 'Guest');
+            ref.read(meetingProvider(widget.meetingId).notifier).sendMessage(
+              text, 
+              user?.name ?? 'Guest',
+              attachmentUrl: attachmentUrl,
+            );
           },
         );
       case 'participants':
-        return const _ParticipantsView();
+        return _ParticipantsView(meetingId: widget.meetingId);
       case 'host':
+        final recState = ref.watch(recordingServiceProvider(widget.meetingId));
         return _HostControlsView(
-          isRecording: _isRecording,
-          onRecordingToggle: (val) => val
-              ? _showRecordingConsent()
-              : setState(() => _isRecording = false),
+          isRecording: recState.status == RecordingStatus.recording || _isRecording,
+          onRecordingToggle: (val) {
+            if (val) {
+              _showRecordingConsent();
+            } else {
+              ref.read(recordingServiceProvider(widget.meetingId).notifier).stopRecording();
+              setState(() => _isRecording = false);
+            }
+          },
         );
       case 'breakout':
         return const _BreakoutRoomsView();
+      case 'whiteboard':
+        return const WhiteboardView();
       default:
         return const SizedBox.shrink();
     }
@@ -200,6 +246,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
             isFullWidth: false,
             onTap: () {
               Navigator.pop(context);
+              ref.read(recordingServiceProvider(widget.meetingId).notifier).requestRecording();
               setState(() => _isRecording = true);
             },
           ),
@@ -562,11 +609,21 @@ class _MoreOptionsSheet extends StatelessWidget {
   final bool isRaisingHand;
   final VoidCallback onRaiseHandToggle;
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenWhiteboard;
+  final VoidCallback onToggleScreenShare;
+  final VoidCallback onToggleCaptions;
+  final bool isScreenSharing;
+  final bool isCaptionsEnabled;
 
   const _MoreOptionsSheet({
     required this.isRaisingHand,
     required this.onRaiseHandToggle,
     required this.onOpenChat,
+    required this.onOpenWhiteboard,
+    required this.onToggleScreenShare,
+    required this.onToggleCaptions,
+    required this.isScreenSharing,
+    required this.isCaptionsEnabled,
   });
 
   @override
@@ -622,12 +679,8 @@ class _MoreOptionsSheet extends StatelessWidget {
                     child: _SheetButton(
                       icon: Icons.present_to_all_outlined,
                       label: '',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Sharing screen...')),
-                        );
-                      },
+                      onTap: onToggleScreenShare,
+                      isActive: isScreenSharing,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -635,11 +688,8 @@ class _MoreOptionsSheet extends StatelessWidget {
                     child: _SheetButton(
                       icon: Icons.closed_caption_outlined,
                       label: '',
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Captions enabled')),
-                        );
-                      },
+                      onTap: onToggleCaptions,
+                      isActive: isCaptionsEnabled,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -719,14 +769,9 @@ class _MoreOptionsSheet extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: _SheetButton(
-                      icon: Icons.apps,
-                      label: 'Tools',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Opening tools')),
-                        );
-                      },
+                      icon: Icons.brush_outlined,
+                      label: 'Whiteboard',
+                      onTap: onOpenWhiteboard,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1004,6 +1049,38 @@ class _ChatView extends StatelessWidget {
                                         fontSize: 14,
                                       ),
                                     ),
+                                    if (msg['attachmentUrl'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8.0),
+                                        child: GestureDetector(
+                                          onTap: () => launchUrl(Uri.parse(msg['attachmentUrl'])),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: isMe ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.05),
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.attach_file, size: 16, color: isMe ? Colors.white : MizdahTheme.primaryBlue),
+                                                const SizedBox(width: 4),
+                                                Flexible(
+                                                  child: Text(
+                                                    'Attachment',
+                                                    style: TextStyle(
+                                                      color: isMe ? Colors.white : MizdahTheme.primaryBlue,
+                                                      fontSize: 12,
+                                                      decoration: TextDecoration.underline,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -1027,17 +1104,24 @@ class _ChatView extends StatelessWidget {
             },
           ),
         ),
+        if (_isUploading)
+          const LinearProgressIndicator(minHeight: 2),
         Container(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 40),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isDark ? Colors.transparent : Colors.white,
-            border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05))),
+            color: isDark ? Colors.white.withOpacity(0.02) : Colors.white,
+            border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
           ),
           child: Row(
             children: [
+              IconButton(
+                icon: const Icon(Icons.attach_file),
+                onPressed: _isUploading ? null : _pickAndUploadFile,
+                color: MizdahTheme.primaryBlue,
+              ),
               Expanded(
                 child: TextField(
-                  controller: textController,
+                  controller: _textController,
                   style: TextStyle(color: isDark ? Colors.white : Colors.black87),
                   decoration: InputDecoration(
                     hintText: 'Send a message...',
@@ -1055,9 +1139,9 @@ class _ChatView extends StatelessWidget {
               const SizedBox(width: 12),
               GestureDetector(
                 onTap: () {
-                  if (textController.text.isNotEmpty) {
-                    onSend(textController.text);
-                    textController.clear();
+                  if (_textController.text.isNotEmpty) {
+                    widget.onSend(_textController.text);
+                    _textController.clear();
                   }
                 },
                 child: Container(
@@ -1085,45 +1169,58 @@ class _ChatView extends StatelessWidget {
   }
 }
 
-class _ParticipantsView extends StatelessWidget {
-  const _ParticipantsView();
+class _ParticipantsView extends ConsumerWidget {
+  final String meetingId;
+  const _ParticipantsView({required this.meetingId});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final meetingState = ref.watch(meetingProvider(meetingId));
+    final participants = meetingState.participants;
+
+    if (participants.isEmpty && meetingState.isConnected) {
+       return const Center(child: Text('You are the only one here', style: TextStyle(color: Colors.grey)));
+    }
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      itemCount: 5,
-      itemBuilder: (context, index) => ListTile(
-        leading: CircleAvatar(
-          backgroundColor: isDark ? Colors.white10 : Colors.black12,
-          child: Text(
-            index == 0 ? 'Y' : 'P',
-            style: TextStyle(color: isDark ? Colors.white : Colors.black),
+      itemCount: participants.length,
+      itemBuilder: (context, index) {
+        final participant = participants[index];
+        final name = participant['name'] ?? participant['userId'] ?? 'Unknown';
+        final isHostLog = participant['isHost'] == true;
+
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: isDark ? Colors.white10 : Colors.black12,
+            child: Text(
+              name[0].toUpperCase(),
+              style: TextStyle(color: isDark ? Colors.white : Colors.black),
+            ),
           ),
-        ),
-        title: Text(
-          index == 0 ? 'You (Host)' : 'Participant $index',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.mic,
-              color: isDark ? Colors.grey[600] : Colors.grey[400],
-              size: 20,
-            ),
-            const SizedBox(width: 16),
-            Icon(
-              Icons.videocam,
-              color: isDark ? Colors.grey[600] : Colors.grey[400],
-              size: 20,
-            ),
-          ],
-        ),
-      ),
+          title: Text(
+            '$name${isHostLog ? " (Host)" : ""}',
+            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.mic,
+                color: isDark ? Colors.grey[600] : Colors.grey[400],
+                size: 20,
+              ),
+              const SizedBox(width: 16),
+              Icon(
+                Icons.videocam,
+                color: isDark ? Colors.grey[600] : Colors.grey[400],
+                size: 20,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

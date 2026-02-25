@@ -29,14 +29,27 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   }
 
   void _onRegister() {
-    // Bypassing registration and validation for now as requested
-    context.go('/');
+    if (_formKey.currentState!.validate()) {
+      ref.read(authProvider.notifier).signup(
+        _emailController.text,
+        _passwordController.text,
+        _nameController.text,
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final authState = ref.watch(authProvider);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+
+    // Listen for registration success
+    ref.listen<AuthState>(authProvider, (previous, next) {
+      if (next.status == AuthStatus.authenticated) {
+        context.go('/');
+      }
+    });
 
     return Scaffold(
       body: Container(
@@ -101,10 +114,19 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                             validator: (val) => (val == null || val.length < 6) 
                                 ? 'Min 6 characters' : null,
                           ),
+                           if (authState.errorMessage != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              authState.errorMessage!,
+                              style: const TextStyle(color: Colors.red, fontSize: 13),
+                            ),
+                          ],
                           const SizedBox(height: 32),
                           MizdahButton(
                             label: 'Register',
-                            onTap: _onRegister,
+                            onTap: authState.status == AuthStatus.authenticating 
+                                ? null : _onRegister,
+                            isLoading: authState.status == AuthStatus.authenticating,
                           ),
                           const SizedBox(height: 16),
                           Center(

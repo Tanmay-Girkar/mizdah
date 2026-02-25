@@ -1,0 +1,843 @@
+{
+  "info": {
+    "name": "Mizdah Full API Collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Sign Up",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/signup",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "signup"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"mypassword\",\n  \"name\": \"John Doe\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if(jsonData.token) { pm.environment.set('token', jsonData.token); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"mypassword\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Current User",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Profile",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/update",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "update"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New Name\",\n  \"password\": \"newpassword\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meeting",
+      "item": [
+        {
+          "name": "Create Meeting",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meetings/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meetings",
+                "create"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostId\": \"uuid-1234\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Meeting Info",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/abc-defg-hij",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "abc-defg-hij"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Meetings by Host",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/meetings/user/uuid-1234",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meetings",
+                "user",
+                "uuid-1234"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Meeting Settings",
+          "event": [],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/abc-defg-hij/settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "abc-defg-hij",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"private_chat_enabled\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Global System Settings",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "settings"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Global System Settings",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"max_participants\": 50,\n  \"meeting_time_limit\": 45,\n  \"allow_recordings\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Submit Feedback",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/feedback",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "feedback"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"category\": \"Audio Quality\",\n  \"description\": \"Echo during the call\",\n  \"user_email\": \"user@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Contact / Support Form",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/contact",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "contact"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"John\",\n  \"last_name\": \"Doe\",\n  \"email\": \"john@example.com\",\n  \"message\": \"Help me\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Report Abuse",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meeting/report-abuse",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "meeting",
+                "report-abuse"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"abuse_type\": \"Harassment\",\n  \"abuser_names\": \"John Doe\",\n  \"description\": \"Offensive language\",\n  \"meeting_id\": \"abc-xyz\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Participant",
+      "item": [
+        {
+          "name": "Log Participant Join",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/participant/join",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "participant",
+                "join"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"meetingId\": \"abc\",\n  \"userId\": \"uuid-123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Log Participant Leave",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/participant/leave",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "participant",
+                "leave"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"meetingId\": \"abc\",\n  \"userId\": \"uuid-123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Users Meeting History",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/participant/user/uuid-123",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "participant",
+                "user",
+                "uuid-123"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Participants in a Meeting",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/participant/abc-defg-hij",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "participant",
+                "abc-defg-hij"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Send Message (Public)",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/chat/send",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chat",
+                "send"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"meetingId\": \"abc\",\n  \"senderId\": \"uuid-123\",\n  \"senderName\": \"John\",\n  \"content\": \"Hello!\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Messages",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/chat/abc-defg-hij?userId=uuid-123",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chat",
+                "abc-defg-hij?userId=uuid-123"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Message",
+          "event": [],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/chat/msg-uuid",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chat",
+                "msg-uuid"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Send Meeting Invite",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/notifications/invite",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "invite"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"uuid-123\",\n  \"meetingCode\": \"abc\",\n  \"message\": \"Join!\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Send Meeting Reminder",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/notifications/reminder",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "reminder"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"uuid-123\",\n  \"scheduleId\": \"sch-123\",\n  \"message\": \"Starts soon\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get User Notifications",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/notifications/user/uuid-123",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "user",
+                "uuid-123"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scheduling",
+      "item": [
+        {
+          "name": "Create Schedule",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/scheduling/schedule",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "scheduling",
+                "schedule"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostId\": \"uuid-123\",\n  \"title\": \"Standup\",\n  \"startTime\": \"2026-02-25T09:00:00Z\",\n  \"endTime\": \"2026-02-25T09:30:00Z\",\n  \"recurrence\": \"weekly\",\n  \"timezone\": \"UTC\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Users Scheduled Meetings",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/scheduling/user/uuid-123",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "scheduling",
+                "user",
+                "uuid-123"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Schedule",
+          "event": [],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/scheduling/sch-uuid",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "scheduling",
+                "sch-uuid"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recording",
+      "item": [
+        {
+          "name": "Start Recording",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/recording/start/abc-defg-hij",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recording",
+                "start",
+                "abc-defg-hij"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stop Recording",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/recording/stop/abc-defg-hij",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recording",
+                "stop",
+                "abc-defg-hij"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Recordings for a Meeting",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/recording/abc-defg-hij",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recording",
+                "abc-defg-hij"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get All Recordings",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/recording/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recording"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "File",
+      "item": [
+        {
+          "name": "Get File",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/files/file-uuid",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "files",
+                "file-uuid"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "History",
+      "item": [
+        {
+          "name": "Store Call History",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/store",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "history",
+                "store"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"meetingId\": \"abc\",\n  \"duration\": 1800,\n  \"endedAt\": \"2026-02-24T11:30:00Z\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://192.168.1.24:3000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

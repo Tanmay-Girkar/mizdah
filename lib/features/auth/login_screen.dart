@@ -41,6 +41,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
+    // Listen for authentication success
+    ref.listen<AuthState>(authProvider, (previous, next) {
+      if (next.status == AuthStatus.authenticated) {
+        context.go('/');
+      }
+    });
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(

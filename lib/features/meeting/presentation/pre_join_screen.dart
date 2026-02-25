@@ -6,9 +6,8 @@ import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/widgets/control_icon_button.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/theme_provider.dart';
-import '../../../data/repositories/mizdah_repository.dart';
-import '../../../core/network/api_client.dart';
-import '../../../core/config/api_config.dart';
+import '../../../data/repositories/meeting_repository.dart';
+import '../../../data/models/models.dart';
 
 class PreJoinScreen extends ConsumerStatefulWidget {
   final String meetingId;
@@ -24,11 +23,31 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   bool _isPermissionLoading = true;
   bool _hasPermissions = true; // Default to true for UI development
   bool _isJoining = false;
+  Meeting? _meeting;
+  bool _isLoadingMeeting = true;
 
   @override
   void initState() {
     super.initState();
-    // _checkPermissions(); // Disabled for now to prevent blocking UI tests
+    _fetchMeetingInfo();
+    // _checkPermissions(); 
+  }
+
+  Future<void> _fetchMeetingInfo() async {
+    try {
+      final repo = ref.read(meetingRepositoryProvider);
+      final meeting = await repo.getMeetingInfo(widget.meetingId);
+      if (mounted) {
+        setState(() {
+          _meeting = meeting;
+          _isLoadingMeeting = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoadingMeeting = false);
+      }
+    }
   }
 
   Future<void> _checkPermissions() async {
@@ -126,21 +145,38 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                         child: Column(
                           children: [
                             Text(
-                              'Meeting ID: ${widget.meetingId}',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              _meeting?.title ?? 'Meeting ID: ${widget.meetingId}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                              textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 8),
-                            const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.circle, size: 8, color: Colors.green),
-                                SizedBox(width: 8),
-                                Text(
-                                  '3 people are waiting in the lobby',
-                                  style: TextStyle(color: Colors.green, fontSize: 13, fontWeight: FontWeight.w500),
-                                ),
-                              ],
-                            ),
+                            if (_meeting?.code != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                _meeting!.code,
+                                style: const TextStyle(color: Colors.grey, fontSize: 14),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            if (_isLoadingMeeting)
+                              const CircularProgressIndicator()
+                            else if (_meeting == null)
+                              const Text(
+                                'Meeting not found or has expired',
+                                style: TextStyle(color: Colors.red),
+                              )
+                            else ...[
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.circle, size: 8, color: Colors.green),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${_meeting?.participants.length ?? 0} people in this meeting',
+                                    style: const TextStyle(color: Colors.green, fontSize: 13, fontWeight: FontWeight.w500),
+                                  ),
+                                ],
+                              ),
+                            ],
                             const SizedBox(height: 12),
                             const Text(
                               'Ready to join? Others are already here.',
@@ -149,7 +185,7 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                             const SizedBox(height: 24),
                             MizdahButton(
                               label: 'Join Now',
-                              onTap: _isJoining ? null : _handleJoin,
+                              onTap: (_isJoining || _meeting == null) ? null : _handleJoin,
                               isLoading: _isJoining,
                             ),
                           ],

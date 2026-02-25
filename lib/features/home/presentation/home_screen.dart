@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../../../data/repositories/mizdah_repository.dart';
+import '../../../data/repositories/meeting_repository.dart';
+import '../../../data/repositories/participant_repository.dart';
 import '../../../data/models/models.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../auth/auth_provider.dart';
+import '../notification_provider.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -22,6 +24,7 @@ class HomeScreen extends ConsumerWidget {
 
     return Scaffold(
       drawer: const MizdahDrawer(),
+      endDrawer: const NotificationsDrawer(),
       body: Container(
         decoration: BoxDecoration(
           gradient: isDark ? MizdahTheme.darkGradient : null,
@@ -90,9 +93,11 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _handleNewMeeting(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(mizdahRepositoryProvider);
+    final meetingRepo = ref.read(meetingRepositoryProvider);
+    final authState = ref.read(authProvider);
+    
     try {
-      final meeting = await repo.createMeeting('Instant Meeting', DateTime.now());
+      final meeting = await meetingRepo.createMeeting(hostId: authState.user?.id);
       if (context.mounted) {
         context.push('/pre-join/${meeting.code}');
       }
@@ -249,8 +254,8 @@ class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
     if (_controller.text.isEmpty) return;
     
     setState(() => _isLoading = true);
-    final repo = ref.read(mizdahRepositoryProvider);
-    final meeting = await repo.getMeetingByCode(_controller.text);
+    final repo = ref.read(meetingRepositoryProvider);
+    final meeting = await repo.getMeetingInfo(_controller.text);
     
     if (mounted) {
       setState(() => _isLoading = false);
@@ -307,14 +312,84 @@ class MizdahAppBar extends StatelessWidget {
             ),
           ),
         ),
+        IconButton(
+          icon: const Icon(Icons.notifications_outlined),
+          onPressed: () => Scaffold.of(context).openEndDrawer(),
+        ),
+        const SizedBox(width: 8),
         CircleAvatar(
           radius: 18,
           backgroundColor: Colors.blue,
           child: user != null 
-            ? Text(user!.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+            ? Text(user!.name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
             : const Icon(Icons.person, color: Colors.white, size: 20),
         ),
       ],
+    );
+  }
+}
+
+class NotificationsDrawer extends ConsumerWidget {
+  const NotificationsDrawer({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notificationsAsync = ref.watch(notificationsProvider);
+
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Notifications', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  )
+                ],
+              ),
+            ),
+            const Divider(),
+            Expanded(
+              child: notificationsAsync.when(
+                data: (notifications) {
+                  if (notifications.isEmpty) {
+                    return const Center(child: Text('No new notifications', style: TextStyle(color: Colors.grey)));
+                  }
+                  return ListView.builder(
+                    itemCount: notifications.length,
+                    itemBuilder: (context, index) {
+                      final notif = notifications[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: notif.isRead ? Colors.grey.withOpacity(0.2) : MizdahTheme.primaryBlue.withOpacity(0.2),
+                          child: Icon(Icons.notifications, color: notif.isRead ? Colors.grey : MizdahTheme.primaryBlue),
+                        ),
+                        title: Text(notif.title, style: TextStyle(fontWeight: notif.isRead ? FontWeight.normal : FontWeight.bold)),
+                        subtitle: Text(notif.body),
+                        trailing: Text(
+                          DateFormat('MMM d').format(notif.createdAt),
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        onTap: () {
+                          // Could mark as read here using the repo
+                        },
+                      );
+                    },
+                  );
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (err, stack) => Center(child: Text('Error: $err')),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -402,6 +477,9 @@ class _SectionHeader extends StatelessWidget {
 }
 
 final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
-  final repo = ref.watch(mizdahRepositoryProvider);
-  return repo.getCallHistory();
+  final authState = ref.watch(authProvider);
+  if (authState.user == null) return [];
+  
+  final repo = ref.watch(participantRepositoryProvider);
+  return repo.getUserHistory(authState.user!.id);
 });

@@ -1,6 +1,6 @@
 class ApiConfig {
   // Replace with your local machine's IP address (run `ipconfig` on Windows)
-  static const String pcIp = '192.168.1.10'; 
+  static const String pcIp = '192.168.1.24'; 
 
   // Ports as defined in FLUTTER_API_SWAGGER.md
   static const String gatewayPort = '3000';
@@ -35,4 +35,12 @@ class ApiConfig {
   static const String recordingUpload = '$baseUrl/api/recording/upload';
   static const String recordingStart = '$baseUrl/api/recording/start'; // + /{meetingId}
   static const String recordingStop = '$baseUrl/api/recording/stop'; // + /{meetingId}
+  
+  static const String notifications = '$baseUrl/api/notifications';
+  static const String notificationUser = '$baseUrl/api/notifications/user'; // + /{userId}
+  
+  static const String fileUpload = '$baseUrl/api/files/upload';
+  static const String files = '$baseUrl/api/files'; // + /{fileId}
+  
+  static const String adminUsers = '$baseUrl/api/admin/users';
 }

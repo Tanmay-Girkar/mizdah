@@ -12,6 +12,13 @@ class ApiClient {
     _dio.options.connectTimeout = const Duration(seconds: 10);
     _dio.options.receiveTimeout = const Duration(seconds: 10);
 
+    // Add logging
+    _dio.interceptors.add(LogInterceptor(
+      requestBody: true,
+      responseBody: true,
+      error: true,
+    ));
+
     // Add interceptor to include token in every request
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {

@@ -1,5 +1,8 @@
 import '../models/models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/network/api_client.dart';
+import '../../core/config/api_config.dart';
+import '../../features/auth/auth_provider.dart';
 
 abstract class MizdahRepository {
   Future<List<Contact>> getContacts();
@@ -9,76 +12,74 @@ abstract class MizdahRepository {
   Future<Meeting?> getMeetingByCode(String code);
 }
 
-class MockMizdahRepository implements MizdahRepository {
+class RealMizdahRepository implements MizdahRepository {
+  final ApiClient _apiClient;
+  final String? _currentUserId;
+
+  RealMizdahRepository(this._apiClient, this._currentUserId);
+
   @override
   Future<List<Contact>> getContacts() async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    return [
-      Contact(id: '1', name: 'Zohaib Ali', email: 'zohaib@example.com'),
-      Contact(id: '2', name: 'Ayesha Khan', email: 'ayesha@example.com'),
-      Contact(id: '3', name: 'Mustafa Omen', email: 'mustafa@example.com'),
-    ];
+    try {
+      final response = await _apiClient.get(ApiConfig.adminUsers);
+      final List data = response.data['users'] ?? response.data;
+      return data.map((json) => Contact.fromJson(json)).toList();
+    } catch (e) {
+      return [];
+    }
   }
 
   @override
   Future<List<Meeting>> getMeetings() async {
-    return [];
+    if (_currentUserId == null) return [];
+    try {
+      final response = await _apiClient.get('${ApiConfig.scheduling}/user/$_currentUserId');
+      final List data = response.data['data'] ?? response.data;
+      return data.map((json) => Meeting.fromJson(json)).toList();
+    } catch (e) {
+      return [];
+    }
   }
 
   @override
   Future<List<CallHistory>> getCallHistory() async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    return [
-      CallHistory(
-        id: '1',
-        title: 'Project Sync',
-        timestamp: DateTime.now().subtract(const Duration(hours: 2)),
-        duration: const Duration(minutes: 45),
-        isMissed: false,
-      ),
-      CallHistory(
-        id: '2',
-        title: 'UI Review',
-        timestamp: DateTime.now().subtract(const Duration(days: 1)),
-        duration: const Duration(minutes: 30),
-        isMissed: false,
-      ),
-      CallHistory(
-        id: '3',
-        title: 'Interview',
-        timestamp: DateTime.now().subtract(const Duration(days: 2)),
-        duration: const Duration(minutes: 15),
-        isMissed: true,
-      ),
-    ];
+    if (_currentUserId == null) return [];
+    try {
+      final response = await _apiClient.get('${ApiConfig.userParticipation}/$_currentUserId');
+      final List data = response.data['data'] ?? response.data;
+      return data.map((json) => CallHistory.fromJson(json)).toList();
+    } catch (e) {
+      return [];
+    }
   }
 
   @override
   Future<Meeting> createMeeting(String title, DateTime dateTime) async {
-    return Meeting(
-      id: 'mock-123',
-      title: title,
-      code: 'abc-defg-hij',
-      dateTime: dateTime,
-      participants: ['host-1'],
-    );
+    if (_currentUserId == null) throw Exception("Not logged in");
+    try {
+      final response = await _apiClient.post(ApiConfig.createMeeting, data: {
+        'hostId': _currentUserId,
+        'title': title,
+        'scheduledFor': dateTime.toIso8601String(),
+      });
+      return Meeting.fromJson(response.data);
+    } catch (e) {
+      throw Exception('Failed to create meeting: $e');
+    }
   }
 
   @override
   Future<Meeting?> getMeetingByCode(String code) async {
-    if (code.toLowerCase() == 'abc-defg-hij') {
-      return Meeting(
-        id: 'mock-123',
-        title: 'Mock Meeting',
-        code: 'abc-defg-hij',
-        dateTime: DateTime.now(),
-        participants: ['host-1'],
-      );
+    try {
+      final response = await _apiClient.get('${ApiConfig.getMeeting}/$code');
+      return Meeting.fromJson(response.data);
+    } catch (e) {
+      return null;
     }
-    return null;
   }
 }
 
 final mizdahRepositoryProvider = Provider<MizdahRepository>((ref) {
-  return MockMizdahRepository();
+  final user = ref.watch(authProvider).user;
+  return RealMizdahRepository(ApiClient(), user?.id);
 });

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/widgets/mizdah_button.dart';
+import '../../auth/auth_provider.dart';
+import '../../../data/repositories/settings_repository.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -71,6 +74,8 @@ class _GeneralSettings extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        _ProfileSection(),
+        const SizedBox(height: 32),
         Text(
           'Appearance', 
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)
@@ -84,6 +89,172 @@ class _GeneralSettings extends ConsumerWidget {
               _ThemeTile(title: 'Dark', mode: ThemeMode.dark, current: themeMode, ref: ref, isDark: isDark),
               Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
               _ThemeTile(title: 'System Default', mode: ThemeMode.system, current: themeMode, ref: ref, isDark: isDark),
+            ],
+          ),
+        ),
+        const SizedBox(height: 32),
+        _SupportSection(),
+      ],
+    );
+  }
+}
+
+class _ProfileSection extends ConsumerStatefulWidget {
+  @override
+  ConsumerState<_ProfileSection> createState() => _ProfileSectionState();
+}
+
+class _ProfileSectionState extends ConsumerState<_ProfileSection> {
+  final _nameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = ref.read(authProvider).user;
+    if (user != null) {
+      _nameController.text = user.name;
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    setState(() => _isSaving = true);
+    try {
+      final newName = _nameController.text.trim();
+      final newPass = _passwordController.text.trim();
+      await ref.read(authProvider.notifier).updateProfile(
+        name: newName.isNotEmpty ? newName : null,
+        password: newPass.isNotEmpty ? newPass : null,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated system-wide!')));
+        _passwordController.clear();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Profile', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
+        const SizedBox(height: 16),
+        GlassCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  labelText: 'Display Name',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'New Password (Optional)',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _isSaving
+                ? const Center(child: CircularProgressIndicator())
+                : MizdahButton(
+                    label: 'Save Profile',
+                    isFullWidth: true,
+                    onTap: _saveProfile,
+                  ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SupportSection extends ConsumerWidget {
+  Future<void> _sendFeedback(BuildContext context, WidgetRef ref) async {
+    // Basic mockup logic for the modal
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final feedbackController = TextEditingController();
+        return AlertDialog(
+          title: const Text('Send Feedback'),
+          content: TextField(
+            controller: feedbackController,
+            maxLines: 4,
+            decoration: const InputDecoration(hintText: 'What can we improve?'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                final text = feedbackController.text.trim();
+                if (text.isEmpty) return;
+                Navigator.pop(ctx);
+                try {
+                  final user = ref.read(authProvider).user;
+                  await ref.read(settingsRepositoryProvider).sendFeedback(
+                    category: 'General',
+                    description: text,
+                    userEmail: user?.email ?? 'anonymous',
+                  );
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Feedback sent!')));
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                  }
+                }
+              },
+              child: const Text('Send'),
+            )
+          ],
+        );
+      }
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Help & Support', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
+        const SizedBox(height: 16),
+        GlassCard(
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.feedback_outlined, color: MizdahTheme.primaryBlue),
+                title: Text('Send Feedback', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                onTap: () => _sendFeedback(context, ref),
+              ),
+              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
+              ListTile(
+                leading: const Icon(Icons.support_agent_outlined, color: MizdahTheme.primaryBlue),
+                title: Text('Contact Support', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Support contact API triggered. (UI coming soon)')));
+                },
+              ),
             ],
           ),
         ),

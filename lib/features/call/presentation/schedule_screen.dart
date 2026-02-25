@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../data/repositories/mizdah_repository.dart';
-import 'start_call_screen.dart';
+import '../../../data/repositories/scheduling_repository.dart';
+import '../../auth/auth_provider.dart';
+import '../../meeting/presentation/pre_join_screen.dart'; // Example for next screen if needed
+import '../../../core/widgets/mizdah_button.dart';
 
 class ScheduleScreen extends ConsumerStatefulWidget {
   const ScheduleScreen({super.key});
@@ -163,27 +165,54 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
       _startTime.minute,
     );
     
-    // Save to repository
-    final repository = ref.read(mizdahRepositoryProvider);
-    final meeting = await repository.createMeeting(title, scheduledDate);
-    
-    if (!mounted) return;
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Meeting scheduled successfully')),
-    );
-    
-    // Present the Link share modal to complete the E2E flow
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => ShareLinkModal(meeting: meeting),
-    ).then((_) {
-      if (mounted) {
-        context.pop();
-      }
-    });
+    // Real scheduling API Logic
+    final user = ref.read(authProvider).user;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error: Not logged in')),
+      );
+      return;
+    }
+
+    try {
+      final repository = ref.read(schedulingRepositoryProvider);
+      
+      var recurrence = 'none';
+      if (_repeatOption == 'Every day') recurrence = 'daily';
+      if (_repeatOption == 'Every week') recurrence = 'weekly';
+      if (_repeatOption == 'Every month') recurrence = 'monthly';
+      if (_repeatOption == 'Every year') recurrence = 'yearly';
+
+      final endDateTime = DateTime(
+        _endDate.year,
+        _endDate.month,
+        _endDate.day,
+        _endTime.hour,
+        _endTime.minute,
+      );
+
+      final response = await repository.scheduleMeeting(
+        hostId: user.id,
+        title: title,
+        startTime: scheduledDate,
+        endTime: endDateTime,
+        recurrence: recurrence,
+        timezone: DateTime.now().timeZoneName,
+      );
+
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Meeting scheduled successfully')),
+      );
+
+      context.pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
   }
 
   @override

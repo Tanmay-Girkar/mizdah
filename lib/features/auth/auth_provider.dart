@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/models/models.dart';
 
@@ -43,12 +44,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _checkAuth() async {
-    // Mock authentication for UI development
-    state = state.copyWith(
-      status: AuthStatus.authenticated,
-      token: 'mock_token',
-      user: User(id: 'mock-1', name: 'Mustafa Omen', email: 'mustafa@example.com', role: 'USER'),
-    );
+    final token = await _storage.read(key: _tokenKey);
+    if (token != null) {
+      state = state.copyWith(status: AuthStatus.authenticating, token: token);
+      final user = await _authRepository.getMe();
+      if (user != null) {
+        state = state.copyWith(status: AuthStatus.authenticated, user: user);
+      } else {
+        await logout();
+      }
+    } else {
+      state = state.copyWith(status: AuthStatus.unauthenticated);
+    }
   }
 
   Future<void> login(String email, String password) async {
@@ -56,15 +63,34 @@ class AuthNotifier extends StateNotifier<AuthState> {
     
     try {
       final data = await _authRepository.login(email, password);
+      
+      // Handle 2FA or missing token
+      if (data['token'] == null) {
+        if (data['requires2FA'] == true || data['message']?.toString().contains('OTP') == true) {
+          state = state.copyWith(
+            status: AuthStatus.unauthenticated,
+            errorMessage: "2FA Required. Please verify your OTP.",
+          );
+          // In a real app, we would navigate to 2FA screen here
+          return;
+        }
+        throw Exception("Login failed: Missing token in response");
+      }
+
       final token = data['token'];
-      final user = User.fromJson(data['user']);
+      final user = User.fromJson(data['user'] ?? {});
       
       await _storage.write(key: _tokenKey, value: token);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
+      print("Login error: $e");
+      String message = "Invalid email or password";
+      if (e is DioException) {
+        message = e.response?.data['message'] ?? e.message ?? message;
+      }
       state = state.copyWith(
         status: AuthStatus.unauthenticated,
-        errorMessage: "Invalid email or password",
+        errorMessage: message,
       );
     }
   }
@@ -74,15 +100,25 @@ class AuthNotifier extends StateNotifier<AuthState> {
     
     try {
       final data = await _authRepository.signup(email, password, name);
+      
+      if (data['token'] == null) {
+        throw Exception("Signup failed: Missing token in response");
+      }
+
       final token = data['token'];
-      final user = User.fromJson(data['user']);
+      final user = User.fromJson(data['user'] ?? {});
       
       await _storage.write(key: _tokenKey, value: token);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
+      print("Signup error: $e");
+      String message = "Signup failed. Email might already exist.";
+      if (e is DioException) {
+        message = e.response?.data['message'] ?? e.message ?? message;
+      }
       state = state.copyWith(
         status: AuthStatus.unauthenticated,
-        errorMessage: "Signup failed. Email might already exist.",
+        errorMessage: message,
       );
     }
   }
@@ -94,6 +130,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
     const token = "mock_oauth_token";
     await _storage.write(key: _tokenKey, value: token);
     state = state.copyWith(status: AuthStatus.authenticated, token: token);
+  }
+
+  Future<void> updateProfile({String? name, String? password}) async {
+    try {
+      final updatedUser = await _authRepository.updateProfile(name: name, password: password);
+      state = state.copyWith(user: updatedUser);
+    } catch (e) {
+      rethrow;
+    }
   }
 
   Future<void> logout() async {
