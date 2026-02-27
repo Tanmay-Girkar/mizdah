@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:mizdah/core/config/api_config.dart';
 import '../../../../core/services/whiteboard_service.dart';
 
-// Assuming we have a provider for WhiteboardNotifier
+// Safe provider initialization
 final whiteboardProvider = StateNotifierProvider<WhiteboardNotifier, WhiteboardState>((ref) {
-  // This is a placeholder, you'd properly pass the socket here from your main meeting provider
-  throw UnimplementedError('Initialize with socket');
+  final dummySocket = IO.io(ApiConfig.signalingUrl, IO.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
+  return WhiteboardNotifier(socket: dummySocket);
 });
 
 class WhiteboardView extends ConsumerStatefulWidget {
-  const WhiteboardView({Key? key}) : super(key: key);
+  const WhiteboardView({super.key});
 
   @override
   ConsumerState<WhiteboardView> createState() => _WhiteboardViewState();
@@ -27,7 +29,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
     final action = DrawAction(
       x: x,
       y: y,
-      color: '#${_currentColor.value.toRadixString(16).substring(2)}',
+      color: '#${_currentColor.value.toRadixString(16).padLeft(8, '0').substring(2)}',
       strokeWidth: _currentStrokeWidth,
       type: 'start',
     );
@@ -42,7 +44,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
     final action = DrawAction(
       x: x,
       y: y,
-      color: '#${_currentColor.value.toRadixString(16).substring(2)}',
+      color: '#${_currentColor.value.toRadixString(16).padLeft(8, '0').substring(2)}',
       strokeWidth: _currentStrokeWidth,
       type: 'move',
     );
@@ -69,7 +71,6 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
 
     return Column(
       children: [
-        // Controls Toolbar
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           color: Colors.grey[900],
@@ -90,7 +91,6 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
             ],
           ),
         ),
-        // Drawing Canvas
         Expanded(
           child: Container(
             color: Colors.white,
@@ -141,7 +141,6 @@ class _WhiteboardPainter extends CustomPainter {
       final current = actions[i];
       final next = actions[i + 1];
 
-      // We only draw lines if the next action is a continuation (not a new start)
       if (next.type != 'start' && current.type != 'end') {
         final paint = Paint()
           ..color = _colorFromHex(current.color)

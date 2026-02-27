@@ -43,13 +43,23 @@ class _SplashScreenState extends ConsumerState<SplashScreen> with SingleTickerPr
   }
 
   Future<void> _checkStatus() async {
-    // Wait for the initial 3 seconds for the animation
-    await Future.delayed(const Duration(seconds: 3));
+    // Minimum wait for the splash animation
+    await Future.delayed(const Duration(seconds: 2));
+    
+    // Check if the auth check is still in progress
+    AuthState authState = ref.read(authProvider);
+    
+    // Wait until we have a settled status (authenticated or unauthenticated)
+    // but don't wait forever (max 5 seconds total)
+    int retryCount = 0;
+    while ((authState.status == AuthStatus.initial || authState.status == AuthStatus.authenticating) && retryCount < 15) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      authState = ref.read(authProvider);
+      retryCount++;
+    }
+
     if (!mounted) return;
 
-    // Check the authentication status
-    final authState = ref.read(authProvider);
-    
     if (authState.status == AuthStatus.authenticated) {
       context.go('/');
     } else {

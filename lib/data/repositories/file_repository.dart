@@ -15,6 +15,7 @@ class FileRepository {
       });
 
       final response = await _apiClient.postMultipart(ApiConfig.fileUpload, formData);
+      if (response.data is! Map) return {'error': 'Invalid format'};
       return response.data;
     } catch (e) {
       rethrow;
@@ -24,6 +25,7 @@ class FileRepository {
   Future<Map<String, dynamic>> getFileMetadata(String fileId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.files}/$fileId');
+      if (response.data is! Map) return {'error': 'Invalid format'};
       return response.data;
     } catch (e) {
       rethrow;

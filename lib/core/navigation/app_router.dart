@@ -28,7 +28,10 @@ final appRouter = GoRouter(
     GoRoute(path: '/start-call', builder: (context, state) => const StartCallScreen()),
     GoRoute(path: '/schedule', builder: (context, state) => const ScheduleScreen()),
     GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
-    GoRoute(path: '/meeting-settings', builder: (context, state) => const MeetingSettingsScreen()),
+    GoRoute(
+      path: '/meeting-settings/:id', 
+      builder: (context, state) => MeetingSettingsScreen(meetingId: state.pathParameters['id']!)
+    ),
     GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
     GoRoute(path: '/privacy', builder: (context, state) => const PrivacyScreen()),
     GoRoute(
@@ -37,7 +40,15 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/meeting/:id',
-      builder: (context, state) => MeetingRoomScreen(meetingId: state.pathParameters['id']!),
+      builder: (context, state) {
+        final video = state.uri.queryParameters['video'] == 'true';
+        final audio = state.uri.queryParameters['audio'] == 'true';
+        return MeetingRoomScreen(
+          meetingId: state.pathParameters['id']!,
+          initialVideo: video,
+          initialAudio: audio,
+        );
+      },
     ),
   ],
 );

@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../data/repositories/meeting_repository.dart';
 
 class MeetingSettingsScreen extends ConsumerStatefulWidget {
-  const MeetingSettingsScreen({super.key});
+  final String meetingId;
+  const MeetingSettingsScreen({super.key, required this.meetingId});
 
   @override
   ConsumerState<MeetingSettingsScreen> createState() => _MeetingSettingsScreenState();
@@ -16,42 +18,68 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
   bool showReactionsFromOthers = true;
   bool animation = true;
   bool sound = false;
+  bool isLoading = false;
+
+  Future<void> _updateSetting(String key, dynamic value, VoidCallback updateLocalState) async {
+    setState(() => isLoading = true);
+    
+    // Optimistic local update
+    updateLocalState();
+    
+    try {
+      final repo = ref.read(meetingRepositoryProvider);
+      await repo.updateSettings(widget.meetingId, {key: value});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update setting: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     
-    // In-meeting specific theme (Dark brown/black for dark mode, default for light)
-    final accentColor = isDark ? const Color(0xFFE38E6E) : theme.primaryColor;
-    final backgroundColor = isDark ? const Color(0xFF1D1B16) : theme.scaffoldBackgroundColor;
-    final textColor = isDark ? Colors.white : Colors.black87;
+    final accentColor = theme.primaryColor;
+    final textColor = isDark ? Colors.white : const Color(0xFF111827);
     final subtitleColor = isDark ? Colors.white70 : Colors.black54;
-    final iconColor = isDark ? Colors.white : theme.primaryColor;
+    final iconColor = isDark ? Colors.white : const Color(0xFF111827);
 
-    return Scaffold(
-      backgroundColor: backgroundColor,
-      appBar: AppBar(
-        backgroundColor: backgroundColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(Icons.close, color: textColor),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          'Settings',
-          style: TextStyle(color: textColor, fontSize: 20, fontWeight: FontWeight.normal),
-        ),
-        centerTitle: false,
+    return Container(
+      decoration: BoxDecoration(
+        gradient: isDark ? MizdahTheme.darkGradient : null,
+        color: isDark ? null : MizdahTheme.lightBackground,
       ),
-      body: ListView(
-        children: [
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(Icons.close, color: textColor),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          title: Text(
+            'Settings',
+            style: TextStyle(color: textColor, fontSize: 20, fontWeight: FontWeight.normal),
+          ),
+          centerTitle: false,
+        ),
+        body: ListView(
+          children: [
           _buildSectionHeader('Video', accentColor),
           _buildSwitchTile(
             title: "Don't show video in tiles",
             subtitle: 'Watch only presentations',
             value: donNotShowVideoInTiles,
-            onChanged: (v) => setState(() => donNotShowVideoInTiles = v),
+            onChanged: (v) => _updateSetting('dont_show_video_in_tiles', v, () => donNotShowVideoInTiles = v),
             accentColor: accentColor,
             textColor: textColor,
             subtitleColor: subtitleColor,
@@ -77,7 +105,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
             title: 'Live captions',
             subtitle: 'Show captions in this call',
             value: liveCaptions,
-            onChanged: (v) => setState(() => liveCaptions = v),
+            onChanged: (v) => _updateSetting('live_captions', v, () => liveCaptions = v),
             accentColor: accentColor,
             textColor: textColor,
             subtitleColor: subtitleColor,
@@ -97,7 +125,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
             title: 'Show reactions from others',
             subtitle: 'When off, your own reactions still appear',
             value: showReactionsFromOthers,
-            onChanged: (v) => setState(() => showReactionsFromOthers = v),
+            onChanged: (v) => _updateSetting('show_reactions_from_others', v, () => showReactionsFromOthers = v),
             accentColor: accentColor,
             textColor: textColor,
             subtitleColor: subtitleColor,
@@ -106,7 +134,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
             title: 'Animation',
             subtitle: 'Reactions move on the screen',
             value: animation,
-            onChanged: (v) => setState(() => animation = v),
+            onChanged: (v) => _updateSetting('animation', v, () => animation = v),
             accentColor: accentColor,
             textColor: textColor,
             subtitleColor: subtitleColor,
@@ -115,7 +143,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
             title: 'Sound',
             subtitle: 'Sound can accompany reactions',
             value: sound,
-            onChanged: (v) => setState(() => sound = v),
+            onChanged: (v) => _updateSetting('sound', v, () => sound = v),
             accentColor: accentColor,
             textColor: textColor,
             subtitleColor: subtitleColor,
@@ -136,6 +164,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
           ),
           const SizedBox(height: 32),
         ],
+      ),
       ),
     );
   }

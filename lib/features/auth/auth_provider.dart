@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/models/models.dart';
+import '../../core/services/storage_service.dart';
 
 enum AuthStatus { authenticated, unauthenticated, authenticating, initial }
 
@@ -36,22 +37,41 @@ class AuthState {
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _authRepository = AuthRepository();
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
-  static const _tokenKey = 'auth_token';
 
   AuthNotifier() : super(AuthState()) {
     _checkAuth();
   }
 
   Future<void> _checkAuth() async {
-    final token = await _storage.read(key: _tokenKey);
+    final token = await StorageService.getToken();
+    final userData = await StorageService.getUserData();
+    
     if (token != null) {
-      state = state.copyWith(status: AuthStatus.authenticating, token: token);
-      final user = await _authRepository.getMe();
-      if (user != null) {
-        state = state.copyWith(status: AuthStatus.authenticated, user: user);
+      if (userData['id'] != null && userData['name'] != null) {
+        state = state.copyWith(
+          status: AuthStatus.authenticated, 
+          token: token,
+          user: User(
+            id: userData['id']!, 
+            name: userData['name']!, 
+            email: '', 
+            role: 'USER',
+          ),
+        );
       } else {
-        await logout();
+        state = state.copyWith(status: AuthStatus.authenticating, token: token);
+      }
+      
+      try {
+        final user = await _authRepository.getMe();
+        if (user != null) {
+          await StorageService.saveUserData(id: user.id, name: user.name);
+          state = state.copyWith(status: AuthStatus.authenticated, user: user);
+        } else if (userData['id'] == null) {
+          await logout();
+        }
+      } catch (e) {
+        print("Initial auth check network error: $e");
       }
     } else {
       state = state.copyWith(status: AuthStatus.unauthenticated);
@@ -64,14 +84,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       final data = await _authRepository.login(email, password);
       
-      // Handle 2FA or missing token
       if (data['token'] == null) {
         if (data['requires2FA'] == true || data['message']?.toString().contains('OTP') == true) {
           state = state.copyWith(
             status: AuthStatus.unauthenticated,
             errorMessage: "2FA Required. Please verify your OTP.",
           );
-          // In a real app, we would navigate to 2FA screen here
           return;
         }
         throw Exception("Login failed: Missing token in response");
@@ -80,7 +98,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final token = data['token'];
       final user = User.fromJson(data['user'] ?? {});
       
-      await _storage.write(key: _tokenKey, value: token);
+      await StorageService.saveToken(token);
+      await StorageService.saveUserData(id: user.id, name: user.name);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
       print("Login error: $e");
@@ -108,7 +127,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final token = data['token'];
       final user = User.fromJson(data['user'] ?? {});
       
-      await _storage.write(key: _tokenKey, value: token);
+      await StorageService.saveToken(token);
+      await StorageService.saveUserData(id: user.id, name: user.name);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
       print("Signup error: $e");
@@ -124,11 +144,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> loginWithOAuth(String provider) async {
-    // Note: Swagger doesn't have OAuth endpoints yet. This remains a mock or placeholder.
     state = state.copyWith(status: AuthStatus.authenticating);
     await Future.delayed(const Duration(seconds: 1));
     const token = "mock_oauth_token";
-    await _storage.write(key: _tokenKey, value: token);
+    await StorageService.saveToken(token);
     state = state.copyWith(status: AuthStatus.authenticated, token: token);
   }
 
@@ -142,7 +161,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
-    await _storage.delete(key: _tokenKey);
+    await StorageService.clearAll();
     state = state.copyWith(status: AuthStatus.unauthenticated, token: null, user: null);
   }
 }

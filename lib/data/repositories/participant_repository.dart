@@ -32,9 +32,16 @@ class ParticipantRepository {
   Future<List<CallHistory>> getUserHistory(String userId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.userParticipation}/$userId');
-      final List data = response.data is List ? response.data : (response.data['data'] ?? []);
-      return data.map((json) => CallHistory.fromJson(json)).toList();
+      final dynamic data = response.data;
+      List rawList = [];
+      if (data is Map && data.containsKey('data')) {
+        rawList = data['data'] as List;
+      } else if (data is List) {
+        rawList = data;
+      }
+      return rawList.map((json) => CallHistory.fromJson(json)).toList();
     } catch (e) {
+      print('Error fetching user history: $e');
       return [];
     }
   }
@@ -42,8 +49,15 @@ class ParticipantRepository {
   Future<List<dynamic>> getMeetingParticipants(String meetingId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.meetingParticipants}/$meetingId');
-      return response.data is List ? response.data : (response.data['data'] ?? []);
+      final dynamic data = response.data;
+      if (data is Map && data.containsKey('data')) {
+        return data['data'] as List;
+      } else if (data is List) {
+        return data;
+      }
+      return [];
     } catch (e) {
+      print('Error fetching meeting participants: $e');
       return [];
     }
   }

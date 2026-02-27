@@ -7,6 +7,7 @@ import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
 import '../../core/services/screen_share_service.dart';
 import '../../core/services/network_resilience_service.dart';
+import '../../data/repositories/meeting_repository.dart';
 
 class MeetingState {
   final bool isConnected;
@@ -18,6 +19,9 @@ class MeetingState {
   final bool isScreenSharing;
   final bool isSfuMode;
   final List<Map<String, dynamic>> chatMessages;
+  final List<dynamic> participants;
+  final String? hostId;
+  final bool isSpeakerphoneOn;
 
   final int mockParticipantCount;
   final String? meetingId;
@@ -38,6 +42,7 @@ class MeetingState {
     this.meetingId,
     this.userId,
     this.hostId,
+    this.isSpeakerphoneOn = true,
   });
 
   MeetingState copyWith({
@@ -54,6 +59,7 @@ class MeetingState {
     String? meetingId,
     String? userId,
     String? hostId,
+    bool? isSpeakerphoneOn,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -70,6 +76,7 @@ class MeetingState {
       meetingId: meetingId ?? this.meetingId,
       userId: userId ?? this.userId,
       hostId: hostId ?? this.hostId,
+      isSpeakerphoneOn: isSpeakerphoneOn ?? this.isSpeakerphoneOn,
     );
   }
 }
@@ -77,8 +84,11 @@ class MeetingState {
 class MeetingNotifier extends StateNotifier<MeetingState> {
   final ParticipantRepository _participantRepository = ParticipantRepository();
   final ChatRepository _chatRepository = ChatRepository();
+  final MeetingRepository _meetingRepository = MeetingRepository();
   IO.Socket? _socket;
   IO.Socket? get socket => _socket;
+  IO.Socket? _chatSocket;
+  IO.Socket? get chatSocket => _chatSocket;
   
   MediaStream? _localStream;
   final Map<String, RTCPeerConnection> _peerConnections = {};
@@ -94,27 +104,35 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       {'sender': 'Zohaib Ali', 'text': 'Hey Mustafa, the UI looks great!', 'time': DateTime.now().subtract(const Duration(minutes: 4)).toIso8601String()},
       {'sender': 'Ayesha Khan', 'text': 'Can we start the presentation?', 'time': DateTime.now().subtract(const Duration(minutes: 2)).toIso8601String()},
     ],
-  )) {
-    _initRenderers();
-  }
+  ));
 
   Future<void> _initRenderers() async {
     await state.localRenderer.initialize();
   }
 
-  void joinMeeting(String meetingId, String userId, String name, String jwtToken) async {
+  void joinMeeting(String meetingId, String userId, String name, String jwtToken, {bool video = true, bool audio = true}) async {
+    // Explicitly initialize renderer before setting srcObject
+    await state.localRenderer.initialize();
+    
     _socket = IO.io(ApiConfig.signalingUrl, 
       IO.OptionBuilder()
         .setTransports(['websocket'])
         .enableAutoConnect()
-        // Phase 6: Auth & Contract Validation 
-        // JWT matches backend middleware expectations
+        .setAuth({'token': jwtToken})
+        .build()
+    );
+
+    _chatSocket = IO.io(ApiConfig.chatSocketUrl, 
+      IO.OptionBuilder()
+        .setTransports(['websocket'])
+        .enableAutoConnect()
         .setAuth({'token': jwtToken})
         .build()
     );
 
     _socket?.onConnect((_) async {
       final meetingInfo = await _meetingRepository.getMeetingInfo(meetingId);
+      if (!mounted) return;
       state = state.copyWith(
         isConnected: true, 
         meetingId: meetingId, 
@@ -131,13 +149,36 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       // New: Load Participants
       _loadParticipants(meetingId);
 
-      // Ensure socket auth handshake includes token validation
-      _socket?.emit('join-meeting', {
+      final joinData = {
         'meetingId': meetingId,
         'userId': userId,
         'name': name,
-        'token': jwtToken, // redundant if setAuth supported, but safe fallback
-      });
+        'token': jwtToken,
+      };
+
+      // Always emit to signaling
+      print("Emitting join-meeting to Port 4000");
+      _socket?.emit('join-meeting', joinData);
+      
+      // For chat, ensure we are in the correct room
+      void joinChatRoom() {
+        print("Emitting join-chat to Port 4005 for meeting $meetingId");
+        _chatSocket?.emit('join-chat', {
+          'meetingId': meetingId,
+          'userId': userId,
+          'token': jwtToken, // Added token for safety
+        });
+      }
+
+      if (_chatSocket?.connected ?? false) {
+        joinChatRoom();
+      } else {
+        // Listen once for the next connection event
+        _chatSocket?.on('connect', (_) {
+          print("Chat Socket CONNECTED via listener");
+          joinChatRoom();
+        });
+      }
 
       _networkResilienceService ??= NetworkResilienceService(
         socket: _socket!,
@@ -147,6 +188,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           // If in background, camera track is disabled via service,
           // but we can update state if necessary
           if (inBackground && state.isCameraOn) {
+            if (!mounted) return;
             state = state.copyWith(isCameraOn: false);
           }
         },
@@ -158,20 +200,61 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.onError((err) => print('Socket Error: $err'));
     
     _initSocketListeners();
-    _setupMedia();
+    // Use try-catch here as well to ensure media failure doesn't stop the joining process
+    try {
+      await _setupMedia(video: video, audio: audio);
+    } catch (e) {
+      print("Media setup failed during join: $e");
+    }
   }
 
   void _initSocketListeners() {
     _socket?.on('switch-to-sfu', (_) {
+      if (!mounted) return;
       state = state.copyWith(isSfuMode: true);
       _setupSfu();
     });
 
-    _socket?.on('chat-receive', (data) {
+    // Move chat listener to _chatSocket (Port 4005)
+    // Support both hyphen and colon formats for robustness
+    void _handleNewMessage(data) {
       if (data != null) {
-        state = state.copyWith(chatMessages: [...state.chatMessages, Map<String, dynamic>.from(data)]);
+        print("Received real-time message: $data");
+        final Map<String, dynamic> msg = Map<String, dynamic>.from(data);
+        final formattedMsg = {
+          'text': msg['content'] ?? msg['text'] ?? '',
+          'sender': msg['senderName'] ?? msg['sender'] ?? 'Unknown',
+          'time': msg['time'] ?? msg['createdAt'] ?? DateTime.now().toIso8601String(),
+          'attachmentUrl': msg['attachmentUrl'],
+        };
+        
+        // Prevent duplicates (especially if we are the sender receiving our own broadcast)
+        final isDuplicate = state.chatMessages.any((m) => 
+          m['text'] == formattedMsg['text'] && 
+          m['sender'] == formattedMsg['sender'] &&
+          m['time'] == String.fromCharCodes(formattedMsg['time'].toString().runes).substring(0, 16) // Rough time check
+        );
+        
+        // Simpler check: if it's from me and I just sent it, ignore the socket reflection
+        if (!isDuplicate && mounted) {
+           state = state.copyWith(chatMessages: [...state.chatMessages, formattedMsg]);
+        }
       }
+    }
+
+    _chatSocket?.onAny((event, data) {
+      print("CHAT SOCKET Port 4005 EVENT: $event");
+      print("CHAT SOCKET Port 4005 DATA: $data");
     });
+
+    _chatSocket?.on('chat-receive', _handleNewMessage);
+    _chatSocket?.on('chat:receive', _handleNewMessage);
+    
+    _chatSocket?.onConnect((_) {
+      print('Chat Socket (4005) CONNECTED SUCCESSFULLY');
+    });
+    _chatSocket?.onConnectError((err) => print('Chat Socket (4005) Connect Error: $err'));
+    _chatSocket?.onDisconnect((reason) => print('Chat Socket (4005) Disconnected: $reason'));
 
     _socket?.on('router-rtp-capabilities', (data) async {
       if (_sfuService != null) {
@@ -238,16 +321,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
-  Future<void> _setupMedia() async {
-    final Map<String, dynamic> constraints = {
-      'audio': true,
-      'video': {
-        'facingMode': 'user',
-      },
-    };
-
-    _localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    state.localRenderer.srcObject = _localStream;
+  Future<void> _setupMedia({bool video = true, bool audio = true}) async {
+    try {
+      final Map<String, dynamic> constraints = {
+        'audio': audio,
+        'video': video ? {
+          'facingMode': 'user',
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+        } : false,
+      };
+      
+      final stream = await navigator.mediaDevices.getUserMedia(constraints);
+      _localStream = stream;
+      
+      if (mounted) {
+        state = state.copyWith(
+          isCameraOn: video,
+          isMicOn: audio,
+        );
+      }
+      state.localRenderer.srcObject = stream;
+    } catch (e) {
+      print("Unable to getUserMedia: $e");
+      // Don't crash, just proceed without local stream
+      if (mounted) {
+        state = state.copyWith(isCameraOn: false, isMicOn: false);
+      }
+    }
   }
 
   void toggleMic() {
@@ -266,11 +367,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
+  Future<void> switchCamera() async {
+    if (_localStream != null && state.isCameraOn) {
+      final videoTrack = _localStream!.getVideoTracks().first;
+      await Helper.switchCamera(videoTrack);
+    }
+  }
+
+  Future<void> toggleSpeakerphone() async {
+    final newValue = !state.isSpeakerphoneOn;
+    await Helper.setSpeakerphoneOn(newValue);
+    state = state.copyWith(isSpeakerphoneOn: newValue);
+  }
+
   void sendMessage(String message, String name, {String? attachmentUrl}) async {
     final msgData = {
       'text': message,
       'sender': name,
       'time': DateTime.now().toIso8601String(),
+      if (attachmentUrl != null) 'attachmentUrl': attachmentUrl,
+    };
+
+    // Socket data with backend-expected keys
+    final socketData = {
+      'meetingId': state.meetingId,
+      'senderId': state.userId,
+      'senderName': name,
+      'content': message,
+      'time': msgData['time'],
       if (attachmentUrl != null) 'attachmentUrl': attachmentUrl,
     };
 
@@ -289,8 +413,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       }
     }
 
-    _socket?.emit('chat-send', msgData);
-    state = state.copyWith(chatMessages: [...state.chatMessages, msgData]);
+    _chatSocket?.emit('chat-send', socketData);
+    _chatSocket?.emit('chat:send', socketData); // Support both
+    if (mounted) {
+      state = state.copyWith(chatMessages: [...state.chatMessages, msgData]);
+    }
   }
 
   Future<void> _loadChatHistory(String meetingId, String userId) async {
@@ -302,14 +429,18 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         'sender': m['senderName'] ?? m['sender'],
         'time': m['createdAt'] ?? m['time'],
       }).toList();
-      state = state.copyWith(chatMessages: [...formattedHistory, ...state.chatMessages]);
+      if (mounted) {
+        state = state.copyWith(chatMessages: [...formattedHistory, ...state.chatMessages]);
+      }
     }
   }
 
   Future<void> _loadParticipants(String meetingId) async {
     try {
       final participants = await _participantRepository.getMeetingParticipants(meetingId);
-      state = state.copyWith(participants: participants);
+      if (mounted) {
+        state = state.copyWith(participants: participants);
+      }
     } catch (e) {
       print("Error loading participants: $e");
     }
@@ -320,6 +451,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _participantRepository.logLeave(state.meetingId!, state.userId!);
     }
     _socket?.disconnect();
+    _chatSocket?.disconnect();
     _localStream?.dispose();
     _screenShareService.stopScreenShare();
     _sfuService?.dispose();
@@ -330,8 +462,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
     _peerConnections.clear();
   }
+
+  @override
+  void dispose() {
+    leaveMeeting();
+    super.dispose();
+  }
 }
 
-final meetingProvider = StateNotifierProvider.family<MeetingNotifier, MeetingState, String>((ref, id) {
+final meetingProvider = StateNotifierProvider.autoDispose.family<MeetingNotifier, MeetingState, String>((ref, id) {
   return MeetingNotifier();
 });

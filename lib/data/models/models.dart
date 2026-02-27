@@ -8,7 +8,7 @@ class User {
     required this.id,
     required this.email,
     required this.name,
-    required this.role,
+    this.role = 'USER',
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -59,6 +59,7 @@ class Meeting {
   final DateTime dateTime;
   final String code;
   final List<String> participants;
+  final String? hostId;
 
   Meeting({
     required this.id,
@@ -66,15 +67,17 @@ class Meeting {
     required this.dateTime,
     required this.code,
     required this.participants,
+    this.hostId,
   });
 
   factory Meeting.fromJson(Map<String, dynamic> json) {
     return Meeting(
-      id: json['id'] ?? '',
-      title: json['title'] ?? json['meeting_code'] ?? 'Untitled Meeting',
-      dateTime: DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
-      code: json['meeting_code'] ?? '',
+      id: json['id']?.toString() ?? json['dbId']?.toString() ?? json['meetingId']?.toString() ?? '',
+      title: json['title'] ?? json['meeting_title'] ?? json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? 'Untitled Meeting',
+      dateTime: DateTime.tryParse(json['created_at'] ?? json['createdAt'] ?? '') ?? DateTime.now(),
+      code: json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '',
       participants: (json['participants'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      hostId: json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString(),
     );
   }
 }
@@ -96,11 +99,11 @@ class CallHistory {
 
   factory CallHistory.fromJson(Map<String, dynamic> json) {
     return CallHistory(
-      id: json['id'] ?? '',
-      title: json['meeting_id'] ?? 'Past Meeting',
-      timestamp: DateTime.tryParse(json['joined_at'] ?? '') ?? DateTime.now(),
-      duration: json['duration'] != null ? Duration(seconds: json['duration']) : Duration.zero,
-      isMissed: false, // Could be determined by duration or left_at
+      id: json['id']?.toString() ?? '',
+      title: json['meeting_title'] ?? json['title'] ?? json['meeting_code'] ?? json['meetingCode'] ?? json['meeting_id'] ?? json['meetingId'] ?? 'Past Meeting',
+      timestamp: DateTime.tryParse(json['joined_at'] ?? json['joinedAt'] ?? '') ?? DateTime.now(),
+      duration: json['duration'] != null ? Duration(seconds: int.tryParse(json['duration'].toString()) ?? 0) : Duration.zero,
+      isMissed: false,
     );
   }
 }
@@ -124,12 +127,12 @@ class NotificationModel {
 
   factory NotificationModel.fromJson(Map<String, dynamic> json) {
     return NotificationModel(
-      id: json['id'] ?? '',
+      id: json['id']?.toString() ?? '',
       title: json['title'] ?? 'Notification',
-      body: json['body'] ?? '',
+      body: json['content'] ?? json['body'] ?? '',
       type: json['type'] ?? 'info',
-      createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
-      isRead: json['isRead'] ?? false,
+      createdAt: DateTime.tryParse(json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now(),
+      isRead: json['isRead'] ?? json['is_read'] ?? false,
     );
   }
 }

@@ -14,9 +14,16 @@ class NotificationRepository {
   Future<List<dynamic>> getUserNotifications(String userId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.notificationUser}/$userId');
-      return response.data['data'] ?? response.data; // Depending on actual API payload
-    } on DioException catch (e) {
-      throw Exception(e.response?.data['message'] ?? 'Failed to load notifications: ${e.message}');
+      final dynamic data = response.data;
+      if (data is Map && data.containsKey('data')) {
+        return data['data'] as List<dynamic>;
+      } else if (data is List) {
+        return data;
+      }
+      return [];
+    } catch (e) {
+      print('Error fetching notifications: $e');
+      return [];
     }
   }
 

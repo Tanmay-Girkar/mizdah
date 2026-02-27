@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../data/repositories/meeting_repository.dart';
 import '../../../data/repositories/participant_repository.dart';
+import '../../../data/repositories/scheduling_repository.dart';
 import '../../../data/models/models.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
@@ -19,6 +20,7 @@ class HomeScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final callHistoryAsync = ref.watch(callHistoryProvider);
+    final schedulesAsync = ref.watch(schedulesProvider);
     final authState = ref.watch(authProvider);
 
 
@@ -99,7 +101,8 @@ class HomeScreen extends ConsumerWidget {
     try {
       final meeting = await meetingRepo.createMeeting(hostId: authState.user?.id);
       if (context.mounted) {
-        context.push('/pre-join/${meeting.code}');
+        final identifier = meeting.code.isNotEmpty ? meeting.code : meeting.id;
+        context.push('/pre-join/$identifier');
       }
     } catch (e) {
       if (context.mounted) {
@@ -163,43 +166,113 @@ class UpcomingMeetingsSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return GlassCard(
-      padding: const EdgeInsets.all(20),
-      child: Column(
+    final schedulesAsync = ref.watch(schedulesProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Scheduled meetings'),
+        const SizedBox(height: 16),
+        schedulesAsync.when(
+          data: (schedules) => schedules.isEmpty
+              ? GlassCard(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Container(
+                        height: 48,
+                        width: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.event_available, color: MizdahTheme.primaryBlue),
+                      ),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('No meetings today', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text('Tap schedule to plan one', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      MizdahButton(
+                        label: 'Schedule',
+                        isFullWidth: false,
+                        onTap: () => context.push('/schedule'),
+                      ),
+                    ],
+                  ),
+                )
+              : Column(
+                  children: schedules.map((s) => _ScheduleTile(schedule: s)).toList(),
+                ),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (err, stack) => Center(child: Text('Failed to load schedules')),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScheduleTile extends StatelessWidget {
+  final dynamic schedule; // Use your model if available
+  const _ScheduleTile({required this.schedule});
+
+  @override
+  Widget build(BuildContext context) {
+    final startTime = DateTime.parse(schedule['startTime']);
+    final title = schedule['title'] ?? 'Untitled Meeting';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+      ),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                height: 48,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: MizdahTheme.primaryBlue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  DateFormat('MMM').format(startTime).toUpperCase(),
+                  style: const TextStyle(color: MizdahTheme.primaryBlue, fontWeight: FontWeight.bold, fontSize: 10),
                 ),
-                child: const Icon(Icons.event, color: MizdahTheme.primaryBlue),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Plan ahead',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      'Schedule next meeting',
-                      style: TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  ],
+                Text(
+                  DateFormat('d').format(startTime),
+                  style: const TextStyle(color: MizdahTheme.primaryBlue, fontWeight: FontWeight.w900, fontSize: 18),
                 ),
-              ),
-              MizdahButton(
-                label: 'Schedule',
-                isFullWidth: false,
-                onTap: () => context.push('/schedule'),
-              ),
-            ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                Text(
+                  '${DateFormat('h:mm a').format(startTime)} • ${schedule['timezone'] ?? 'UTC'}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            onPressed: () => context.push('/pre-join/${schedule['id']}'),
           ),
         ],
       ),
@@ -261,7 +334,8 @@ class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
       setState(() => _isLoading = false);
       if (meeting != null) {
         Navigator.pop(context);
-        context.push('/pre-join/${meeting.code}');
+        final identifier = meeting.code.isNotEmpty ? meeting.code : meeting.id;
+        context.push('/pre-join/$identifier');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid meeting code')));
       }
@@ -482,4 +556,12 @@ final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
   
   final repo = ref.watch(participantRepositoryProvider);
   return repo.getUserHistory(authState.user!.id);
+});
+
+final schedulesProvider = FutureProvider<List<dynamic>>((ref) async {
+  final authState = ref.watch(authProvider);
+  if (authState.user == null) return [];
+  
+  final repo = ref.watch(schedulingRepositoryProvider);
+  return repo.getUserSchedules(authState.user!.id);
 });

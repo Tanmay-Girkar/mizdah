@@ -30,7 +30,7 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   void initState() {
     super.initState();
     _fetchMeetingInfo();
-    // _checkPermissions(); 
+    _checkPermissions(); 
   }
 
   Future<void> _fetchMeetingInfo() async {
@@ -67,7 +67,15 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
     await Future.delayed(const Duration(milliseconds: 500));
     
     if (mounted) {
-      context.pushReplacement('/meeting/${widget.meetingId}');
+      context.pushReplacement(
+        Uri(
+          path: '/meeting/${widget.meetingId}',
+          queryParameters: {
+            'video': _isCameraOn.toString(),
+            'audio': _isMicOn.toString(),
+          },
+        ).toString(),
+      );
       setState(() => _isJoining = false);
     }
   }

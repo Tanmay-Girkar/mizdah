@@ -12,8 +12,16 @@ class MeetingRepository {
         if (hostId != null) 'hostId': hostId,
         if (customId != null) 'id': customId,
       });
-      return Meeting.fromJson(response.data);
+      final dynamic data = response.data;
+      if (data is Map<String, dynamic>) {
+        final Map<String, dynamic> meetingData = data.containsKey('data') 
+            ? (data['data'] as Map<String, dynamic>)
+            : (data.containsKey('meeting') ? (data['meeting'] as Map<String, dynamic>) : data);
+        return Meeting.fromJson(meetingData);
+      }
+      throw Exception('Server returned invalid data format');
     } catch (e) {
+      print('Error creating meeting: $e');
       rethrow;
     }
   }
@@ -21,8 +29,16 @@ class MeetingRepository {
   Future<Meeting?> getMeetingInfo(String code) async {
     try {
       final response = await _apiClient.get('${ApiConfig.getMeeting}/$code');
-      return Meeting.fromJson(response.data);
+      final dynamic data = response.data;
+      if (data is Map<String, dynamic>) {
+        final Map<String, dynamic> meetingData = data.containsKey('data') 
+            ? (data['data'] as Map<String, dynamic>)
+            : (data.containsKey('meeting') ? (data['meeting'] as Map<String, dynamic>) : data);
+        return Meeting.fromJson(meetingData);
+      }
+      return null;
     } catch (e) {
+      print('Error fetching meeting info: $e');
       return null;
     }
   }
@@ -30,9 +46,16 @@ class MeetingRepository {
   Future<List<Meeting>> getMeetingsByHost(String userId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.userMeetings}/$userId');
-      final List data = response.data is List ? response.data : (response.data['data'] ?? []);
-      return data.map((json) => Meeting.fromJson(json)).toList();
+      final dynamic data = response.data;
+      List rawList = [];
+      if (data is Map && data.containsKey('data')) {
+        rawList = data['data'] as List;
+      } else if (data is List) {
+        rawList = data;
+      }
+      return rawList.map((json) => Meeting.fromJson(json)).toList();
     } catch (e) {
+      print('Error fetching meetings by host: $e');
       return [];
     }
   }

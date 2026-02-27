@@ -21,7 +21,15 @@ import '../../../../core/services/recording_service.dart';
 
 class MeetingRoomScreen extends ConsumerStatefulWidget {
   final String meetingId;
-  const MeetingRoomScreen({super.key, required this.meetingId});
+  final bool initialVideo;
+  final bool initialAudio;
+
+  const MeetingRoomScreen({
+    super.key, 
+    required this.meetingId,
+    this.initialVideo = true,
+    this.initialAudio = true,
+  });
 
   @override
   ConsumerState<MeetingRoomScreen> createState() => _MeetingRoomScreenState();
@@ -47,6 +55,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         user?.id ?? 'guest',
         user?.name ?? 'Guest',
         jwtToken,
+        video: widget.initialVideo,
+        audio: widget.initialAudio,
       );
     });
   }
@@ -65,23 +75,41 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      backgroundColor: const Color(0xFF020617),
       body: Container(
-        decoration: BoxDecoration(
-          gradient: isDark ? MizdahTheme.darkGradient : null,
-          color: isDark ? null : MizdahTheme.lightBackground,
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF0F172A), 
+              Color(0xFF020617),
+            ],
+          ),
         ),
         child: SafeArea(
+          bottom: false,
           child: Stack(
             children: [
-              // Main Content
-              _participantCount(meetingState) > 0 
+              // Main Video Grid
+              (meetingState.participants.isNotEmpty || meetingState.mockParticipantCount > 0)
                 ? _VideoGrid(meetingState: meetingState)
                 : _SolitaryHeroView(meetingId: widget.meetingId),
 
-              // Top Bar
-              _MeetingTopBar(
-                meetingId: widget.meetingId,
-                isRecording: meetingState.isRecording,
+              // Floating Top Bar
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: _MeetingTopBar(
+                  meetingId: widget.meetingId,
+                  isRecording: meetingState.isRecording,
+                  isSpeakerphoneOn: meetingState.isSpeakerphoneOn,
+                  onToggleSpeakerphone: meetingNotifier.toggleSpeakerphone,
+                  onSwitchCamera: meetingNotifier.switchCamera,
+                ),
               ),
 
               // Captions Overlay
@@ -111,7 +139,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   isCameraOn: meetingState.isCameraOn,
                   onMicToggle: meetingNotifier.toggleMic,
                   onCameraToggle: meetingNotifier.toggleCamera,
-                  onHangup: () => context.go('/'),
+                  onHangup: () {
+                    meetingNotifier.leaveMeeting();
+                    context.go('/');
+                  },
                   onOptionsTap: () => _showOptionsBottomSheet(context),
                 ),
               ),
@@ -189,12 +220,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         final meetingState = ref.watch(meetingProvider(widget.meetingId));
         return _ChatView(
           messages: meetingState.chatMessages,
-          onSend: (text, {attachmentUrl}) {
+          onSend: (text) {
             final user = ref.read(authProvider).user;
             ref.read(meetingProvider(widget.meetingId).notifier).sendMessage(
               text, 
               user?.name ?? 'Guest',
-              attachmentUrl: attachmentUrl,
             );
           },
         );
@@ -267,22 +297,27 @@ class _VideoGrid extends StatelessWidget {
         : meetingState.mockParticipantCount;
 
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 80, 16, 100),
+      padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),
+      physics: const BouncingScrollPhysics(),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 0.8,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 0.75, // Taller cards for mobile
       ),
       itemCount: count,
       itemBuilder: (context, index) {
         if (meetingState.remoteRenderers.isNotEmpty) {
           final entry = meetingState.remoteRenderers.entries.elementAt(index);
+          final hasVideo = entry.value.srcObject?.getVideoTracks().where((t) => t.enabled).isNotEmpty ?? false;
+          
           return ClipRRect(
             borderRadius: BorderRadius.circular(16),
             child: Container(
-              color: Colors.black,
-              child: RTCVideoView(entry.value),
+              color: const Color(0xFF3C4043), // Google Meet dark grey
+              child: hasVideo 
+                ? RTCVideoView(entry.value, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+                : const _AvatarPlaceholder(name: 'Participant', size: 64),
             ),
           );
         } else {
@@ -301,34 +336,70 @@ class _MockParticipantTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const images = [
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop',
+      'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400&h=400&fit=crop', // Business man
+      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400&h=400&fit=crop', // Business woman
+      'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400&h=400&fit=crop', // Professional
+      'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&h=400&fit=crop', // Professional
     ];
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.network(images[index % images.length], fit: BoxFit.cover),
-          Positioned(
-            bottom: 8,
-            left: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                'Participant ${index + 1}',
-                style: const TextStyle(color: Colors.white, fontSize: 10),
-              ),
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(
+              images[index % images.length], 
+              fit: BoxFit.cover,
+            ),
+            // Name Tag Layer
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(12, 32, 12, 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withOpacity(0.7),
+                    ],
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Participant ${index + 1}',
+                        style: const TextStyle(
+                          color: Colors.white, 
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.mic_off, color: Colors.white, size: 14),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -438,8 +509,64 @@ class _SelfViewCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: isCameraOn 
-          ? RTCVideoView(renderer, mirror: true)
-          : const Center(child: Icon(Icons.person, color: Colors.white24, size: 48)),
+          ? RTCVideoView(renderer, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+          : const _AvatarPlaceholder(name: 'You', size: 56),
+      ),
+    );
+  }
+}
+
+class _AvatarPlaceholder extends StatelessWidget {
+  final String name;
+  final double size;
+
+  const _AvatarPlaceholder({
+    required this.name,
+    this.size = 64,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Generate a consistent color based on the name
+    final colorVal = name.isNotEmpty ? name.codeUnitAt(0) : 0;
+    final colors = [
+      Colors.blue, Colors.red, Colors.green, Colors.orange,
+      Colors.purple, Colors.teal, Colors.pink, Colors.indigo
+    ];
+    final bgColor = colors[colorVal % colors.length].shade400;
+    final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?';
+
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: bgColor,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              initial,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: size * 0.45,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -448,84 +575,110 @@ class _SelfViewCard extends StatelessWidget {
 class _MeetingTopBar extends StatelessWidget {
   final String meetingId;
   final bool isRecording;
-  const _MeetingTopBar({required this.meetingId, required this.isRecording});
+  final bool isSpeakerphoneOn;
+  final VoidCallback onToggleSpeakerphone;
+  final VoidCallback onSwitchCamera;
+
+  const _MeetingTopBar({
+    required this.meetingId, 
+    required this.isRecording,
+    required this.isSpeakerphoneOn,
+    required this.onToggleSpeakerphone,
+    required this.onSwitchCamera,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final iconColor = isDark ? Colors.white : Colors.black87;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       child: Row(
         children: [
-          IconButton(
-            icon: Icon(Icons.arrow_back, color: iconColor),
-            onPressed: () => context.pop(),
+          _TopBarIconButton(
+            icon: Icons.arrow_back,
+            onTap: () => context.pop(),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.3)
-                  : Colors.black.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(20),
-            ),
+          const SizedBox(width: 8),
+          GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            radius: 20,
+            opacity: isDark ? 0.1 : 0.05,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.calendar_today_outlined, color: iconColor, size: 16),
+                Icon(Icons.lock_rounded, color: isDark ? MizdahTheme.primaryBlue : Colors.black54, size: 14),
                 const SizedBox(width: 8),
                 Text(
                   meetingId,
                   style: TextStyle(
                     color: iconColor,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
                   ),
                 ),
+                Icon(Icons.keyboard_arrow_down, color: iconColor.withOpacity(0.5), size: 18),
               ],
             ),
           ),
           if (isRecording) ...[
             const SizedBox(width: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
+                color: Colors.red.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.red.withOpacity(0.2)),
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                  const Icon(Icons.circle, color: Colors.red, size: 8),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'REC',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
-                  const SizedBox(width: 4),
-                  const Text('REC', style: TextStyle(color: Colors.red, fontSize: 10, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
           ],
           const Spacer(),
-          Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.1)
-                  : Colors.transparent,
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: Icon(Icons.volume_up_outlined, color: iconColor),
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Audio output switched')),
-                );
-              },
-            ),
+          _TopBarIconButton(
+            icon: isSpeakerphoneOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+            onTap: onToggleSpeakerphone,
           ),
           const SizedBox(width: 8),
+          _TopBarIconButton(
+            icon: Icons.cameraswitch_outlined,
+            onTap: onSwitchCamera,
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _TopBarIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _TopBarIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      radius: 100,
+      opacity: isDark ? 0.1 : 0.05,
+      child: IconButton(
+        icon: Icon(icon, color: isDark ? Colors.white : Colors.black87, size: 20),
+        onPressed: onTap,
       ),
     );
   }
@@ -961,26 +1114,65 @@ class _SlidingPanel extends StatelessWidget {
   }
 }
 
-class _ChatView extends StatelessWidget {
+class _ChatView extends ConsumerStatefulWidget {
   final List<Map<String, dynamic>> messages;
   final Function(String) onSend;
 
   const _ChatView({required this.messages, required this.onSend});
 
   @override
+  ConsumerState<_ChatView> createState() => _ChatViewState();
+}
+
+class _ChatViewState extends ConsumerState<_ChatView> {
+  final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void didUpdateWidget(_ChatView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.messages.length > oldWidget.messages.length) {
+      _scrollToBottom();
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textController = TextEditingController();
+    final currentUser = ref.watch(authProvider).user;
 
     return Column(
       children: [
         Expanded(
           child: ListView.builder(
+            controller: _scrollController,
             padding: const EdgeInsets.all(20),
-            itemCount: messages.length,
+            itemCount: widget.messages.length,
             itemBuilder: (context, index) {
-              final msg = messages[index];
-              final isMe = msg['sender'] == 'You' || msg['sender'] == 'Mustafa Omen';
+              final msg = widget.messages[index];
+              final isMe = msg['sender'] == 'You' || 
+                           msg['sender'] == 'Mustafa Omen' || 
+                           msg['sender'] == currentUser?.name;
+              
               final timeStr = msg['time'] != null 
                   ? DateFormat('h:mm a').format(DateTime.parse(msg['time']))
                   : DateFormat('h:mm a').format(DateTime.now());
@@ -1104,8 +1296,6 @@ class _ChatView extends StatelessWidget {
             },
           ),
         ),
-        if (_isUploading)
-          const LinearProgressIndicator(minHeight: 2),
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1114,11 +1304,6 @@ class _ChatView extends StatelessWidget {
           ),
           child: Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.attach_file),
-                onPressed: _isUploading ? null : _pickAndUploadFile,
-                color: MizdahTheme.primaryBlue,
-              ),
               Expanded(
                 child: TextField(
                   controller: _textController,

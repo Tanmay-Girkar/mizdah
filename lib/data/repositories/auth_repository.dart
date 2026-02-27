@@ -14,6 +14,7 @@ class AuthRepository {
         'name': name,
       });
       
+      if (response.data is! Map) throw Exception('Invalid server response format');
       Map<String, dynamic> data = Map<String, dynamic>.from(response.data);
       
       // Extract token from header if not in body
@@ -34,6 +35,7 @@ class AuthRepository {
         'password': password,
       });
       
+      if (response.data is! Map) throw Exception('Invalid server response format');
       Map<String, dynamic> data = Map<String, dynamic>.from(response.data);
       
       // Extract token from header if not in body
@@ -65,13 +67,14 @@ class AuthRepository {
   Future<User?> getMe() async {
     try {
       final response = await _apiClient.get(ApiConfig.authMe);
-      if (response.data['user'] != null) {
-        return User.fromJson(response.data['user']);
+      final dynamic data = response.data;
+      if (data is Map && data['user'] != null) {
+        return User.fromJson(data['user']);
       }
-      return null;
     } catch (e) {
-      return null;
+      print('Error fetching current user: $e');
     }
+    return null;
   }
 
   Future<User> updateProfile({String? name, String? password}) async {

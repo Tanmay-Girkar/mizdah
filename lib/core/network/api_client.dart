@@ -1,11 +1,10 @@
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/api_config.dart';
+import '../services/storage_service.dart';
 
 class ApiClient {
   final Dio _dio = Dio();
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
-  static const _tokenKey = 'auth_token';
+  // No local storage instance here anymore
 
   ApiClient() {
     _dio.options.baseUrl = ApiConfig.baseUrl;
@@ -22,16 +21,16 @@ class ApiClient {
     // Add interceptor to include token in every request
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
-        final token = await _storage.read(key: _tokenKey);
+        final token = await StorageService.getToken();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
         }
         return handler.next(options);
       },
-      onError: (DioException e, handler) {
+      onError: (DioException e, handler) async {
         // Handle 401 Unauthorized globally if needed (e.g. trigger logout)
         if (e.response?.statusCode == 401) {
-          _storage.delete(key: _tokenKey);
+          await StorageService.clearAll();
         }
         return handler.next(e);
       },

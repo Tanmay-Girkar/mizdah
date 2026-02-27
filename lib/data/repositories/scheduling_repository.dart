@@ -39,9 +39,17 @@ class SchedulingRepository {
   Future<List<dynamic>> getUserSchedules(String userId) async {
     try {
       final response = await _apiClient.get('${ApiConfig.userSchedules}/$userId');
-      return response.data['data'] ?? response.data; // Depending on actual API payload
-    } on DioException catch (e) {
-      throw Exception(e.response?.data['message'] ?? 'Failed to get schedules: ${e.message}');
+      // Robust handling for both { "data": [...] } and directly [...]
+      final dynamic data = response.data;
+      if (data is Map && data.containsKey('data')) {
+        return data['data'] as List<dynamic>;
+      } else if (data is List) {
+        return data;
+      }
+      return [];
+    } catch (e) {
+      print('Error fetching user schedules: $e');
+      return []; // Return empty list instead of throwing to keep UI stable
     }
   }
 
