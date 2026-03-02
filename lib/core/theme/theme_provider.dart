@@ -32,8 +32,8 @@ class ThemeManager extends Notifier<ThemeMode> {
 
 class MizdahTheme {
   // Primary Palette
-  static const Color primaryBlue = Color(0xFF00B2FF); // Neon Blue
-  static const Color primaryGlow = Color(0x3300B2FF);
+  static const Color primaryBlue = Color(0xFF2563EB); // Royal Blue
+  static const Color primaryGlow = Color(0x332563EB);
   
   // Dark Theme Palette
   static const Color darkBackgroundTop = Color(0xFF0B1220);

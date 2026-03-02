@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:mizdah/core/config/api_config.dart';
 import '../../../../core/services/whiteboard_service.dart';
+import '../../../../core/theme/theme_provider.dart';
 
 // Safe provider initialization
 final whiteboardProvider = StateNotifierProvider<WhiteboardNotifier, WhiteboardState>((ref) {
@@ -80,7 +81,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
               Row(
                 children: [
                   _colorOption(Colors.red),
-                  _colorOption(Colors.blue),
+                  _colorOption(MizdahTheme.primaryBlue),
                   _colorOption(Colors.black),
                 ],
               ),

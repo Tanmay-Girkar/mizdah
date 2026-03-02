@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/theme/theme_provider.dart';
 
 class PrivacyScreen extends StatelessWidget {
   const PrivacyScreen({super.key});
@@ -11,7 +12,7 @@ class PrivacyScreen extends StatelessWidget {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            const Icon(Icons.security, size: 80, color: Colors.blue),
+            Icon(Icons.security, size: 80, color: MizdahTheme.primaryBlue),
             const SizedBox(height: 24),
             Text(
               'Your meetings are safe',

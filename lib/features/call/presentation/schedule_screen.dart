@@ -6,6 +6,7 @@ import '../../../data/repositories/scheduling_repository.dart';
 import '../../auth/auth_provider.dart';
 import '../../meeting/presentation/pre_join_screen.dart'; // Example for next screen if needed
 import '../../../core/widgets/mizdah_button.dart';
+import '../../../core/theme/theme_provider.dart';
 
 class ScheduleScreen extends ConsumerStatefulWidget {
   const ScheduleScreen({super.key});
@@ -27,7 +28,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
   bool _allDay = false;
 
   String _repeatOption = 'Does not repeat';
-  Color _selectedColor = Colors.blue;
+  Color _selectedColor = MizdahTheme.primaryBlue;
 
   final List<String> _repeatOptions = [
     'Does not repeat',
@@ -38,7 +39,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
   ];
 
   final List<Color> _availableColors = [
-    Colors.blue,
+    MizdahTheme.primaryBlue,
     Colors.red,
     Colors.green,
     Colors.orange,
@@ -47,7 +48,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
   ];
 
   final Map<Color, String> _colorNames = {
-    Colors.blue: 'Default color',
+    MizdahTheme.primaryBlue: 'Default color',
     Colors.red: 'Tomato',
     Colors.green: 'Basil',
     Colors.orange: 'Tangerine',

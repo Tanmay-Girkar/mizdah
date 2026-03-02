@@ -184,7 +184,7 @@ class UpcomingMeetingsSection extends ConsumerWidget {
                         height: 48,
                         width: 48,
                         decoration: BoxDecoration(
-                          color: Colors.blue.withOpacity(0.1),
+                          color: MizdahTheme.primaryBlue.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Icon(Icons.event_available, color: MizdahTheme.primaryBlue),
@@ -297,8 +297,8 @@ class HistoryTile extends StatelessWidget {
       child: ListTile(
         contentPadding: EdgeInsets.zero,
         leading: CircleAvatar(
-          backgroundColor: Colors.blue.withOpacity(0.1),
-          child: Text(item.title[0], style: const TextStyle(color: Colors.blue)),
+          backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+          child: Text(item.title[0], style: const TextStyle(color: MizdahTheme.primaryBlue)),
         ),
         title: Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text(
@@ -393,7 +393,7 @@ class MizdahAppBar extends StatelessWidget {
         const SizedBox(width: 8),
         CircleAvatar(
           radius: 18,
-          backgroundColor: Colors.blue,
+          backgroundColor: MizdahTheme.primaryBlue,
           child: user != null 
             ? Text(user!.name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
             : const Icon(Icons.person, color: Colors.white, size: 20),

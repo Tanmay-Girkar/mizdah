@@ -4,7 +4,7 @@ class ApiConfig {
 
   // Ports as defined in FLUTTER_API_SWAGGER.md
   static const String gatewayPort = '3000';
-  static const String signalingPort = '4000';
+  static const String signalingPort = '3001';
   static const String chatSocketPort = '4005';
 
   static const String baseUrl = 'http://$pcIp:$gatewayPort';
@@ -18,7 +18,7 @@ class ApiConfig {
   static const String authUpdate = '$baseUrl/api/auth/update';
 
   static const String createMeeting = '$baseUrl/api/meetings/create';
-  static const String getMeeting = '$baseUrl/api/meeting'; // + /{meetingCode}
+  static const String getMeeting = '$baseUrl/api/meetings'; // + /{meetingCode}
   static const String userMeetings = '$baseUrl/api/meetings/user'; // + /{userId}
   
   static const String participantJoin = '$baseUrl/api/participant/join';

@@ -154,6 +154,40 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   onClose: () => setState(() => _activePanel = null),
                   child: _getPanelChild(),
                 ),
+
+              // Waiting Room Overlay
+              if (meetingState.isInWaitingRoom)
+                Container(
+                  color: const Color(0xFF0F172A),
+                  width: double.infinity,
+                  height: double.infinity,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.hourglass_empty_rounded, size: 64, color: MizdahTheme.primaryBlue),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Wait for the host to let you in',
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'The meeting host will let you in soon...',
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      const SizedBox(height: 48),
+                      MizdahButton(
+                        label: 'Leave Meeting',
+                        onTap: () {
+                          meetingNotifier.leaveMeeting();
+                          context.go('/');
+                        },
+                        isFullWidth: false,
+                        backgroundColor: Colors.white10,
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -179,6 +213,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           Navigator.pop(context);
           setState(() => _activePanel = 'chat');
         },
+        onOpenHostControls: () {
+          Navigator.pop(context);
+          setState(() => _activePanel = 'host');
+        },
         onOpenWhiteboard: () {
           Navigator.pop(context);
           setState(() => _activePanel = 'whiteboard');
@@ -202,7 +240,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       case 'chat':
         return 'In-call messages';
       case 'participants':
-        return 'Participants (5)';
+        final meetingState = ref.read(meetingProvider(widget.meetingId));
+        return 'Participants (${meetingState.participants.length + 1})';
       case 'host':
         return 'Host Controls';
       case 'breakout':
@@ -222,10 +261,13 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           messages: meetingState.chatMessages,
           onSend: (text) {
             final user = ref.read(authProvider).user;
-            ref.read(meetingProvider(widget.meetingId).notifier).sendMessage(
+            final sent = ref.read(meetingProvider(widget.meetingId).notifier).sendMessage(
               text, 
               user?.name ?? 'Guest',
             );
+            if (!sent) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Chat is disabled by the host.')));
+            }
           },
         );
       case 'participants':
@@ -233,6 +275,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       case 'host':
         final recState = ref.watch(recordingServiceProvider(widget.meetingId));
         return _HostControlsView(
+          meetingId: widget.meetingId,
           isRecording: recState.status == RecordingStatus.recording || _isRecording,
           onRecordingToggle: (val) {
             if (val) {
@@ -762,6 +805,7 @@ class _MoreOptionsSheet extends StatelessWidget {
   final bool isRaisingHand;
   final VoidCallback onRaiseHandToggle;
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenHostControls;
   final VoidCallback onOpenWhiteboard;
   final VoidCallback onToggleScreenShare;
   final VoidCallback onToggleCaptions;
@@ -772,6 +816,7 @@ class _MoreOptionsSheet extends StatelessWidget {
     required this.isRaisingHand,
     required this.onRaiseHandToggle,
     required this.onOpenChat,
+    required this.onOpenHostControls,
     required this.onOpenWhiteboard,
     required this.onToggleScreenShare,
     required this.onToggleCaptions,
@@ -911,12 +956,9 @@ class _MoreOptionsSheet extends StatelessWidget {
                 children: [
                   Expanded(
                     child: _SheetButton(
-                      icon: Icons.settings_outlined,
-                      label: 'Settings',
-                      onTap: () {
-                        Navigator.pop(context);
-                        context.push('/meeting-settings');
-                      },
+                      icon: Icons.security,
+                      label: 'Host Controls',
+                      onTap: onOpenHostControls,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1363,67 +1405,175 @@ class _ParticipantsView extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final meetingState = ref.watch(meetingProvider(meetingId));
     final participants = meetingState.participants;
+    final waitingParticipants = meetingState.waitingParticipants;
+    final isHost = meetingState.hostId == meetingState.userId;
 
-    if (participants.isEmpty && meetingState.isConnected) {
-       return const Center(child: Text('You are the only one here', style: TextStyle(color: Colors.grey)));
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      itemCount: participants.length,
-      itemBuilder: (context, index) {
-        final participant = participants[index];
-        final name = participant['name'] ?? participant['userId'] ?? 'Unknown';
-        final isHostLog = participant['isHost'] == true;
-
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundColor: isDark ? Colors.white10 : Colors.black12,
-            child: Text(
-              name[0].toUpperCase(),
-              style: TextStyle(color: isDark ? Colors.white : Colors.black),
+    return CustomScrollView(
+      slivers: [
+        if (waitingParticipants.isNotEmpty && isHost) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text(
+                'Waiting Room (${waitingParticipants.length})',
+                style: const TextStyle(
+                  color: MizdahTheme.primaryBlue,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
             ),
           ),
-          title: Text(
-            '$name${isHostLog ? " (Host)" : ""}',
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final p = waitingParticipants[index];
+                final name = p['name'] ?? 'Guest';
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                  leading: CircleAvatar(
+                    backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+                    child: Text(name[0].toUpperCase(), style: const TextStyle(color: MizdahTheme.primaryBlue)),
+                  ),
+                  title: Text(name, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                  trailing: TextButton(
+                    onPressed: () => ref.read(meetingProvider(meetingId).notifier).admitParticipant(p['socketId']),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: MizdahTheme.primaryBlue,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    ),
+                    child: const Text('Admit', style: TextStyle(fontSize: 12)),
+                  ),
+                );
+              },
+              childCount: waitingParticipants.length,
+            ),
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.mic,
-                color: isDark ? Colors.grey[600] : Colors.grey[400],
-                size: 20,
+          const SliverToBoxAdapter(child: Divider(indent: 20, endIndent: 20, height: 32)),
+        ],
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+            child: Text(
+              'In the meeting (${participants.length + 1})',
+              style: TextStyle(
+                color: isDark ? Colors.white70 : Colors.black54,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
               ),
-              const SizedBox(width: 16),
-              Icon(
-                Icons.videocam,
-                color: isDark ? Colors.grey[600] : Colors.grey[400],
-                size: 20,
-              ),
-            ],
+            ),
           ),
-        );
-      },
+        ),
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              // Include self
+              if (index == 0) {
+                 final user = ref.read(authProvider).user;
+                 return _ParticipantTile(
+                   name: (user?.name ?? 'You') + ' (Me)',
+                   isHost: meetingState.hostId == meetingState.userId,
+                   isMicOn: meetingState.isMicOn,
+                   isCameraOn: meetingState.isCameraOn,
+                   isMe: true,
+                 );
+              }
+              final p = participants[index - 1];
+              return _ParticipantTile(
+                name: p['name'] ?? 'Unknown',
+                isHost: p['userId'] == meetingState.hostId || p['isHost'] == true,
+                isMicOn: p['isMicOn'] ?? false,
+                isCameraOn: p['isCameraOn'] ?? false,
+                isMe: false,
+              );
+            },
+            childCount: participants.length + 1,
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _HostControlsView extends StatefulWidget {
+class _ParticipantTile extends StatelessWidget {
+  final String name;
+  final bool isHost;
+  final bool isMicOn;
+  final bool isCameraOn;
+  final bool isMe;
+
+  const _ParticipantTile({
+    required this.name,
+    this.isHost = false,
+    this.isMicOn = true,
+    this.isCameraOn = true,
+    this.isMe = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: isHost ? MizdahTheme.primaryBlue.withOpacity(0.1) : (isDark ? Colors.white10 : Colors.black12),
+        child: Text(
+          name[0].toUpperCase(),
+          style: TextStyle(
+            color: isHost ? MizdahTheme.primaryBlue : (isDark ? Colors.white70 : Colors.black54),
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      title: Text(
+        name,
+        style: TextStyle(
+          color: isDark ? Colors.white : Colors.black87,
+          fontSize: 15,
+          fontWeight: isMe ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+      subtitle: isHost ? const Text('Meeting Host', style: TextStyle(color: MizdahTheme.primaryBlue, fontSize: 11)) : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isMicOn ? Icons.mic_none_rounded : Icons.mic_off_rounded,
+            size: 20,
+            color: isMicOn ? (isDark ? Colors.white38 : Colors.black38) : Colors.redAccent,
+          ),
+          const SizedBox(width: 12),
+          Icon(
+            isCameraOn ? Icons.videocam_outlined : Icons.videocam_off_outlined,
+            size: 20,
+            color: isCameraOn ? (isDark ? Colors.white38 : Colors.black38) : Colors.redAccent,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HostControlsView extends ConsumerStatefulWidget {
+  final String meetingId;
   final bool isRecording;
   final ValueChanged<bool> onRecordingToggle;
 
   const _HostControlsView({
+    required this.meetingId,
     required this.isRecording,
     required this.onRecordingToggle,
   });
 
   @override
-  State<_HostControlsView> createState() => _HostControlsViewState();
+  ConsumerState<_HostControlsView> createState() => _HostControlsViewState();
 }
 
-class _HostControlsViewState extends State<_HostControlsView> {
+class _HostControlsViewState extends ConsumerState<_HostControlsView> {
   bool _lockMeeting = false;
   bool _allowMic = true;
   bool _allowCam = true;
@@ -1447,7 +1597,10 @@ class _HostControlsViewState extends State<_HostControlsView> {
           title: 'Lock Meeting',
           subtitle: 'Prevent new participants from joining',
           value: _lockMeeting,
-          onChanged: (v) => setState(() => _lockMeeting = v),
+          onChanged: (v) {
+            setState(() => _lockMeeting = v);
+            ref.read(meetingProvider(widget.meetingId).notifier).toggleLockMeeting(v);
+          },
         ),
         const SizedBox(height: 24),
         const Text(
@@ -1462,17 +1615,26 @@ class _HostControlsViewState extends State<_HostControlsView> {
         _ControlToggle(
           title: 'Share Microphone',
           value: _allowMic,
-          onChanged: (v) => setState(() => _allowMic = v),
+          onChanged: (v) {
+            setState(() => _allowMic = v);
+            ref.read(meetingProvider(widget.meetingId).notifier).updateParticipantPermissions('allowMic', v);
+          }
         ),
         _ControlToggle(
           title: 'Share Video',
           value: _allowCam,
-          onChanged: (v) => setState(() => _allowCam = v),
+          onChanged: (v) {
+            setState(() => _allowCam = v);
+            ref.read(meetingProvider(widget.meetingId).notifier).updateParticipantPermissions('allowCam', v);
+          }
         ),
         _ControlToggle(
           title: 'Send Chat Messages',
           value: _allowChat,
-          onChanged: (v) => setState(() => _allowChat = v),
+          onChanged: (v) {
+            setState(() => _allowChat = v);
+            ref.read(meetingProvider(widget.meetingId).notifier).updateParticipantPermissions('allowChat', v);
+          }
         ),
         const Divider(color: Colors.white10, height: 32),
         _ControlToggle(
@@ -1485,13 +1647,19 @@ class _HostControlsViewState extends State<_HostControlsView> {
         MizdahButton(
           label: 'Mute All',
           backgroundColor: Colors.white10,
-          onTap: () {},
+          onTap: () {
+            ref.read(meetingProvider(widget.meetingId).notifier).muteAll();
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('All participants muted')));
+          },
         ),
         const SizedBox(height: 12),
         MizdahButton(
           label: 'End Meeting for All',
           backgroundColor: Colors.red.withOpacity(0.1),
-          onTap: () => context.go('/'),
+          onTap: () {
+            ref.read(meetingProvider(widget.meetingId).notifier).endMeetingForAll();
+            context.go('/');
+          },
         ),
         const SizedBox(height: 40),
       ],
