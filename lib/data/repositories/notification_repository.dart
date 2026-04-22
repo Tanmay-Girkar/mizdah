@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart';
 import '../../core/network/api_client.dart';
 import '../../core/config/api_config.dart';
-import '../models/models.dart';
 
 final notificationRepositoryProvider = Provider((ref) => NotificationRepository(ApiClient()));
 
@@ -22,7 +22,7 @@ class NotificationRepository {
       }
       return [];
     } catch (e) {
-      print('Error fetching notifications: $e');
+      debugPrint('Error fetching notifications: $e');
       return [];
     }
   }

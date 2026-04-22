@@ -8,7 +8,7 @@ abstract class MizdahRepository {
   Future<List<Contact>> getContacts();
   Future<List<Meeting>> getMeetings();
   Future<List<CallHistory>> getCallHistory();
-  Future<Meeting> createMeeting(String title, DateTime dateTime);
+  Future<Meeting> createMeeting({required String title, required DateTime dateTime, String? code});
   Future<Meeting?> getMeetingByCode(String code);
 }
 
@@ -54,13 +54,15 @@ class RealMizdahRepository implements MizdahRepository {
   }
 
   @override
-  Future<Meeting> createMeeting(String title, DateTime dateTime) async {
+  Future<Meeting> createMeeting({required String title, required DateTime dateTime, String? code}) async {
     if (_currentUserId == null) throw Exception("Not logged in");
     try {
       final response = await _apiClient.post(ApiConfig.createMeeting, data: {
         'hostId': _currentUserId,
         'title': title,
         'scheduledFor': dateTime.toIso8601String(),
+        if (code != null) 'id': code,
+        if (code != null) 'meeting_code': code,
       });
       return Meeting.fromJson(response.data);
     } catch (e) {

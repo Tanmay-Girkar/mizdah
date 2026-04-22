@@ -5,7 +5,7 @@ class UnifiedPlanUtils {
   static List<RtpEncodingParameters> getRtpEncodings(
     MediaObject offerMediaObject,
   ) {
-    Set<int> ssrcs = Set<int>();
+    Set<int> ssrcs = <int>{};
 
     for (Ssrc line in offerMediaObject.ssrcs ?? []) {
       int ssrc = line.id!;
@@ -30,7 +30,7 @@ class UnifiedPlanUtils {
       int? ssrc;
       int? rtxSsrc;
 
-      if (tokens.length > 0) {
+      if (tokens.isNotEmpty) {
         ssrc = int.parse(tokens[0]);
       }
       if (tokens.length > 1) {
@@ -81,10 +81,13 @@ class UnifiedPlanUtils {
     }
 
     // Get the SSRC.
-    Ssrc? ssrcMsidLine = (offerMediaObject.ssrcs ?? []).firstWhere(
-      (Ssrc line) => line.attribute == 'msid',
-      orElse: () => null as Ssrc,
-    );
+    Ssrc? ssrcMsidLine;
+    for (final line in (offerMediaObject.ssrcs ?? [])) {
+      if (line.attribute == 'msid') {
+        ssrcMsidLine = line;
+        break;
+      }
+    }
 
     if (ssrcMsidLine == null) {
       throw ('a=ssrc line with msid information not found');
@@ -95,7 +98,7 @@ class UnifiedPlanUtils {
     String streamId = '';
     String trackId = '';
 
-    if (tmp.length > 0) {
+    if (tmp.isNotEmpty) {
       streamId = tmp[0];
     }
     if (tmp.length > 1) {
@@ -122,10 +125,13 @@ class UnifiedPlanUtils {
       }
     });
 
-    Ssrc? ssrcCnameLine = offerMediaObject.ssrcs?.firstWhere(
-      (Ssrc line) => line.attribute == 'cname',
-      orElse: () => null as Ssrc,
-    );
+    Ssrc? ssrcCnameLine;
+    for (final line in (offerMediaObject.ssrcs ?? [])) {
+      if (line.attribute == 'cname') {
+        ssrcCnameLine = line;
+        break;
+      }
+    }
 
     if (ssrcCnameLine == null) {
       throw ('a=ssrc line with cname information not found');

@@ -30,7 +30,7 @@ class MizdahButton extends StatelessWidget {
           boxShadow: [
             if (onTap != null && !isLoading)
               BoxShadow(
-                color: (backgroundColor ?? MizdahTheme.primaryBlue).withOpacity(0.3),
+                color: (backgroundColor ?? MizdahTheme.primaryBlue).withValues(alpha: 0.3),
                 blurRadius: 15,
                 offset: const Offset(0, 8),
               ),
@@ -46,7 +46,7 @@ class MizdahButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(24),
             ),
             elevation: 0,
-            disabledBackgroundColor: (backgroundColor ?? MizdahTheme.primaryBlue).withOpacity(0.5),
+            disabledBackgroundColor: (backgroundColor ?? MizdahTheme.primaryBlue).withValues(alpha: 0.5),
           ),
           child: isLoading
               ? const SizedBox(

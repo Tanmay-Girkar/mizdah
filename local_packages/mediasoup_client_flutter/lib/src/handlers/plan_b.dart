@@ -30,13 +30,13 @@ class PlanB extends HandlerInterface {
   // // Local stream for sending.
   // MediaStream _sendStream;
   // Map of sending MediaStreamTracks indexed by localId.
-  Map<String, MediaStreamTrack> _mapSendLocalIdTrack =
+  final Map<String, MediaStreamTrack> _mapSendLocalIdTrack =
       <String, MediaStreamTrack>{};
   // Next sending localId.
   int _nextSendLocalId = 0;
   // Map of MID, RTP parameters and RTCRtpReceiver indexed by local id.
   // Value is an Object with mid, rtpParameters and rtpReceiver.
-  Map<String, Map<String, dynamic>> _mapRecvLocalIdInfo =
+  final Map<String, Map<String, dynamic>> _mapRecvLocalIdInfo =
       <String, Map<String, dynamic>>{};
   // Whether  a DataChannel m=application section has been created.
   bool _hasDataChannelMediaSection = false;
@@ -63,10 +63,8 @@ class PlanB extends HandlerInterface {
     required DtlsRole localDtlsRole,
     SdpObject? localSdpObject,
   }) async {
-    if (localSdpObject == null) {
-      localSdpObject =
-          SdpObject.fromMap(parse((await _pc!.getLocalDescription())!.sdp!));
-    }
+    localSdpObject ??=
+        SdpObject.fromMap(parse((await _pc!.getLocalDescription())!.sdp!));
 
     // Get our local DTLS parameters.
     DtlsParameters dtlsParameters =
@@ -95,7 +93,9 @@ class PlanB extends HandlerInterface {
     if (_pc != null) {
       try {
         await _pc!.close();
-      } catch (error) {}
+      } catch (error) {
+        // PC might already be closed or disposed.
+      }
     }
   }
 
@@ -132,7 +132,9 @@ class PlanB extends HandlerInterface {
       try {
         await pc.close();
         // pc?.dispose();
-      } catch (error) {}
+      } catch (error) {
+        // PC might already be closed or disposed.
+      }
 
       SdpObject sdpObject = SdpObject.fromMap(parse(offer.sdp!));
       RtpCapabilities nativeRtpCapabilities =
@@ -143,9 +145,11 @@ class PlanB extends HandlerInterface {
       try {
         await pc.close();
         // pc?.dispose();
-      } catch (error2) {}
+      } catch (error2) {
+        // PC might already be closed or disposed.
+      }
 
-      throw error;
+      rethrow;
     }
   }
 
@@ -188,7 +192,7 @@ class PlanB extends HandlerInterface {
 
     String localId = options.trackId;
     String mid = RTCRtpMediaTypeExtension.value(options.kind);
-    String streamId = options.rtpParameters.rtcp!.cname;
+    String streamId = options.rtpParameters.rtcp?.cname ?? 'default-stream-id';
 
     _logger.debug(
         'receive() | forcing a random remote streamId to avoid well known bug in native');
@@ -213,9 +217,8 @@ class PlanB extends HandlerInterface {
     RTCSessionDescription answer = await _pc!.createAnswer();
 
     SdpObject localSdpObject = SdpObject.fromMap(parse(answer.sdp!));
-    MediaObject? answerMediaObject = localSdpObject.media.firstWhere(
+    MediaObject? answerMediaObject = localSdpObject.media.firstWhereOrNull(
       (MediaObject m) => m.mid == mid,
-      orElse: () => null as MediaObject,
     );
 
     // May need to modify codec parameters in the answer based on codec
@@ -235,14 +238,15 @@ class PlanB extends HandlerInterface {
 
     await _pc!.setLocalDescription(answer);
 
-    MediaStream? stream = (_pc!
-            .getRemoteStreams()
-            .where((s) => s != null)
-            .toList() as List<MediaStream>)
-        .firstWhere(
-      (MediaStream s) => s.id == streamId,
-      orElse: () => null as MediaStream,
-    );
+    MediaStream? stream = _pc!
+        .getRemoteStreams()
+        .whereType<MediaStream>()
+        .firstWhereOrNull((MediaStream s) => s.id == streamId);
+
+    if (stream == null) {
+      throw ('remote stream not found');
+    }
+
     MediaStreamTrack? track = stream.getTrackById(localId);
 
     if (track == null) {
@@ -323,7 +327,7 @@ class PlanB extends HandlerInterface {
     _logger.debug('restartIce()');
 
     if (!_transportReady) {
-      return null;
+      return;
     }
 
     if (_direction == Direction.send) {
@@ -461,7 +465,7 @@ class PlanB extends HandlerInterface {
       'optional': [],
     });
     SdpObject localSdpObject = SdpObject.fromMap(parse(offer.sdp!));
-    MediaObject offerMediaObject;
+    MediaObject? offerMediaObject;
     RtpParameters sendingRtpParameters = RtpParameters.copy(
         _sendingRtpParametersByKind[
             RTCRtpMediaTypeExtension.fromString(options.track.kind!)]!);
@@ -485,10 +489,13 @@ class PlanB extends HandlerInterface {
       _logger.debug('send() | enabling simulcast');
 
       localSdpObject = SdpObject.fromMap(parse(offer.sdp!));
-      offerMediaObject = localSdpObject.media.firstWhere(
+      offerMediaObject = localSdpObject.media.firstWhereOrNull(
         (MediaObject m) => m.type == 'video',
-        orElse: () => null as MediaObject,
       );
+
+      if (offerMediaObject == null) {
+        throw ('video media section not found');
+      }
 
       PlanBUtils.addLegacySimulcast(
           offerMediaObject, options.track, options.encodings.length);
@@ -504,10 +511,13 @@ class PlanB extends HandlerInterface {
 
     localSdpObject =
         SdpObject.fromMap(parse((await _pc!.getLocalDescription())!.sdp!));
-    offerMediaObject = localSdpObject.media.firstWhere(
+    offerMediaObject = localSdpObject.media.firstWhereOrNull(
       (MediaObject m) => m.type == options.track.kind,
-      orElse: () => null as MediaObject,
     );
+
+    if (offerMediaObject == null) {
+      throw ('media section not found');
+    }
 
     // Set RTCP CNAME.
     sendingRtpParameters.rtcp!.cname = CommonUtils.getCname(offerMediaObject);
@@ -589,9 +599,8 @@ class PlanB extends HandlerInterface {
     if (!_hasDataChannelMediaSection) {
       RTCSessionDescription offer = await _pc!.createOffer();
       SdpObject localSdpObject = SdpObject.fromMap(parse(offer.sdp!));
-      MediaObject offerMediaObject = localSdpObject.media.firstWhere(
+      MediaObject? offerMediaObject = localSdpObject.media.firstWhereOrNull(
         (MediaObject m) => m.type == 'application',
-        orElse: () => null as MediaObject,
       );
 
       if (!_transportReady) {
@@ -603,6 +612,10 @@ class PlanB extends HandlerInterface {
           'sendDataChannel() | calling pc.setLocalDescription() [offer:${offer.toMap()}]');
 
       await _pc!.setLocalDescription(offer);
+
+      if (offerMediaObject == null) {
+        throw ('application media section not found');
+      }
 
       _remoteSdp.sendSctpAssociation(offerMediaObject);
 
@@ -718,7 +731,7 @@ class PlanB extends HandlerInterface {
         return;
       }
 
-      throw error;
+      rethrow;
     }
 
     if (_pc!.signalingState == RTCSignalingState.RTCSignalingStateStable) {

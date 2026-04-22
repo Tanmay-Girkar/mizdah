@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
 class DrawAction {
   final double x; // NormalizedBox (0.0 to 1.0)
@@ -56,7 +56,7 @@ class WhiteboardState {
 }
 
 class WhiteboardNotifier extends StateNotifier<WhiteboardState> {
-  final IO.Socket socket;
+  final socket_io.Socket socket;
 
   WhiteboardNotifier({required this.socket}) : super(WhiteboardState(actions: [])) {
     _initListeners();

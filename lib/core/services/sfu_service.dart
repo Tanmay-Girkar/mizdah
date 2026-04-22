@@ -1,12 +1,11 @@
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:mediasoup_client_flutter/mediasoup_client_flutter.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
 class SFUService {
   late Device _device;
   Transport? _sendTransport;
   Transport? _recvTransport;
-  final IO.Socket socket;
+  final socket_io.Socket socket;
 
   SFUService({required this.socket});
 

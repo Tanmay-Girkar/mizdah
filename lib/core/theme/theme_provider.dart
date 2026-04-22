@@ -62,10 +62,10 @@ class MizdahTheme {
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return BoxDecoration(
-      color: (isDark ? Colors.white : Colors.black).withOpacity(opacity),
+      color: (isDark ? Colors.white : Colors.black).withValues(alpha: opacity),
       borderRadius: BorderRadius.circular(radius),
       border: Border.all(
-        color: (isDark ? Colors.white : Colors.black).withOpacity(0.1),
+        color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.1),
       ),
     );
   }
@@ -120,7 +120,7 @@ class MizdahTheme {
     cardTheme: CardThemeData(
       elevation: 2,
       color: darkSurface,
-      shadowColor: Colors.black.withOpacity(0.05),
+      shadowColor: Colors.black.withValues(alpha: 0.05),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
         side: const BorderSide(color: Colors.white10),

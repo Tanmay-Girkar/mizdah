@@ -154,7 +154,7 @@ class IceCandidate {
 
   /// Unique identifier that allows ICE to correlate candidates that appear on
   /// multiple transports.
-  var foundation;
+  dynamic foundation;
 
   // String foundation;
 
@@ -182,11 +182,9 @@ class IceCandidate {
 
   int? rport;
 
-  var generation;
-
-  var networkId;
-
-  var networkCost;
+  dynamic generation;
+  dynamic networkId;
+  dynamic networkCost;
 
   IceCandidate({
     this.component = 1,
@@ -372,7 +370,7 @@ class PlainRtpParameters {
     required this.ip,
     required this.port,
     required int ipVersion,
-  })  : this._ipVersion = ipVersion,
+  })  : _ipVersion = ipVersion,
         assert(ipVersion != 4 || ipVersion != 6, 'Only 4 or 6');
 }
 
@@ -451,25 +449,25 @@ class Transport extends EnhancedEventEmitter {
   late Map<String, dynamic> _appData;
 
   // Map of Producers indexed by id.
-  Map<String, Producer> _producers = <String, Producer>{};
+  final Map<String, Producer> _producers = <String, Producer>{};
 
   // Map of Consumers indexed by id.
-  Map<String, Consumer> _consumers = <String, Consumer>{};
+  final Map<String, Consumer> _consumers = <String, Consumer>{};
 
   // Map of DataProducers indexed by id.
-  Map<String, DataProducer> _dataProducers = <String, DataProducer>{};
+  final Map<String, DataProducer> _dataProducers = <String, DataProducer>{};
 
   // Map of DataConsumers indexed by id.
-  Map<String, DataConsumer> _dataConsumers = <String, DataConsumer>{};
+  final Map<String, DataConsumer> _dataConsumers = <String, DataConsumer>{};
 
   // Whether the Consumer for RTP probation has been created.
   bool _probatorConsumerCreated = false;
 
   // FlexQueue instance to make async tasks happen sequentially.
-  FlexQueue _flexQueue = FlexQueue();
+  final FlexQueue _flexQueue = FlexQueue();
 
   // Observer instance.
-  EnhancedEventEmitter _observer = EnhancedEventEmitter();
+  final EnhancedEventEmitter _observer = EnhancedEventEmitter();
 
   Function? producerCallback;
   Function? consumerCallback;
@@ -506,7 +504,7 @@ class Transport extends EnhancedEventEmitter {
     _extendedRtpCapabilities = extendedRtpCapabilities;
     _canProduceByKind = canProduceByKind;
     _maxSctpMessageSize =
-        sctpParameters != null ? sctpParameters.maxMessageSize : null;
+        sctpParameters?.maxMessageSize;
 
     // Clone and sanitize additionalSettings.
     additionalSettings = Map<String, dynamic>.of(additionalSettings);
@@ -675,9 +673,9 @@ class Transport extends EnhancedEventEmitter {
   void restartIce(IceParameters iceParameters) {
     _logger.debug('restartIce()');
 
-    if (this._closed)
+    if (_closed) {
       throw ('closed');
-    else if (iceParameters == null) throw ('missing iceParameters');
+    }
 
     // Enqueue command.
     _flexQueue.addTask(FlexTaskAdd(
@@ -692,9 +690,9 @@ class Transport extends EnhancedEventEmitter {
   void updateIceServers(List<RTCIceServer> iceServers) {
     _logger.debug('updateIceServers()');
 
-    if (this._closed)
+    if (_closed) {
       throw ('closed');
-    else if (iceServers == null) throw ('missing iceServers');
+    }
 
     _flexQueue.addTask(FlexTaskAdd(
       id: '',
@@ -826,10 +824,9 @@ class Transport extends EnhancedEventEmitter {
     try {
       List<RtpEncodingParameters> normalizedEncodings = [];
 
-      if (arguments.encodings != null && arguments.encodings.isEmpty) {
+      if (arguments.encodings.isEmpty) {
         normalizedEncodings = [];
-      } else if (arguments.encodings != null &&
-          arguments.encodings.isNotEmpty) {
+      } else if (arguments.encodings.isNotEmpty) {
         normalizedEncodings =
             arguments.encodings.map((RtpEncodingParameters encoding) {
           RtpEncodingParameters normalizedEncoding =
@@ -857,9 +854,7 @@ class Transport extends EnhancedEventEmitter {
           if (encoding.adaptivePtime != null) {
             normalizedEncoding.adaptivePtime = encoding.adaptivePtime;
           }
-          if (encoding.priority != null) {
-            normalizedEncoding.priority = encoding.priority;
-          }
+          normalizedEncoding.priority = encoding.priority;
           if (encoding.networkPriority != null) {
             normalizedEncoding.networkPriority = encoding.networkPriority;
           }
@@ -912,7 +907,7 @@ class Transport extends EnhancedEventEmitter {
       } catch (error) {
         _handler.stopSending(sendResult.localId);
 
-        throw error;
+        rethrow;
       }
     } catch (error) {
       // This catch is needed to stop the given track if the command above
@@ -920,9 +915,11 @@ class Transport extends EnhancedEventEmitter {
       if (arguments.stopTracks) {
         try {
           arguments.track.stop();
-        } catch (error2) {}
+        } catch (error2) {
+          // ignore
+        }
       }
-      throw error;
+      rethrow;
     }
   }
 
@@ -1086,7 +1083,7 @@ class Transport extends EnhancedEventEmitter {
     bool ordered = true,
     int maxPacketLife = 0,
     required int maxRetransmits,
-    Priority priority = Priority.Low,
+    Priority priority = Priority.low,
     String label = '',
     String protocol = '',
     Map<String, dynamic> appData = const <String, dynamic>{},

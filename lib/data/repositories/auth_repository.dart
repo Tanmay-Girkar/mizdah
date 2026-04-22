@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import '../models/models.dart';
 import '../../core/network/api_client.dart';
@@ -72,7 +73,7 @@ class AuthRepository {
         return User.fromJson(data['user']);
       }
     } catch (e) {
-      print('Error fetching current user: $e');
+      debugPrint('Error fetching current user: $e');
     }
     return null;
   }

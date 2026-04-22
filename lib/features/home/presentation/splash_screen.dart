@@ -94,11 +94,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen> with SingleTickerPr
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.02),
+                          color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.02),
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: MizdahTheme.primaryBlue.withOpacity(isDark ? 0.2 : 0.1),
+                              color: MizdahTheme.primaryBlue.withValues(alpha: isDark ? 0.2 : 0.1),
                               blurRadius: 40,
                               spreadRadius: 10,
                             ),

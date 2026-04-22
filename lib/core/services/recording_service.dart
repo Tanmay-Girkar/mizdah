@@ -1,5 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import '../../data/repositories/recording_repository.dart';
 
 enum RecordingStatus { idle, requestingConsent, recording, stopping, uploading }
@@ -33,7 +34,7 @@ class RecordingState {
 }
 
 class RecordingNotifier extends StateNotifier<RecordingState> {
-  final IO.Socket socket;
+  final socket_io.Socket socket;
   final String meetingId;
   final RecordingRepository _recordingRepository = RecordingRepository();
 
@@ -48,7 +49,7 @@ class RecordingNotifier extends StateNotifier<RecordingState> {
         state = state.copyWith(status: RecordingStatus.requestingConsent);
         socket.emit('request-recording', {});
       } catch (e) {
-        print("Error starting recording: $e");
+        debugPrint("Error starting recording: $e");
       }
     }
   }
@@ -92,7 +93,7 @@ class RecordingNotifier extends StateNotifier<RecordingState> {
         state = state.copyWith(status: RecordingStatus.stopping);
         socket.emit('stop-recording', {});
       } catch (e) {
-        print("Error stopping recording: $e");
+        debugPrint("Error stopping recording: $e");
       }
     }
   }

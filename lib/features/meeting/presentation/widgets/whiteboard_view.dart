@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import 'package:mizdah/core/config/api_config.dart';
 import '../../../../core/services/whiteboard_service.dart';
 import '../../../../core/theme/theme_provider.dart';
 
 // Safe provider initialization
 final whiteboardProvider = StateNotifierProvider<WhiteboardNotifier, WhiteboardState>((ref) {
-  final dummySocket = IO.io(ApiConfig.signalingUrl, IO.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
+  final dummySocket = socket_io.io(ApiConfig.signalingUrl, socket_io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
   return WhiteboardNotifier(socket: dummySocket);
 });
 
@@ -20,7 +20,7 @@ class WhiteboardView extends ConsumerStatefulWidget {
 
 class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
   Color _currentColor = Colors.red;
-  double _currentStrokeWidth = 3.0;
+  final double _currentStrokeWidth = 3.0;
   DrawAction? _currentAction;
 
   void _onPanStart(DragStartDetails details, BoxConstraints constraints) {
@@ -30,7 +30,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
     final action = DrawAction(
       x: x,
       y: y,
-      color: '#${_currentColor.value.toRadixString(16).padLeft(8, '0').substring(2)}',
+      color: '#${_currentColor.r.toInt().toRadixString(16).padLeft(2, '0')}${_currentColor.g.toInt().toRadixString(16).padLeft(2, '0')}${_currentColor.b.toInt().toRadixString(16).padLeft(2, '0')}',
       strokeWidth: _currentStrokeWidth,
       type: 'start',
     );
@@ -45,7 +45,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
     final action = DrawAction(
       x: x,
       y: y,
-      color: '#${_currentColor.value.toRadixString(16).padLeft(8, '0').substring(2)}',
+      color: '#${(_currentColor.r * 255).toInt().toRadixString(16).padLeft(2, '0')}${(_currentColor.g * 255).toInt().toRadixString(16).padLeft(2, '0')}${(_currentColor.b * 255).toInt().toRadixString(16).padLeft(2, '0')}',
       strokeWidth: _currentStrokeWidth,
       type: 'move',
     );

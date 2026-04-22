@@ -1,9 +1,9 @@
 import 'package:flutter/widgets.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class NetworkResilienceService extends WidgetsBindingObserver {
-  final IO.Socket socket;
+  final socket_io.Socket socket;
   final String meetingId;
   final String userId;
   final Function(bool) onBackgroundStateChanged;
@@ -23,7 +23,7 @@ class NetworkResilienceService extends WidgetsBindingObserver {
 
   void _initNetworkListeners() {
     socket.onDisconnect((_) {
-      print('Socket disconnected. Waiting for auto-reconnect...');
+      debugPrint('Socket disconnected. Waiting for auto-reconnect...');
     });
 
     socket.onConnect((_) {

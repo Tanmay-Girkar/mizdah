@@ -96,7 +96,7 @@ class Producer extends EnhancedEventEmitter {
   /// Associated RTCRtpSender.
   RTCRtpSender? rtpSender;
   /// Local track.
-  final MediaStreamTrack track;
+  MediaStreamTrack track;
   /// Producer kind.
   late String kind;
   /// RTP parameters.
@@ -104,7 +104,7 @@ class Producer extends EnhancedEventEmitter {
   /// Paused flag.
   late bool paused;
   /// Video max spatial layer.
-  late final int? maxSpatialLayer;
+  int? maxSpatialLayer;
   /// Whether the Producer should call stop() in given tracks.
   final bool stopTracks;
   /// Whether the Producer should set track.enabled = false when paused.
@@ -370,7 +370,7 @@ class Producer extends EnhancedEventEmitter {
     _destroyTrack();
 
     // Set the new track.
-    track = track;
+    this.track = track;
 
     // If this Producer was paused/resumed and the state of the new
     // track does not match, fix it.
@@ -403,9 +403,9 @@ class Producer extends EnhancedEventEmitter {
 
   /// Sets the DSCP value.
   Future<void> setRtpEncodingParameters(RtpEncodingParameters params) async {
-    if (closed)
+    if (closed) {
       throw 'closed';
-    else if (params == null) throw 'invalid params';
+    }
 
     await safeEmitAsFuture('@setrtpencodingparameters', {
       'params': params,

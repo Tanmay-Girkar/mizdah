@@ -4,9 +4,9 @@ import 'package:mediasoup_client_flutter/src/rtp_parameters.dart';
 import 'package:mediasoup_client_flutter/src/sctp_parameters.dart';
 import 'package:h264_profile_level_id/h264_profile_level_id.dart';
 
-String RTP_PROBATOR_MID = 'probator';
-int RTP_PROBATOR_SSRC = 1234;
-int RTP_PROBATOR_CODEC_PAYLOAD_TYPE = 127;
+const String rtpProbatorMid = 'probator';
+const int rtpProbatorSsrc = 1234;
+const int rtpProbatorCodecPayloadType = 127;
 
 class Ortc {
   /// Validates RtcpFeedback. It may modify given data by adding missing
@@ -23,7 +23,7 @@ class Ortc {
     }
 
     // parameter is optional. If unset set it to an empty string.
-    if (fb.parameter == null || fb.parameter.isEmpty == true) {
+    if (fb.parameter.isEmpty) {
       fb.parameter = '';
     }
   }
@@ -46,7 +46,7 @@ class Ortc {
     Iterable<RegExpMatch> mimeTypeMatch =
         mimeTypeRegex.allMatches(codec.mimeType);
 
-    if (mimeTypeMatch == null || mimeTypeMatch.isEmpty) {
+    if (mimeTypeMatch.isEmpty) {
       throw ('invalid codec.mimeType');
     }
 
@@ -229,9 +229,6 @@ class Ortc {
   /// fields with default values.
   /// It throws if invalid.
   static void validateRtpEncodingParameters(RtpEncodingParameters encoding) {
-    if (encoding == null) {
-      throw ('encoding is not an object');
-    }
 
     // ssrc is optional.
     if (encoding.rtx != null) {
@@ -255,9 +252,6 @@ class Ortc {
     }
 
     // reducedSize is optional. If unset set it to true.
-    if (rtcp.reducedSize == null) {
-      rtcp.reducedSize = true;
-    }
   }
 
   /// Validates RtpCodecParameters. It may modify given data by adding missing
@@ -275,10 +269,10 @@ class Ortc {
     //   throw ('missing codec.mimeType');
     // }
 
-    final Iterable<RegExpMatch>? mimeTypeMatch =
+    final Iterable<RegExpMatch> mimeTypeMatch =
         mimeTypeRegex.allMatches(codec.mimeType);
 
-    if (mimeTypeMatch == null) {
+    if (mimeTypeMatch.isEmpty) {
       throw ('invalid codec.mimeType');
     }
 
@@ -343,11 +337,6 @@ class Ortc {
   /// fields with default values.
   /// It throws if invalid.
   static void validateRtpParameters(RtpParameters params) {
-    // // codecs is mandatory.
-    // if (params.codecs == null) {
-    //   throw ('missing params.codecs');
-    // }
-
     for (RtpCodecParameters codec in params.codecs) {
       validateRtpCodecParameters(codec);
     }
@@ -725,15 +714,15 @@ class Ortc {
     validateRtpParameters(videoRtpParameters);
 
     RtpParameters rtpParameters = RtpParameters(
-      mid: RTP_PROBATOR_MID,
+      mid: rtpProbatorMid,
       codecs: [],
       headerExtensions: [],
-      encodings: [RtpEncodingParameters(ssrc: RTP_PROBATOR_SSRC)],
+      encodings: [RtpEncodingParameters(ssrc: rtpProbatorSsrc)],
       rtcp: RtcpParameters(cname: 'probator'),
     );
 
     rtpParameters.codecs.add(videoRtpParameters.codecs.first);
-    rtpParameters.codecs.first.payloadType = RTP_PROBATOR_CODEC_PAYLOAD_TYPE;
+    rtpParameters.codecs.first.payloadType = rtpProbatorCodecPayloadType;
     rtpParameters.headerExtensions = videoRtpParameters.headerExtensions;
 
     return rtpParameters;
@@ -830,7 +819,7 @@ class Ortc {
     for (ExtendedRtpHeaderExtension extendedExtension
         in extendedRtpCapabilities.headerExtensions) {
       // Ignore RTP extensions of a different kind and those not valid for sending.
-      if ((extendedExtension.kind != null && extendedExtension.kind != kind) ||
+      if (extendedExtension.kind != kind ||
           (extendedExtension.direction != RtpHeaderDirection.SendRecv &&
               extendedExtension.direction != RtpHeaderDirection.SendOnly)) {
         continue;
@@ -990,7 +979,7 @@ class Ortc {
     for (ExtendedRtpHeaderExtension extendedExtension
         in extendedRtpCapabilities.headerExtensions) {
       // Ignore RTP extensions of a different kind and those not valid for sending.
-      if ((extendedExtension.kind != null && extendedExtension.kind != kind) ||
+      if (extendedExtension.kind != kind ||
           (extendedExtension.direction != RtpHeaderDirection.SendRecv &&
               extendedExtension.direction != RtpHeaderDirection.SendOnly)) {
         continue;

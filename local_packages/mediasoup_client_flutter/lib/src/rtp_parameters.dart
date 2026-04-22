@@ -1,5 +1,4 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:mediasoup_client_flutter/src/common/index.dart';
 
 /// The RTP capabilities define what mediasoup or an endpoint can receive at
 /// media level.
@@ -37,14 +36,9 @@ class RtpCapabilities {
     List<String>? fecMechanisms,
   }) {
     return RtpCapabilities(
-      codecs:
-          codecs != null ? codecs : List<RtpCodecCapability>.from(old.codecs),
-      headerExtensions: headerExtensions != null
-          ? headerExtensions
-          : List<RtpHeaderExtension>.from(old.headerExtensions),
-      fecMechanisms: fecMechanisms != null
-          ? fecMechanisms
-          : List<String>.from(old.fecMechanisms),
+      codecs: codecs ?? List<RtpCodecCapability>.from(old.codecs),
+      headerExtensions: headerExtensions ?? List<RtpHeaderExtension>.from(old.headerExtensions),
+      fecMechanisms: fecMechanisms ?? List<String>.from(old.fecMechanisms),
     );
   }
 
@@ -122,8 +116,8 @@ class RtcpFeedback {
 
   Map<String, String> toMap() {
     return {
-      'type': this.type,
-      'parameter': this.parameter,
+      'type': type,
+      'parameter': parameter,
     };
   }
 }
@@ -233,9 +227,10 @@ class RtpCodecCapability {
         clockRate = data['clockRate'],
         channels = data['channels'],
         parameters = data['parameters'],
-        rtcpFeedback = data['rtcpFeedback']
-            .map<RtcpFeedback>((rtcpFb) => RtcpFeedback.fromMap(rtcpFb))
-            .toList();
+        rtcpFeedback = (data['rtcpFeedback'] as List<dynamic>?)
+                ?.map<RtcpFeedback>((rtcpFb) => RtcpFeedback.fromMap(rtcpFb))
+                .toList() ??
+            [];
 
   Map<String, dynamic> toMap() {
     return {
@@ -481,7 +476,7 @@ class RtpEncodingParameters extends RTCRtpEncoding {
       if (dtx != null) 'dtx': dtx,
       if (scalabilityMode != null) 'scalabilityMode': scalabilityMode,
       if (adaptivePtime != null) 'adaptivePtime': adaptivePtime,
-      if (priority != null) 'priority': priority,
+      'priority': priority,
       if (networkPriority != null) 'networkPriority': networkPriority,
     };
   }
@@ -494,7 +489,7 @@ class RtpEncodingParameters extends RTCRtpEncoding {
       dtx: next.dtx ?? prev.dtx,
       scalabilityMode: next.scalabilityMode ?? prev.scalabilityMode,
       adaptivePtime: next.adaptivePtime ?? prev.adaptivePtime,
-      priority: next.priority ?? prev.priority,
+      priority: next.priority,
       networkPriority: next.networkPriority ?? prev.networkPriority,
       active: next.active,
       maxBitrate: next.maxBitrate ?? prev.maxBitrate,
@@ -745,20 +740,11 @@ class RtpParameters {
     RtcpParameters? rtcp,
   }) {
     return RtpParameters(
-      codecs:
-          codecs != null ? codecs : List<RtpCodecParameters>.from(old.codecs),
-      encodings: encodings != null
-          ? encodings
-          : List<RtpEncodingParameters>.from(old.encodings),
-      headerExtensions: headerExtensions != null
-          ? headerExtensions
-          : List<RtpHeaderExtensionParameters>.from(old.headerExtensions),
+      codecs: codecs ?? List<RtpCodecParameters>.from(old.codecs),
+      encodings: encodings ?? List<RtpEncodingParameters>.from(old.encodings),
+      headerExtensions: headerExtensions ?? List<RtpHeaderExtensionParameters>.from(old.headerExtensions),
       mid: mid ?? old.mid,
-      rtcp: rtcp != null
-          ? rtcp
-          : old.rtcp != null
-              ? RtcpParameters.copy(old.rtcp!)
-              : null,
+      rtcp: rtcp ?? (old.rtcp != null ? RtcpParameters.copy(old.rtcp!) : null),
     );
   }
 

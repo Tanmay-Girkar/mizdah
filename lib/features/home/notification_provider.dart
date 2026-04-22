@@ -11,8 +11,5 @@ final notificationsProvider = FutureProvider.autoDispose<List<NotificationModel>
   final repo = ref.watch(notificationRepositoryProvider);
   final rawData = await repo.getUserNotifications(user.id);
   
-  if (rawData is List) {
-    return rawData.map((e) => NotificationModel.fromJson(e)).toList();
-  }
-  return [];
+  return rawData.map((e) => NotificationModel.fromJson(e)).toList();
 });

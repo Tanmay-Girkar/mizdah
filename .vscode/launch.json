@@ -1,0 +1,45 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Mizdah",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "Mizdah (profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "Mizdah (release mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "mediasoup_client_flutter",
+            "cwd": "local_packages\\mediasoup_client_flutter",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "mediasoup_client_flutter (profile mode)",
+            "cwd": "local_packages\\mediasoup_client_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "mediasoup_client_flutter (release mode)",
+            "cwd": "local_packages\\mediasoup_client_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}

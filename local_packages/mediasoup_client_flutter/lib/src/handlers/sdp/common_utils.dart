@@ -118,14 +118,16 @@ class CommonUtils {
   }
 
   static DtlsParameters extractDtlsParameters(SdpObject sdpObject) {
-    MediaObject? mediaObject = sdpObject.media.firstWhere(
-      (m) =>
-          m.iceUfrag != null &&
+    MediaObject? mediaObject;
+    for (final m in sdpObject.media) {
+      if (m.iceUfrag != null &&
           m.iceUfrag!.isNotEmpty &&
           m.port != null &&
-          m.port != 0,
-      orElse: () => null as MediaObject,
-    );
+          m.port != 0) {
+        mediaObject = m;
+        break;
+      }
+    }
 
     if (mediaObject == null) {
       throw ('no active media section found');
@@ -184,10 +186,13 @@ class CommonUtils {
         continue;
       }
 
-      Rtp? rtp = (answerMediaObject?.rtp ?? []).firstWhere(
-        (Rtp r) => r.payload == codec.payloadType,
-        orElse: () => null as Rtp,
-      );
+      Rtp? rtp;
+      for (final r in (answerMediaObject?.rtp ?? [])) {
+        if (r.payload == codec.payloadType) {
+          rtp = r;
+          break;
+        }
+      }
 
       if (rtp == null) {
         continue;
@@ -196,10 +201,13 @@ class CommonUtils {
       // Just in case.. ?
       answerMediaObject!.fmtp = answerMediaObject.fmtp ?? [];
 
-      Fmtp? fmtp = (answerMediaObject.fmtp ?? []).firstWhere(
-        (Fmtp f) => f.payload == codec.payloadType,
-        orElse: () => null as Fmtp,
-      );
+      Fmtp? fmtp;
+      for (final f in (answerMediaObject.fmtp ?? [])) {
+        if (f.payload == codec.payloadType) {
+          fmtp = f;
+          break;
+        }
+      }
 
       if (fmtp == null) {
         fmtp = Fmtp(

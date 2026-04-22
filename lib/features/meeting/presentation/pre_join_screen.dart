@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
@@ -25,12 +26,26 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   bool _isJoining = false;
   Meeting? _meeting;
   bool _isLoadingMeeting = true;
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  MediaStream? _localStream;
+
+  @override
+  void dispose() {
+    _localRenderer.dispose();
+    _localStream?.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
     _fetchMeetingInfo();
-    _checkPermissions(); 
+    _checkPermissions();
+    _initRenderer();
+  }
+
+  Future<void> _initRenderer() async {
+    await _localRenderer.initialize();
   }
 
   Future<void> _fetchMeetingInfo() async {
@@ -58,6 +73,30 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                          status[Permission.microphone]!.isGranted;
         _isPermissionLoading = false;
       });
+      if (_hasPermissions) {
+        _setupMedia();
+      }
+    }
+  }
+
+  Future<void> _setupMedia() async {
+    try {
+      final stream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'facingMode': 'user',
+          'width': 1280,
+          'height': 720,
+        },
+      });
+      _localStream = stream;
+      if (mounted) {
+        setState(() {
+          _localRenderer.srcObject = _localStream;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error setting up media: $e");
     }
   }
 
@@ -120,6 +159,7 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                     children: [
                       // Camera Preview Placeholder
                       _CameraPreview(
+                        renderer: _localRenderer,
                         isCameraOn: _isCameraOn,
                         hasPermissions: _hasPermissions,
                         isLoading: _isPermissionLoading,
@@ -140,7 +180,12 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                           ControlIconButton(
                             icon: _isCameraOn ? Icons.videocam_rounded : Icons.videocam_off_rounded,
                             isActive: !_isCameraOn,
-                            onTap: () => setState(() => _isCameraOn = !_isCameraOn),
+                            onTap: () {
+                              setState(() => _isCameraOn = !_isCameraOn);
+                              _localStream?.getVideoTracks().forEach((track) {
+                                track.enabled = _isCameraOn;
+                              });
+                            },
                           ),
                         ],
                       ),
@@ -153,7 +198,7 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                         child: Column(
                           children: [
                             Text(
-                              _meeting?.title ?? 'Meeting ID: ${widget.meetingId}',
+                              _meeting?.title ?? 'Meeting ID: ${widget.meetingId.replaceAll('-', '')}',
                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                               textAlign: TextAlign.center,
                             ),
@@ -213,11 +258,13 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
 }
 
 class _CameraPreview extends StatelessWidget {
+  final RTCVideoRenderer renderer;
   final bool isCameraOn;
   final bool hasPermissions;
   final bool isLoading;
 
   const _CameraPreview({
+    required this.renderer,
     required this.isCameraOn,
     required this.hasPermissions,
     required this.isLoading,
@@ -231,10 +278,10 @@ class _CameraPreview extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.black,
           borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.white.withOpacity(0.1)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.3),
+              color: Colors.black.withValues(alpha: 0.3),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
@@ -265,9 +312,10 @@ class _CameraPreview extends StatelessWidget {
                   ),
                 )
               else
-                Image.network(
-                  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&h=600&fit=crop',
-                  fit: BoxFit.cover,
+                RTCVideoView(
+                  renderer,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  mirror: true,
                 ),
               
               // Bottom Indicator

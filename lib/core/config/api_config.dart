@@ -1,4 +1,5 @@
 class ApiConfig {
+  /*
   // Replace with your local machine's IP address (run `ipconfig` on Windows)
   static const String pcIp = '192.168.1.24'; 
 
@@ -6,10 +7,11 @@ class ApiConfig {
   static const String gatewayPort = '3000';
   static const String signalingPort = '3001';
   static const String chatSocketPort = '4005';
+  */
 
-  static const String baseUrl = 'http://$pcIp:$gatewayPort';
-  static const String signalingUrl = 'http://$pcIp:$signalingPort';
-  static const String chatSocketUrl = 'http://$pcIp:$chatSocketPort';
+  static const String baseUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String signalingUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String chatSocketUrl = 'https://mizdah-backend.ogoul.cloud';
 
   // API Endpoints
   static const String authSignup = '$baseUrl/api/auth/signup';

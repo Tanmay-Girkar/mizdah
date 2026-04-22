@@ -1,5 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../data/repositories/chat_repository.dart';
 import '../../core/config/api_config.dart';
@@ -106,10 +107,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final ParticipantRepository _participantRepository = ParticipantRepository();
   final ChatRepository _chatRepository = ChatRepository();
   final MeetingRepository _meetingRepository = MeetingRepository();
-  IO.Socket? _socket;
-  IO.Socket? get socket => _socket;
-  IO.Socket? _chatSocket;
-  IO.Socket? get chatSocket => _chatSocket;
+  io.Socket? _socket;
+  io.Socket? get socket => _socket;
+  io.Socket? _chatSocket;
+  io.Socket? get chatSocket => _chatSocket;
   
   MediaStream? _localStream;
   final Map<String, RTCPeerConnection> _peerConnections = {};
@@ -127,10 +128,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     ],
   ));
 
-  Future<void> _initRenderers() async {
-    await state.localRenderer.initialize();
-  }
-
   void joinMeeting(String meetingId, String userId, String name, String jwtToken, {bool video = true, bool audio = true}) async {
     // Explicitly initialize renderer before setting srcObject
     await state.localRenderer.initialize();
@@ -138,25 +135,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     // Trim for safety
     final sanitizedMeetingId = meetingId.trim();
     
-    _socket = IO.io(ApiConfig.signalingUrl, 
-      IO.OptionBuilder()
+    _socket = io.io(ApiConfig.signalingUrl, 
+      io.OptionBuilder()
         .setTransports(['websocket'])
         .enableAutoConnect()
         .build()
     );
 
-    _chatSocket = IO.io(ApiConfig.chatSocketUrl, 
-      IO.OptionBuilder()
+    _chatSocket = io.io(ApiConfig.chatSocketUrl, 
+      io.OptionBuilder()
         .setTransports(['websocket'])
         .enableAutoConnect()
         .setAuth({'token': jwtToken})
         .build()
     );
 
-    print("Socket IO attempting connection to: ${ApiConfig.signalingUrl}");
+    debugPrint("Socket IO attempting connection to: ${ApiConfig.signalingUrl}");
 
     _socket?.onConnect((_) async {
-      print("Signaling Socket CONNECTED SUCCESSFULLY for room: $sanitizedMeetingId");
+      debugPrint("Signaling Socket CONNECTED SUCCESSFULLY for room: $sanitizedMeetingId");
       final meetingInfo = await _meetingRepository.getMeetingInfo(sanitizedMeetingId);
       if (!mounted) return;
       state = state.copyWith(
@@ -175,20 +172,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       // New: Load Participants
       _loadParticipants(sanitizedMeetingId);
 
-      final joinData = {
-        'meetingId': sanitizedMeetingId,
-        'userId': userId,
-        'name': name,
-        'token': jwtToken,
-      };
+      final isHost = meetingInfo?.hostId != null && meetingInfo?.hostId == userId;
+      final clientId = _socket?.id ?? 'flutter_client_${DateTime.now().millisecondsSinceEpoch}';
+
+      // Follow guide: socket.emit("join-meeting", [meetingCode, userId, userName, isHost, clientId]);
+      final joinData = [
+        sanitizedMeetingId,
+        userId,
+        name,
+        isHost,
+        clientId,
+      ];
 
       // Always emit to signaling
-      print("Emitting join-meeting with ID: $sanitizedMeetingId");
+      debugPrint("Emitting join-meeting with ID: $sanitizedMeetingId");
       _socket?.emit('join-meeting', joinData);
       
       // For chat, ensure we are in the correct room
       void joinChatRoom() {
-        print("Emitting join-chat for meeting $sanitizedMeetingId");
+        debugPrint("Emitting join-chat for meeting $sanitizedMeetingId");
         _chatSocket?.emit('join-chat', {
           'meetingId': sanitizedMeetingId,
           'userId': userId,
@@ -201,7 +203,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       } else {
         // Listen once for the next connection event
         _chatSocket?.on('connect', (_) {
-          print("Chat Socket CONNECTED via listener");
+          debugPrint("Chat Socket CONNECTED via listener");
           joinChatRoom();
         });
       }
@@ -222,19 +224,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _networkResilienceService!.localStream = _localStream;
     });
 
-    _socket?.onConnect((_) => print('Signaling Socket (4012) CONNECTED SUCCESSFULLY'));
-    _socket?.onConnectError((err) => print('Signaling Socket (4012) CONNECT ERROR: $err'));
-    _socket?.on('connect_timeout', (err) => print('Signaling Socket (4012) CONNECT TIMEOUT: $err'));
-    _socket?.onError((err) => print('Signaling Socket (4012) ERROR: $err'));
-    _socket?.onDisconnect((reason) => print('Signaling Socket (4012) DISCONNECTED: $reason'));
-    _socket?.onAny((event, data) => print('Signaling Socket (4012) EVENT: $event | DATA: $data'));
+    _socket?.onConnect((_) => debugPrint('Signaling Socket (4012) CONNECTED SUCCESSFULLY'));
+    _socket?.onConnectError((err) => debugPrint('Signaling Socket (4012) CONNECT ERROR: $err'));
+    _socket?.on('connect_timeout', (err) => debugPrint('Signaling Socket (4012) CONNECT TIMEOUT: $err'));
+    _socket?.onError((err) => debugPrint('Signaling Socket (4012) ERROR: $err'));
+    _socket?.onDisconnect((reason) => debugPrint('Signaling Socket (4012) DISCONNECTED: $reason'));
+    _socket?.onAny((event, data) => debugPrint('Signaling Socket (4012) EVENT: $event | DATA: $data'));
     
     _initSocketListeners();
     // Use try-catch here as well to ensure media failure doesn't stop the joining process
     try {
       await _setupMedia(video: video, audio: audio);
     } catch (e) {
-      print("Media setup failed during join: $e");
+      debugPrint("Media setup failed during join: $e");
     }
   }
 
@@ -246,7 +248,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('join-confirmation', (data) {
-      print("Signaling Socket JOIN CONFIRMED: $data");
+      debugPrint("Signaling Socket JOIN CONFIRMED: $data");
       if (!mounted) return;
       
       final participants = data['participants'] as List<dynamic>? ?? [];
@@ -260,21 +262,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
 
       if (data['status'] == 'WAITING') {
-        print("You are in the waiting room.");
+        debugPrint("You are in the waiting room.");
       } else {
-        print("You joined the meeting successfully.");
+        debugPrint("You joined the meeting successfully.");
       }
     });
 
     _socket?.on('waiting-list-update', (data) {
-      print("Signaling Socket WAITING LIST UPDATE: $data");
+      debugPrint("Signaling Socket WAITING LIST UPDATE: $data");
       if (!mounted) return;
       final waitingList = data as List<dynamic>? ?? [];
       state = state.copyWith(waitingParticipants: waitingList);
     });
 
     _socket?.on('user-joined', (data) {
-      print("Signaling Socket USER JOINED: $data");
+      debugPrint("Signaling Socket USER JOINED: $data");
       if (!mounted) return;
       final newParticipant = data;
       // Avoid duplicates
@@ -285,7 +287,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('user-left', (data) {
-      print("Signaling Socket USER LEFT: $data");
+      debugPrint("Signaling Socket USER LEFT: $data");
       if (!mounted) return;
       final socketId = data['socketId'];
       final updatedList = state.participants.where((p) => p['socketId'] != socketId).toList();
@@ -294,9 +296,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     // Move chat listener to _chatSocket (Port 4005)
     // Support both hyphen and colon formats for robustness
-    void _handleNewMessage(data) {
+    void handleNewMessage(data) {
       if (data != null) {
-        print("Received real-time message: $data");
+        debugPrint("Received real-time message: $data");
         final Map<String, dynamic> msg = Map<String, dynamic>.from(data);
         final formattedMsg = {
           'text': msg['content'] ?? msg['text'] ?? '',
@@ -320,18 +322,18 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     _chatSocket?.onAny((event, data) {
-      print("CHAT SOCKET Port 4005 EVENT: $event");
-      print("CHAT SOCKET Port 4005 DATA: $data");
+      debugPrint("CHAT SOCKET Port 4005 EVENT: $event");
+      debugPrint("CHAT SOCKET Port 4005 DATA: $data");
     });
 
-    _chatSocket?.on('chat-receive', _handleNewMessage);
-    _chatSocket?.on('chat:receive', _handleNewMessage);
+    _chatSocket?.on('chat-receive', handleNewMessage);
+    _chatSocket?.on('chat:receive', handleNewMessage);
     
     _chatSocket?.onConnect((_) {
-      print('Chat Socket (4005) CONNECTED SUCCESSFULLY');
+      debugPrint('Chat Socket (4005) CONNECTED SUCCESSFULLY');
     });
-    _chatSocket?.onConnectError((err) => print('Chat Socket (4005) Connect Error: $err'));
-    _chatSocket?.onDisconnect((reason) => print('Chat Socket (4005) Disconnected: $reason'));
+    _chatSocket?.onConnectError((err) => debugPrint('Chat Socket (4005) Connect Error: $err'));
+    _chatSocket?.onDisconnect((reason) => debugPrint('Chat Socket (4005) Disconnected: $reason'));
 
     _socket?.on('router-rtp-capabilities', (data) async {
       if (_sfuService != null) {
@@ -387,11 +389,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('meeting-locked', (data) {
-       print("Meeting Locked State: ${data['locked']}");
+       debugPrint("Meeting Locked State: ${data['locked']}");
     });
 
     _socket?.on('setting-updated', (data) {
-       print("Setting updated: ${data['key']} = ${data['value']}");
+       debugPrint("Setting updated: ${data['key']} = ${data['value']}");
        if (!mounted) return;
        final key = data['key'];
        final value = data['value'] as bool;
@@ -438,7 +440,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         try {
           await _sfuService!.produce(track, _localStream!);
         } catch(e) {
-          print("Error producing track: $e");
+          debugPrint("Error producing track: $e");
         }
       }
     }
@@ -466,7 +468,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   Future<void> _setupMedia({bool video = true, bool audio = true}) async {
     if (!video && !audio) {
-      print("Skipping getUserMedia: both audio and video are disabled.");
+      debugPrint("Skipping getUserMedia: both audio and video are disabled.");
       return;
     }
     try {
@@ -475,7 +477,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         'video': video,
       };
       
-      print("Requesting getUserMedia with constraints: $constraints");
+      debugPrint("Requesting getUserMedia with constraints: $constraints");
       final stream = await navigator.mediaDevices.getUserMedia(constraints);
       _localStream = stream;
       
@@ -487,7 +489,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       }
       state.localRenderer.srcObject = stream;
     } catch (e) {
-      print("Unable to getUserMedia: $e");
+      debugPrint("Unable to getUserMedia: $e");
       // Don't crash, just proceed without local stream
       if (mounted) {
         state = state.copyWith(isCameraOn: false, isMicOn: false);
@@ -563,7 +565,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         content: message,
         attachmentUrl: attachmentUrl,
       ).catchError((e) {
-        print("Error sending persistent chat: $e");
+        debugPrint("Error sending persistent chat: $e");
+        return <String, dynamic>{};
       });
     }
 
@@ -597,12 +600,12 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         state = state.copyWith(participants: participants);
       }
     } catch (e) {
-      print("Error loading participants: $e");
+      debugPrint("Error loading participants: $e");
     }
   }
 
   void admitParticipant(String socketId) {
-    print("Admitting participant: $socketId");
+    debugPrint("Admitting participant: $socketId");
     _socket?.emit('admit-user', {'socketId': socketId});
   }
 

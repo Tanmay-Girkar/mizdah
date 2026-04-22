@@ -1,10 +1,7 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:file_picker/file_picker.dart';
-import '../../../data/repositories/file_repository.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../meeting_provider.dart';
 import '../../auth/auth_provider.dart';
@@ -36,10 +33,6 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
 }
 
 class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
-  bool _isChatOpen = false;
-  bool _isParticipantsOpen = false;
-  bool _isHostControlsOpen = false;
-  bool _isBreakoutOpen = false;
   bool _isRaisingHand = false;
   bool _isRecording = false;
 
@@ -72,7 +65,6 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   Widget build(BuildContext context) {
     final meetingState = ref.watch(meetingProvider(widget.meetingId));
     final meetingNotifier = ref.watch(meetingProvider(widget.meetingId).notifier);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: const Color(0xFF020617),
@@ -392,7 +384,7 @@ class _MockParticipantTile extends StatelessWidget {
         border: Border.all(color: Colors.white10),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.3),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -420,7 +412,7 @@ class _MockParticipantTile extends StatelessWidget {
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      Colors.black.withOpacity(0.7),
+                      Colors.black.withValues(alpha: 0.7),
                     ],
                   ),
                 ),
@@ -482,9 +474,9 @@ class _SolitaryHeroView extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
             ),
             child: Row(
               children: [
@@ -517,8 +509,10 @@ class _SolitaryHeroView extends StatelessWidget {
             icon: Icons.share_outlined,
             isFullWidth: false,
             onTap: () {
-              Share.share(
-                'Join my Mizdah meeting using this link: https://meet.google.com/$meetingId',
+              SharePlus.instance.share(
+                ShareParams(
+                  text: 'Join my Mizdah meeting using this link: https://meet.google.com/$meetingId',
+                ),
               );
             },
           ),
@@ -661,7 +655,7 @@ class _MeetingTopBar extends StatelessWidget {
                     letterSpacing: 0.5,
                   ),
                 ),
-                Icon(Icons.keyboard_arrow_down, color: iconColor.withOpacity(0.5), size: 18),
+                Icon(Icons.keyboard_arrow_down, color: iconColor.withValues(alpha: 0.5), size: 18),
               ],
             ),
           ),
@@ -670,9 +664,9 @@ class _MeetingTopBar extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.2),
+                color: Colors.red.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.withOpacity(0.2)),
+                border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
               ),
               child: Row(
                 children: [
@@ -1082,7 +1076,7 @@ class _SlidingPanel extends StatelessWidget {
       child: GestureDetector(
         onTap: onClose,
         child: Container(
-          color: Colors.black.withOpacity(0.4),
+          color: Colors.black.withValues(alpha: 0.4),
           alignment: Alignment.bottomCenter,
           child: GestureDetector(
             onTap: () {}, // Prevent tap propagation
@@ -1092,7 +1086,7 @@ class _SlidingPanel extends StatelessWidget {
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
+                    color: Colors.black.withValues(alpha: 0.15),
                     blurRadius: 30,
                     offset: const Offset(0, -5),
                   ),
@@ -1108,7 +1102,7 @@ class _SlidingPanel extends StatelessWidget {
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black.withOpacity(0.1),
+                        color: isDark ? Colors.white24 : Colors.black.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -1137,7 +1131,7 @@ class _SlidingPanel extends StatelessWidget {
                     ),
                     Divider(
                       height: 1,
-                      color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+                      color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
                     ),
                     Expanded(
                       child: Container(
@@ -1231,7 +1225,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                         if (!isMe) ...[
                           CircleAvatar(
                             radius: 14,
-                            backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+                            backgroundColor: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
                             child: Text(msg['sender'][0], style: const TextStyle(fontSize: 10, color: MizdahTheme.primaryBlue, fontWeight: FontWeight.bold)),
                           ),
                           const SizedBox(width: 8),
@@ -1245,7 +1239,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                                 decoration: BoxDecoration(
                                   color: isMe 
                                       ? MizdahTheme.primaryBlue 
-                                      : (isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFEFEFEF)),
+                                      : (isDark ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFEFEFEF)),
                                   borderRadius: BorderRadius.only(
                                     topLeft: const Radius.circular(16),
                                     topRight: const Radius.circular(16),
@@ -1254,7 +1248,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                                   ),
                                   boxShadow: isMe ? [
                                     BoxShadow(
-                                      color: MizdahTheme.primaryBlue.withOpacity(0.3),
+                                      color: MizdahTheme.primaryBlue.withValues(alpha: 0.3),
                                       blurRadius: 8,
                                       offset: const Offset(0, 4),
                                     )
@@ -1291,7 +1285,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                             decoration: BoxDecoration(
-                                              color: isMe ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.05),
+                                              color: isMe ? Colors.white.withValues(alpha: 0.2) : Colors.black.withValues(alpha: 0.05),
                                               borderRadius: BorderRadius.circular(8),
                                             ),
                                             child: Row(
@@ -1323,7 +1317,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                                 timeStr,
                                 style: TextStyle(
                                   fontSize: 10,
-                                  color: Colors.grey.withOpacity(0.6),
+                                  color: Colors.grey.withValues(alpha: 0.6),
                                 ),
                               ),
                             ],
@@ -1341,7 +1335,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isDark ? Colors.white.withOpacity(0.02) : Colors.white,
+            color: isDark ? Colors.white.withValues(alpha: 0.02) : Colors.white,
             border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
           ),
           child: Row(
@@ -1352,9 +1346,9 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                   style: TextStyle(color: isDark ? Colors.white : Colors.black87),
                   decoration: InputDecoration(
                     hintText: 'Send a message...',
-                    hintStyle: TextStyle(color: Colors.grey.withOpacity(0.6)),
+                    hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.6)),
                     filled: true,
-                    fillColor: isDark ? Colors.white.withOpacity(0.05) : const Color(0xFFF0F2f5),
+                    fillColor: isDark ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF0F2f5),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
@@ -1379,7 +1373,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: MizdahTheme.primaryBlue.withOpacity(0.3),
+                        color: MizdahTheme.primaryBlue.withValues(alpha: 0.3),
                         blurRadius: 10,
                         offset: const Offset(0, 4),
                       ),
@@ -1432,7 +1426,7 @@ class _ParticipantsView extends ConsumerWidget {
                 return ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 20),
                   leading: CircleAvatar(
-                    backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+                    backgroundColor: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
                     child: Text(name[0].toUpperCase(), style: const TextStyle(color: MizdahTheme.primaryBlue)),
                   ),
                   title: Text(name, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
@@ -1473,7 +1467,7 @@ class _ParticipantsView extends ConsumerWidget {
               if (index == 0) {
                  final user = ref.read(authProvider).user;
                  return _ParticipantTile(
-                   name: (user?.name ?? 'You') + ' (Me)',
+                   name: '${user?.name ?? 'You'} (Me)',
                    isHost: meetingState.hostId == meetingState.userId,
                    isMicOn: meetingState.isMicOn,
                    isCameraOn: meetingState.isCameraOn,
@@ -1519,7 +1513,7 @@ class _ParticipantTile extends StatelessWidget {
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
       leading: CircleAvatar(
         radius: 18,
-        backgroundColor: isHost ? MizdahTheme.primaryBlue.withOpacity(0.1) : (isDark ? Colors.white10 : Colors.black12),
+        backgroundColor: isHost ? MizdahTheme.primaryBlue.withValues(alpha: 0.1) : (isDark ? Colors.white10 : Colors.black12),
         child: Text(
           name[0].toUpperCase(),
           style: TextStyle(
@@ -1655,7 +1649,7 @@ class _HostControlsViewState extends ConsumerState<_HostControlsView> {
         const SizedBox(height: 12),
         MizdahButton(
           label: 'End Meeting for All',
-          backgroundColor: Colors.red.withOpacity(0.1),
+          backgroundColor: Colors.red.withValues(alpha: 0.1),
           onTap: () {
             ref.read(meetingProvider(widget.meetingId).notifier).endMeetingForAll();
             context.go('/');
@@ -1799,9 +1793,9 @@ class _RoomItem extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
+        color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

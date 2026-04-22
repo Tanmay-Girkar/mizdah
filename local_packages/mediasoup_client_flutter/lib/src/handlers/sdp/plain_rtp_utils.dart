@@ -9,10 +9,13 @@ class PlainRtpUtils {
     SdpObject sdpObject,
     RTCRtpMediaType kind,
   ) {
-    MediaObject? mediaObject = sdpObject.media.firstWhere(
-      (MediaObject m) => m.type == RTCRtpMediaTypeExtension.value(kind),
-      orElse: () => null as MediaObject,
-    );
+    MediaObject? mediaObject;
+    for (final m in sdpObject.media) {
+      if (m.type == RTCRtpMediaTypeExtension.value(kind)) {
+        mediaObject = m;
+        break;
+      }
+    }
 
     if (mediaObject == null) {
       throw ('m=${RTCRtpMediaTypeExtension.value(kind)} section not found');
@@ -34,16 +37,19 @@ class PlainRtpUtils {
     SdpObject sdpObject,
     RTCRtpMediaType kind,
   ) {
-    MediaObject? mediaObject = sdpObject.media.firstWhere(
-      (MediaObject m) => m.type == RTCRtpMediaTypeExtension.value(kind),
-      orElse: () => null as MediaObject,
-    );
+    MediaObject? mediaObject;
+    for (final m in sdpObject.media) {
+      if (m.type == RTCRtpMediaTypeExtension.value(kind)) {
+        mediaObject = m;
+        break;
+      }
+    }
 
     if (mediaObject == null) {
       throw ('m=${RTCRtpMediaTypeExtension.value(kind)} section not found');
     }
 
-    if (mediaObject.ssrcs != null || mediaObject.ssrcs!.isNotEmpty) {
+    if (mediaObject.ssrcs != null && mediaObject.ssrcs!.isNotEmpty) {
       Ssrc ssrc = mediaObject.ssrcs!.first;
       RtpEncodingParameters result = RtpEncodingParameters(ssrc: ssrc.id);
 

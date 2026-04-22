@@ -4,8 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/repositories/scheduling_repository.dart';
 import '../../auth/auth_provider.dart';
-import '../../meeting/presentation/pre_join_screen.dart'; // Example for next screen if needed
-import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/theme/theme_provider.dart';
 
 class ScheduleScreen extends ConsumerStatefulWidget {
@@ -192,7 +190,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
         _endTime.minute,
       );
 
-      final response = await repository.scheduleMeeting(
+      await repository.scheduleMeeting(
         hostId: user.id,
         title: title,
         startTime: scheduledDate,
@@ -257,7 +255,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
             trailing: _allDay ? null : Text(_startTime.format(context)),
             onTap: () async {
               await _selectDate(context, true);
-              if (!mounted) return;
+              if (!context.mounted) return;
               if (!_allDay) await _selectTime(context, true);
             },
           ),
@@ -266,7 +264,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
             trailing: _allDay ? null : Text(_endTime.format(context)),
             onTap: () async {
               await _selectDate(context, false);
-              if (!mounted) return;
+              if (!context.mounted) return;
               if (!_allDay) await _selectTime(context, false);
             },
           ),

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/theme_provider.dart';
-import '../../../core/widgets/glass_card.dart';
 import '../../../data/repositories/meeting_repository.dart';
 
 class MeetingSettingsScreen extends ConsumerStatefulWidget {
@@ -212,7 +211,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
         activeColor: Colors.white,
         activeTrackColor: accentColor,
         inactiveThumbColor: Colors.grey[400],
-        inactiveTrackColor: Colors.white10.withOpacity(0.1),
+        inactiveTrackColor: Colors.white10.withValues(alpha: 0.1),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
     );

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/theme/theme_provider.dart';
 
 class ReportScreen extends ConsumerStatefulWidget {
   const ReportScreen({super.key});
@@ -41,7 +40,7 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
     // Use project-specific accent or default primary
     final accentColor = isDark ? const Color(0xFFE38E6E) : theme.primaryColor;
     final backgroundColor = isDark ? const Color(0xFF1D1B16) : theme.scaffoldBackgroundColor;
-    final surfaceColor = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03);
+    final surfaceColor = isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03);
     final textColor = isDark ? Colors.white : Colors.black87;
     final labelColor = isDark ? Colors.white70 : Colors.black54;
 

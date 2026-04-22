@@ -315,12 +315,12 @@ class Simulcast {
   }
 }
 
-class Simulcast_03 {
+class Simulcast03 {
   final String value;
 
-  Simulcast_03({required this.value});
+  Simulcast03({required this.value});
 
-  Simulcast_03.fromMap(Map data) :
+  Simulcast03.fromMap(Map data) :
     value = data['value'];
 
   Map<String, String> toMap() {
@@ -355,7 +355,7 @@ class Crypto {
   final int id;
   final String suite;
   final String config;
-  var sessionConfig;
+  dynamic sessionConfig;
 
   Crypto({
     required this.id,
@@ -453,11 +453,11 @@ class SourceFilter {
   });
 
   SourceFilter.fromMap(Map data) :
-    this.filterMode = data['filterMode'],
-    this.netType = data['netType'],
-    this.addressTypes = data['addressTypes'],
-    this.destAddress = data['destAddress'],
-    this.srcList = data['srcList'];
+    filterMode = data['filterMode'],
+    netType = data['netType'],
+    addressTypes = data['addressTypes'],
+    destAddress = data['destAddress'],
+    srcList = data['srcList'];
 
   Map<String, String> toMap() {
     return {
@@ -496,7 +496,7 @@ class MediaObject {
   List<Ssrc>? ssrcs;
   List<SsrcGroup>? ssrcGroups;
   Simulcast? simulcast;
-  Simulcast_03? simulcast_03;
+  Simulcast03? simulcast03;
   List<Rid>? rids;
   bool? extmapAllowMixed;
   String? rtcpRsize;
@@ -543,7 +543,7 @@ class MediaObject {
     this.extmapAllowMixed = false,
     this.rids = const [],
     this.simulcast,
-    this.simulcast_03,
+    this.simulcast03,
     this.ssrcGroups = const [],
     this.rtcpRsize,
     this.sctpPort,
@@ -634,8 +634,8 @@ class MediaObject {
     if (data['simulcast'] != null) {
       simulcast = Simulcast.fromMap(data['simulcast']);
     }
-    if (data['simulcast_03'] != null) {
-      simulcast_03 = Simulcast_03.fromMap(data['simulcast_03']);
+    if (data['simulcast_03'] != null || data['simulcast03'] != null) {
+      simulcast03 = Simulcast03.fromMap(data['simulcast_03'] ?? data['simulcast03']);
     }
     if (data['rids'] != null) {
       rids = List<Rid>.from((data['rids'] ?? []).map((r) => Rid.fromMap(r)).toList());
@@ -770,8 +770,8 @@ class MediaObject {
     if (simulcast != null) {
       result['simulcast'] = simulcast!.toMap();
     }
-    if (simulcast_03 != null) {
-      result['simulcast_03'] = simulcast_03!.toMap();
+    if (simulcast03 != null) {
+      result['simulcast03'] = simulcast03!.toMap();
     }
     if (rids != null) {
       result['rids'] = rids!.map((Rid r) => r.toMap()).toList();
@@ -891,7 +891,7 @@ abstract class MediaSection {
 
   void setDtlsRole(DtlsRole role);
 
-  String? get mid => _mediaObject.mid != null ? _mediaObject.mid.toString() : null;
+  String? get mid => _mediaObject.mid?.toString();
 
   bool get closed => _mediaObject.port == 0;
 
@@ -902,7 +902,7 @@ abstract class MediaSection {
     _mediaObject.ssrcs = null;
     _mediaObject.ssrcGroups = null;
     _mediaObject.simulcast = null;
-    _mediaObject.simulcast_03 = null;
+    _mediaObject.simulcast03 = null;
     _mediaObject.rids = null;
   }
 
@@ -915,7 +915,7 @@ abstract class MediaSection {
     _mediaObject.ssrcs = null;
     _mediaObject.ssrcGroups = null;
     _mediaObject.simulcast = null;
-    _mediaObject.simulcast_03 = null;
+    _mediaObject.simulcast03 = null;
     _mediaObject.rids = null;
     _mediaObject.extmapAllowMixed = null;
   }
@@ -998,35 +998,27 @@ class AnswerMediaSection extends MediaSection {
               final int? videoGoogleMaxBitrate = codecOptions.videoGoogleMaxBitrate;
               final int? videoGoogleMinBitrate = codecOptions.videoGoogleMinBitrate;
 
-              final RtpCodecParameters? offerCodec = offerRtpParameters?.codecs
-                  .firstWhere(
-                      (RtpCodecParameters c) =>
-                          c.payloadType == codec.payloadType,
-                orElse: () => null as RtpCodecParameters,
-              );
+              RtpCodecParameters? offerCodec;
+              for (final c in (offerRtpParameters?.codecs ?? [])) {
+                if (c.payloadType == codec.payloadType) {
+                  offerCodec = c;
+                  break;
+                }
+              }
 
               switch (codec.mimeType.toLowerCase()) {
                 case 'audio/opus':
                   {
                     // if (opusStereo != null) {
                       // offerCodec.parameters['sprop-stereo'] = opusStereo ? 1 : 0;
-                      offerCodec!.parameters['sprop-stereo'] = opusStereo != null ? opusStereo : 0;
-                      // codecParameters['stereo'] = opusStereo ? 1 : 0;
-                      codecParameters['stereo'] = opusStereo != null ? opusStereo : 0;
-                    // }
+                    offerCodec!.parameters['sprop-stereo'] = opusStereo ?? 0;
+                    codecParameters['stereo'] = opusStereo ?? 0;
 
-                    // if (opusFec != null) {
-                      // offerCodec.parameters['useinbandfec'] = opusFec ? 1 : 0;
-                      offerCodec.parameters['useinbandfec'] = opusFec != null ? opusFec : 0;
-                      // codecParameters['useinbandfec'] = opusFec ? 1 : 0;
-                      codecParameters['useinbandfec'] = opusFec != null ? opusFec : 0;
-                    // }
+                    offerCodec.parameters['useinbandfec'] = opusFec ?? 0;
+                    codecParameters['useinbandfec'] = opusFec ?? 0;
 
-                    // if (opusDtx != null) {
-                      // offerCodec.parameters['usedtx'] = opusDtx ? 1 : 0;
-                      offerCodec.parameters['usedtx'] = opusDtx != null ? opusDtx : 0;
-                      // codecParameters['usedtx'] = opusDtx ? 1 : 0;
-                      codecParameters['usedtx'] = opusDtx != null ? opusDtx : 0;
+                    offerCodec.parameters['usedtx'] = opusDtx ?? 0;
+                    codecParameters['usedtx'] = opusDtx ?? 0;
                     // }
 
                     if (opusMaxPlaybackRate != null) {
@@ -1141,10 +1133,10 @@ class AnswerMediaSection extends MediaSection {
                 direction: 'recv',
               ));
             }
-          } else if (offerMediaObject.simulcast_03 != null) {
+          } else if (offerMediaObject.simulcast03 != null) {
             // Simulcast (draft version 03).
-            _mediaObject.simulcast_03 = Simulcast_03(
-              value: offerMediaObject.simulcast_03!.value
+            _mediaObject.simulcast03 = Simulcast03(
+              value: offerMediaObject.simulcast03!.value
                   .replaceAll(RegExp(r'/send/g'), 'recv'),
             );
 
@@ -1488,7 +1480,7 @@ String getCodecName(RtpCodecParameters codec) {
   Iterable<RegExpMatch> mimeTypeMatch =
       mimeTypeRegex.allMatches(codec.mimeType);
 
-  if (mimeTypeMatch == null) {
+  if (mimeTypeMatch.isEmpty) {
     throw ('invalid codec.mimeType');
   }
 

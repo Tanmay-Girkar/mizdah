@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'dart:io' show Platform;
 
@@ -27,7 +28,7 @@ class ScreenShareService {
       _localScreenStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
       return _localScreenStream;
     } catch (e) {
-      print("Screen share failed: $e");
+      debugPrint("Screen share failed: $e");
       return null;
     }
   }

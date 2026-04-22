@@ -7,6 +7,8 @@ import '../../../data/models/models.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/theme/theme_provider.dart';
+import '../../../core/utils/meeting_utils.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class StartCallScreen extends ConsumerWidget {
   const StartCallScreen({super.key});
@@ -46,7 +48,7 @@ class StartCallScreen extends ConsumerWidget {
                       _QuickActionTile(
                         icon: Icons.calendar_today_rounded,
                         title: 'Schedule in Google Calendar',
-                        onTap: () => context.push('/schedule'),
+                        onTap: () => _scheduleMeeting(context, ref),
                       ),
                     ],
                   ),
@@ -63,12 +65,12 @@ class StartCallScreen extends ConsumerWidget {
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+                          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
+                             backgroundColor: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
                             child: Text(contact.name[0], style: const TextStyle(color: MizdahTheme.primaryBlue)),
                           ),
                           title: Text(contact.name, style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -91,7 +93,13 @@ class StartCallScreen extends ConsumerWidget {
 
   void _createMeeting(BuildContext context, WidgetRef ref, String mode) async {
     final repository = ref.read(mizdahRepositoryProvider);
-    final meeting = await repository.createMeeting('Instant Meeting', DateTime.now());
+    final code = MeetingUtils.generateMeetingCode();
+    
+    final meeting = await repository.createMeeting(
+      title: 'Instant Meeting', 
+      dateTime: DateTime.now(),
+      code: code,
+    );
     
     if (!context.mounted) return;
     
@@ -102,7 +110,24 @@ class StartCallScreen extends ConsumerWidget {
         builder: (context) => ShareLinkModal(meeting: meeting),
       );
     } else {
-      context.push('/meeting/${meeting.id}');
+      context.push('/meeting/${meeting.code}');
+    }
+  }
+
+  void _scheduleMeeting(BuildContext context, WidgetRef ref) async {
+    final repository = ref.read(mizdahRepositoryProvider);
+    final code = MeetingUtils.generateMeetingCode();
+    
+    await repository.createMeeting(
+      title: 'Scheduled Meeting', 
+      dateTime: DateTime.now().add(const Duration(hours: 1)),
+      code: code,
+    );
+    
+    final url = MeetingUtils.generateCalendarUrl(code);
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
     }
   }
 }
@@ -195,9 +220,9 @@ class ShareLinkModal extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
+              color: Colors.white.withValues(alpha: 0.05),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
             ),
             child: Row(
               children: [

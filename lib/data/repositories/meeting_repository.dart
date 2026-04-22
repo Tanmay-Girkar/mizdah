@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/models.dart';
 import '../../core/network/api_client.dart';
@@ -21,7 +22,7 @@ class MeetingRepository {
       }
       throw Exception('Server returned invalid data format');
     } catch (e) {
-      print('Error creating meeting: $e');
+      debugPrint('Error creating meeting: $e');
       rethrow;
     }
   }
@@ -38,7 +39,7 @@ class MeetingRepository {
       }
       return null;
     } catch (e) {
-      print('Error fetching meeting info: $e');
+      debugPrint('Error fetching meeting info: $e');
       return null;
     }
   }
@@ -55,7 +56,7 @@ class MeetingRepository {
       }
       return rawList.map((json) => Meeting.fromJson(json)).toList();
     } catch (e) {
-      print('Error fetching meetings by host: $e');
+      debugPrint('Error fetching meetings by host: $e');
       return [];
     }
   }

@@ -32,7 +32,7 @@ class UnifiedPlan extends HandlerInterface {
   // RTCPeerConnection instance.
   RTCPeerConnection? _pc;
   // Map of RTCTransceivers indexed by MID.
-  Map<String, RTCRtpTransceiver> _mapMidTransceiver = {};
+  final Map<String, RTCRtpTransceiver> _mapMidTransceiver = {};
   // Whether a DataChannel m=application section has been created.
   bool _hasDataChannelMediaSection = false;
   // Sending DataChannel id value counter. Incremented for each new DataChannel.
@@ -46,10 +46,8 @@ class UnifiedPlan extends HandlerInterface {
     required DtlsRole localDtlsRole,
     SdpObject? localSdpObject,
   }) async {
-    if (localSdpObject == null) {
-      localSdpObject =
-          SdpObject.fromMap(parse((await _pc!.getLocalDescription())!.sdp!));
-    }
+    localSdpObject ??=
+        SdpObject.fromMap(parse((await _pc!.getLocalDescription())!.sdp!));
 
     // Get our local DTLS parameters.
     DtlsParameters dtlsParameters =
@@ -91,7 +89,9 @@ class UnifiedPlan extends HandlerInterface {
     if (_pc != null) {
       try {
         await _pc!.close();
-      } catch (error) {}
+      } catch (error) {
+        // Ignore.
+      }
     }
   }
 
@@ -126,9 +126,11 @@ class UnifiedPlan extends HandlerInterface {
     } catch (error) {
       try {
         await pc.close();
-      } catch (error2) {}
+      } catch (error2) {
+        // Ignore.
+      }
 
-      throw error;
+      rethrow;
     }
   }
 
@@ -209,10 +211,17 @@ class UnifiedPlan extends HandlerInterface {
 
     SdpObject localSdpObject = SdpObject.fromMap(parse(answer.sdp!));
 
-    MediaObject answerMediaObject = localSdpObject.media.firstWhere(
-      (MediaObject m) => m.mid == localId,
-      orElse: () => null as MediaObject,
-    );
+    MediaObject? answerMediaObject;
+    for (final m in localSdpObject.media) {
+      if (m.mid == localId) {
+        answerMediaObject = m;
+        break;
+      }
+    }
+
+    if (answerMediaObject == null) {
+      throw ('answer MediaObject not found');
+    }
 
     // May need to modify codec parameters in the answer based on codec
     // parameters in the offer.
@@ -326,12 +335,8 @@ class UnifiedPlan extends HandlerInterface {
   Future<void> replaceTrack(ReplaceTrackOptions options) async {
     _assertSendRirection();
 
-    if (options.track != null) {
-      _logger.debug(
-          'replaceTrack() [localId:${options.localId}, track.id${options.track.id}');
-    } else {
-      _logger.debug('replaceTrack() [localId:${options.localId}, no track');
-    }
+    _logger.debug(
+        'replaceTrack() [localId:${options.localId}, track.id${options.track.id}');
 
     RTCRtpTransceiver? transceiver = _mapMidTransceiver[options.localId];
 
@@ -351,7 +356,7 @@ class UnifiedPlan extends HandlerInterface {
     _remoteSdp.updateIceParameters(iceParameters);
 
     if (!_transportReady) {
-      return null;
+      return;
     }
 
     if (_direction == Direction.send) {
@@ -424,12 +429,12 @@ class UnifiedPlan extends HandlerInterface {
     };
 
     if (options.dtlsParameters.role != DtlsRole.auto) {
-      this._forcedLocalDtlsRole = options.dtlsParameters.role == DtlsRole.server
+      _forcedLocalDtlsRole = options.dtlsParameters.role == DtlsRole.server
           ? DtlsRole.client
           : DtlsRole.server;
     }
 
-    final _constrains = options.proprietaryConstraints.isEmpty
+    final constraints = options.proprietaryConstraints.isEmpty
         ? <String, dynamic>{
             'mandatory': {},
             'optional': [
@@ -437,11 +442,6 @@ class UnifiedPlan extends HandlerInterface {
             ],
           }
         : options.proprietaryConstraints;
-
-    _constrains['optional'] = [
-      ..._constrains['optional'],
-      {'DtlsSrtpKeyAgreement': true}
-    ];
 
     _pc = await createPeerConnection(
       {
@@ -453,7 +453,7 @@ class UnifiedPlan extends HandlerInterface {
         'sdpSemantics': 'unified-plan',
         ...options.additionalSettings,
       },
-      _constrains,
+      constraints,
     );
 
     // Handle RTCPeerConnection connection status.
@@ -501,9 +501,9 @@ class UnifiedPlan extends HandlerInterface {
 
     if (options.encodings.length > 1) {
       int idx = 0;
-      options.encodings.forEach((RtpEncodingParameters encoding) {
+      for (final encoding in options.encodings) {
         encoding.rid = 'r${idx++}';
-      });
+      }
     }
 
     RtpParameters sendingRtpParameters = RtpParameters.copy(
@@ -581,9 +581,9 @@ class UnifiedPlan extends HandlerInterface {
     if (!kIsWeb) {
       final transceivers = await _pc!.getTransceivers();
       transceiver = transceivers.firstWhere(
-        (_transceiver) =>
-            _transceiver.sender.track?.id == options.track.id &&
-            _transceiver.sender.track?.kind == options.track.kind,
+        (t) =>
+            t.sender.track?.id == options.track.id &&
+            t.sender.track?.kind == options.track.kind,
         orElse: () => throw 'No transceiver found',
       );
     }
@@ -752,14 +752,14 @@ class UnifiedPlan extends HandlerInterface {
     RTCRtpParameters parameters = transceiver.sender.parameters;
 
     int idx = 0;
-    parameters.encodings!.forEach((RTCRtpEncoding encoding) {
+    for (final encoding in (parameters.encodings ?? [])) {
       if (idx <= options.spatialLayer) {
         encoding.active = true;
       } else {
         encoding.active = false;
       }
       idx++;
-    });
+    }
 
     await transceiver.sender.setParameters(parameters);
   }
@@ -781,11 +781,9 @@ class UnifiedPlan extends HandlerInterface {
     RTCRtpParameters parameters = transceiver.sender.parameters;
 
     int idx = 0;
-    parameters.encodings!.forEach((RTCRtpEncoding encoding) {
+    for (final encoding in (parameters.encodings ?? [])) {
       parameters.encodings![idx] = RTCRtpEncoding(
-        active: options.params.active != null
-            ? options.params.active
-            : encoding.active,
+        active: options.params.active,
         maxBitrate: options.params.maxBitrate ?? encoding.maxBitrate,
         maxFramerate: options.params.maxFramerate ?? encoding.maxFramerate,
         minBitrate: options.params.minBitrate ?? encoding.minBitrate,
@@ -797,7 +795,7 @@ class UnifiedPlan extends HandlerInterface {
         ssrc: options.params.ssrc ?? encoding.ssrc,
       );
       idx++;
-    });
+    }
 
     await transceiver.sender.setParameters(parameters);
   }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/utils/meeting_utils.dart';
+import '../../../core/widgets/mizdah_text_field.dart';
 import 'package:intl/intl.dart';
 import '../../../data/repositories/meeting_repository.dart';
 import '../../../data/repositories/participant_repository.dart';
@@ -11,6 +13,9 @@ import '../../../core/widgets/mizdah_button.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../auth/auth_provider.dart';
 import '../notification_provider.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../../data/repositories/mizdah_repository.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -20,7 +25,6 @@ class HomeScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final callHistoryAsync = ref.watch(callHistoryProvider);
-    final schedulesAsync = ref.watch(schedulesProvider);
     final authState = ref.watch(authProvider);
 
 
@@ -69,6 +73,8 @@ class HomeScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 16),
                       const UpcomingMeetingsSection(),
+                      const SizedBox(height: 16),
+                      const JoinMeetingCard(),
                       const SizedBox(height: 32),
 
                       // Recent History Section
@@ -95,20 +101,11 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _handleNewMeeting(BuildContext context, WidgetRef ref) async {
-    final meetingRepo = ref.read(meetingRepositoryProvider);
-    final authState = ref.read(authProvider);
-    
-    try {
-      final meeting = await meetingRepo.createMeeting(hostId: authState.user?.id);
-      if (context.mounted) {
-        final identifier = meeting.code.isNotEmpty ? meeting.code : meeting.id;
-        context.push('/pre-join/$identifier');
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to create meeting')));
-      }
-    }
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _NewMeetingOptions(ref: ref),
+    );
   }
 
   void _showJoinCodeDialog(BuildContext context, WidgetRef ref) {
@@ -143,7 +140,7 @@ class _ActionCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                color: color.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: Icon(icon, color: MizdahTheme.primaryBlue, size: 28),
@@ -167,7 +164,6 @@ class UpcomingMeetingsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final schedulesAsync = ref.watch(schedulesProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -184,7 +180,7 @@ class UpcomingMeetingsSection extends ConsumerWidget {
                         height: 48,
                         width: 48,
                         decoration: BoxDecoration(
-                          color: MizdahTheme.primaryBlue.withOpacity(0.1),
+                          color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Icon(Icons.event_available, color: MizdahTheme.primaryBlue),
@@ -199,11 +195,6 @@ class UpcomingMeetingsSection extends ConsumerWidget {
                           ],
                         ),
                       ),
-                      MizdahButton(
-                        label: 'Schedule',
-                        isFullWidth: false,
-                        onTap: () => context.push('/schedule'),
-                      ),
                     ],
                   ),
                 )
@@ -212,6 +203,39 @@ class UpcomingMeetingsSection extends ConsumerWidget {
                 ),
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (err, stack) => Center(child: Text('Failed to load schedules')),
+        ),
+      ],
+    );
+  }
+}
+
+class JoinMeetingCard extends StatelessWidget {
+  const JoinMeetingCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Join meeting'),
+        const SizedBox(height: 16),
+        GlassCard(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              MizdahTextField(
+                label: 'Meeting Code or Link',
+                hintText: 'e.g. abc-defg-hij',
+                prefixIcon: Icons.link_rounded,
+                onChanged: (val) {
+                  final code = MeetingUtils.extractCode(val);
+                  if (code.length >= 9) {
+                    context.push('/pre-join/$code');
+                  }
+                },
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -232,16 +256,16 @@ class _ScheduleTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+        border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: MizdahTheme.primaryBlue.withOpacity(0.1),
+              color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -281,32 +305,56 @@ class _ScheduleTile extends StatelessWidget {
 }
 
 
-class HistoryTile extends StatelessWidget {
+class HistoryTile extends ConsumerWidget {
   final CallHistory item;
   const HistoryTile({super.key, required this.item});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authProvider);
+    final isHost = item.hostId != null && authState.user != null && item.hostId == authState.user!.id;
+    final displayTitle = (item.title.contains('http') || item.title.length > 20) 
+        ? (item.meetingCode ?? item.title) 
+        : item.title;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withOpacity(0.5),
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(16),
       ),
       child: ListTile(
         contentPadding: EdgeInsets.zero,
         leading: CircleAvatar(
-          backgroundColor: MizdahTheme.primaryBlue.withOpacity(0.1),
-          child: Text(item.title[0], style: const TextStyle(color: MizdahTheme.primaryBlue)),
+          backgroundColor: isHost 
+              ? Colors.green.withValues(alpha: 0.1) 
+              : MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+          child: Icon(
+            isHost ? Icons.outbound_rounded : Icons.call_received_rounded,
+            color: isHost ? Colors.green : MizdahTheme.primaryBlue,
+            size: 20,
+          ),
         ),
-        title: Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(
+          displayTitle, 
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         subtitle: Text(
-          DateFormat('MMM d, h:mm a').format(item.timestamp),
-          style: const TextStyle(fontSize: 12),
+          isHost ? 'Hosted' : 'Joined',
+          style: TextStyle(
+            fontSize: 12, 
+            color: isHost ? Colors.green : Colors.grey,
+            fontWeight: isHost ? FontWeight.bold : FontWeight.normal,
+          ),
         ),
-        trailing: Icon(Icons.chevron_right, color: Colors.grey.withOpacity(0.5)),
-        onTap: () => context.push('/pre-join/${item.id}'),
+        trailing: Text(
+          DateFormat('MMM d, h:mm a').format(item.timestamp),
+          style: const TextStyle(fontSize: 11, color: Colors.grey),
+        ),
+        onTap: () => context.push('/pre-join/${item.meetingCode ?? item.id}'),
       ),
     );
   }
@@ -441,7 +489,7 @@ class NotificationsDrawer extends ConsumerWidget {
                       final notif = notifications[index];
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: notif.isRead ? Colors.grey.withOpacity(0.2) : MizdahTheme.primaryBlue.withOpacity(0.2),
+                          backgroundColor: notif.isRead ? Colors.grey.withValues(alpha: 0.2) : MizdahTheme.primaryBlue.withValues(alpha: 0.2),
                           child: Icon(Icons.notifications, color: notif.isRead ? Colors.grey : MizdahTheme.primaryBlue),
                         ),
                         title: Text(notif.title, style: TextStyle(fontWeight: notif.isRead ? FontWeight.normal : FontWeight.bold)),
@@ -526,7 +574,7 @@ class EmptyStateView extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: 48),
-          Icon(Icons.history, size: 64, color: Colors.grey.withOpacity(0.3)),
+          Icon(Icons.history, size: 64, color: Colors.grey.withValues(alpha: 0.3)),
           const SizedBox(height: 16),
           const Text('No recent activity', style: TextStyle(color: Colors.grey)),
         ],
@@ -565,3 +613,182 @@ final schedulesProvider = FutureProvider<List<dynamic>>((ref) async {
   final repo = ref.watch(schedulingRepositoryProvider);
   return repo.getUserSchedules(authState.user!.id);
 });
+class _NewMeetingOptions extends StatelessWidget {
+  final WidgetRef ref;
+  const _NewMeetingOptions({required this.ref});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      radius: 32,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 24),
+          _OptionTile(
+            icon: Icons.link_rounded,
+            title: 'Create a meeting for later',
+            onTap: () => _createMeeting(context, 'Share'),
+          ),
+          _OptionTile(
+            icon: Icons.video_call_rounded,
+            title: 'Start an instant meeting',
+            onTap: () => _createMeeting(context, 'Join'),
+          ),
+          _OptionTile(
+            icon: Icons.calendar_today_rounded,
+            title: 'Schedule in Google Calendar',
+            onTap: () => _scheduleMeeting(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createMeeting(BuildContext context, String mode) async {
+    final repository = ref.read(mizdahRepositoryProvider);
+    final code = MeetingUtils.generateMeetingCode();
+    
+    Navigator.pop(context); // Close sheet
+
+    try {
+      final meeting = await repository.createMeeting(
+        title: 'Meeting', 
+        dateTime: DateTime.now(),
+        code: code,
+      );
+      
+      if (context.mounted) {
+        if (mode == 'Share') {
+          showModalBottomSheet(
+            context: context,
+            backgroundColor: Colors.transparent,
+            builder: (context) => _ShareLinkModal(meeting: meeting),
+          );
+        } else {
+          context.push('/pre-join/${meeting.code}');
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to create meeting')));
+      }
+    }
+  }
+
+  Future<void> _scheduleMeeting(BuildContext context) async {
+    final repository = ref.read(mizdahRepositoryProvider);
+    final code = MeetingUtils.generateMeetingCode();
+    
+    Navigator.pop(context); // Close sheet
+
+    try {
+      await repository.createMeeting(
+        title: 'Scheduled Meeting', 
+        dateTime: DateTime.now().add(const Duration(hours: 1)),
+        code: code,
+      );
+      
+      final url = MeetingUtils.generateCalendarUrl(code);
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to schedule meeting')));
+      }
+    }
+  }
+}
+
+class _OptionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+
+  const _OptionTile({required this.icon, required this.title, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: MizdahTheme.primaryBlue),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    );
+  }
+}
+
+class _ShareLinkModal extends StatelessWidget {
+  final Meeting meeting;
+  const _ShareLinkModal({required this.meeting});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      radius: 32,
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Meeting link ready',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Share this link with participants you want in the meeting.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey[400], fontSize: 13),
+          ),
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Row(
+              children: [
+                Expanded(child: Text(meeting.code, style: const TextStyle(fontWeight: FontWeight.w500))),
+                IconButton(
+                  icon: const Icon(Icons.copy_rounded, size: 20),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: meeting.code));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied!')));
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
+          MizdahButton(
+            label: 'Share Invite',
+            icon: Icons.share_rounded,
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          MizdahButton(
+            label: 'Join Meeting',
+            backgroundColor: Colors.white.withValues(alpha: 0.05),
+            onTap: () {
+              Navigator.pop(context);
+              context.push('/pre-join/${meeting.code}');
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}

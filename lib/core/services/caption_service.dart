@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import 'dart:async';
 
 class CaptionState {
@@ -23,7 +23,7 @@ class CaptionState {
 }
 
 class CaptionNotifier extends StateNotifier<CaptionState> {
-  final IO.Socket socket;
+  final socket_io.Socket socket;
   Timer? _clearTimer;
 
   CaptionNotifier({required this.socket}) : super(CaptionState(activeCaptions: {})) {

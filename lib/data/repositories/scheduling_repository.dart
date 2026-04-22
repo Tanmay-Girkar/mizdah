@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/network/api_client.dart';
 import '../../core/config/api_config.dart';
@@ -48,7 +49,7 @@ class SchedulingRepository {
       }
       return [];
     } catch (e) {
-      print('Error fetching user schedules: $e');
+      debugPrint('Error fetching user schedules: $e');
       return []; // Return empty list instead of throwing to keep UI stable
     }
   }

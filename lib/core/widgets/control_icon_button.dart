@@ -42,12 +42,12 @@ class ControlIconButton extends StatelessWidget {
             width: size,
             decoration: BoxDecoration(
               color: backgroundColor ?? (isActive 
-                  ? color.withOpacity(0.2) 
-                  : (isDark ? Colors.white10 : Colors.black.withOpacity(0.05))),
+                  ? color.withValues(alpha: 0.2) 
+                  : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05))),
               shape: BoxShape.circle,
               border: Border.all(
                 color: isActive 
-                    ? color.withOpacity(0.3) 
+                    ? color.withValues(alpha: 0.3) 
                     : (isDark ? Colors.white10 : Colors.black12),
               ),
             ),

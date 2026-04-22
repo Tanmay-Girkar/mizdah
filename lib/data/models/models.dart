@@ -75,7 +75,7 @@ class Meeting {
       id: json['id']?.toString() ?? json['dbId']?.toString() ?? json['meetingId']?.toString() ?? '',
       title: json['title'] ?? json['meeting_title'] ?? json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? 'Untitled Meeting',
       dateTime: DateTime.tryParse(json['created_at'] ?? json['createdAt'] ?? '') ?? DateTime.now(),
-      code: json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '',
+      code: (json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString().replaceAll('-', ''),
       participants: (json['participants'] as List?)?.map((e) => e.toString()).toList() ?? [],
       hostId: json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString(),
     );
@@ -88,6 +88,8 @@ class CallHistory {
   final DateTime timestamp;
   final Duration duration;
   final bool isMissed;
+  final String? meetingCode;
+  final String? hostId;
 
   CallHistory({
     required this.id,
@@ -95,15 +97,63 @@ class CallHistory {
     required this.timestamp,
     required this.duration,
     required this.isMissed,
+    this.meetingCode,
+    this.hostId,
   });
 
   factory CallHistory.fromJson(Map<String, dynamic> json) {
+    String title = json['meeting_title'] ?? json['title'] ?? '';
+    
+    // Check nested meeting object
+    if (title.isEmpty && json['meeting'] != null && json['meeting'] is Map) {
+      title = json['meeting']['title'] ?? json['meeting']['meeting_title'] ?? '';
+    }
+
+    // Fallback to code/ID if title is still empty
+    if (title.isEmpty) {
+      final code = json['meeting_code'] ?? json['meetingCode'] ?? json['meeting_id'] ?? json['meetingId'] ?? json['id'] ?? '';
+      title = code.toString();
+    }
+
+    // Clean up if title looks like a URL or a long system string
+    if (title.contains('http') || title.length > 20) {
+      // Try to extract code from URL
+      try {
+        final uri = Uri.tryParse(title);
+        if (uri != null && uri.pathSegments.isNotEmpty) {
+          title = 'Meeting: ${uri.pathSegments.last}';
+        } else if (title.contains('meeting')) {
+          // Handle concatenated strings like in the screenshot
+          final parts = title.split('meeting');
+          if (parts.length > 1 && parts.last.isNotEmpty) {
+            title = 'Meeting: ${parts.last}';
+          }
+        }
+      } catch (_) {}
+      
+      // If still looks like a URL/concatenated string without slashes
+      if (title.startsWith('http') && !title.contains(':')) {
+         // It's the weird string from the screenshot
+         final possibleCode = title.replaceAll(RegExp(r'^https?mizdah[a-z]+cloudmeeting'), '');
+         if (possibleCode.length > 3) {
+           title = 'Meeting: $possibleCode';
+         }
+      }
+    }
+
+    if (title.isEmpty || title == 'null') title = 'Past Meeting';
+
+    final meetingCode = (json['meeting_code'] ?? json['meetingCode'] ?? json['meeting_id'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString().replaceAll('-', '');
+    final hostId = json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString();
+
     return CallHistory(
-      id: json['id']?.toString() ?? '',
-      title: json['meeting_title'] ?? json['title'] ?? json['meeting_code'] ?? json['meetingCode'] ?? json['meeting_id'] ?? json['meetingId'] ?? 'Past Meeting',
-      timestamp: DateTime.tryParse(json['joined_at'] ?? json['joinedAt'] ?? '') ?? DateTime.now(),
+      id: json['meeting_id']?.toString() ?? json['meetingId']?.toString() ?? json['id']?.toString() ?? '',
+      title: title,
+      timestamp: DateTime.tryParse(json['joined_at'] ?? json['joinedAt'] ?? json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now(),
       duration: json['duration'] != null ? Duration(seconds: int.tryParse(json['duration'].toString()) ?? 0) : Duration.zero,
       isMissed: false,
+      meetingCode: meetingCode,
+      hostId: hostId,
     );
   }
 }

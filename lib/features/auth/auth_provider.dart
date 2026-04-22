@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/models/models.dart';
@@ -71,7 +71,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           await logout();
         }
       } catch (e) {
-        print("Initial auth check network error: $e");
+        debugPrint("Initial auth check network error: $e");
       }
     } else {
       state = state.copyWith(status: AuthStatus.unauthenticated);
@@ -102,7 +102,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await StorageService.saveUserData(id: user.id, name: user.name);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
-      print("Login error: $e");
+      debugPrint("Login error: $e");
       String message = "Invalid email or password";
       if (e is DioException) {
         message = e.response?.data['message'] ?? e.message ?? message;
@@ -131,7 +131,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await StorageService.saveUserData(id: user.id, name: user.name);
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
-      print("Signup error: $e");
+      debugPrint("Signup error: $e");
       String message = "Signup failed. Email might already exist.";
       if (e is DioException) {
         message = e.response?.data['message'] ?? e.message ?? message;
