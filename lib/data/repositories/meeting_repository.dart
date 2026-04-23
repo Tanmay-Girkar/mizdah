@@ -70,6 +70,40 @@ class MeetingRepository {
       rethrow;
     }
   }
+
+  // Waiting Room Management
+  Future<List<Map<String, dynamic>>> getWaitingParticipants(String meetingId) async {
+    try {
+      final response = await _apiClient.get('${ApiConfig.waitingRoomWaiting}/$meetingId');
+      if (response.data is List) {
+        return List<Map<String, dynamic>>.from(response.data);
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Error fetching waiting participants: $e');
+      return [];
+    }
+  }
+
+  Future<bool> admitParticipant(String socketId) async {
+    try {
+      final response = await _apiClient.post(ApiConfig.waitingRoomAdmit, data: {'socketId': socketId});
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error admitting participant via REST: $e');
+      return false;
+    }
+  }
+
+  Future<bool> denyParticipant(String socketId) async {
+    try {
+      final response = await _apiClient.post(ApiConfig.waitingRoomDeny, data: {'socketId': socketId});
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error denying participant via REST: $e');
+      return false;
+    }
+  }
 }
 
 final meetingRepositoryProvider = Provider((ref) => MeetingRepository());

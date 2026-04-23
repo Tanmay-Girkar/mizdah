@@ -14,6 +14,7 @@ import '../../../core/widgets/mizdah_text_field.dart';
 import '../../../data/repositories/mizdah_repository.dart';
 import '../../../core/utils/meeting_utils.dart';
 import '../../home/presentation/home_screen.dart';
+import '../meeting_provider.dart';
 
 class PreJoinScreen extends ConsumerStatefulWidget {
   final String? meetingId;
@@ -31,14 +32,10 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   bool _isJoining = false;
   Meeting? _meeting;
   bool _isLoadingMeeting = true;
-  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
-  MediaStream? _localStream;
   final _nameController = TextEditingController();
 
   @override
   void dispose() {
-    _localRenderer.dispose();
-    _localStream?.dispose();
     _nameController.dispose();
     super.dispose();
   }
@@ -52,7 +49,6 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
       _isLoadingMeeting = false;
     }
     _checkPermissions();
-    _initRenderer();
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final user = ref.read(authProvider).user;
@@ -62,9 +58,6 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
     });
   }
 
-  Future<void> _initRenderer() async {
-    await _localRenderer.initialize();
-  }
 
   Future<void> _fetchMeetingInfo() async {
     try {
@@ -98,23 +91,8 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   }
 
   Future<void> _setupMedia() async {
-    try {
-      final stream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
-        'video': {
-          'facingMode': 'user',
-          'width': 1280,
-          'height': 720,
-        },
-      });
-      _localStream = stream;
-      if (mounted) {
-        setState(() {
-          _localRenderer.srcObject = _localStream;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error setting up media: $e");
+    if (widget.meetingId != null) {
+      ref.read(meetingProvider(widget.meetingId!).notifier).prepareLocalPreview();
     }
   }
 
@@ -205,17 +183,22 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                   child: Column(
                     children: [
                       _CameraPreview(
-                        renderer: _localRenderer,
+                        renderer: ref.watch(meetingProvider(widget.meetingId ?? '')).localRenderer,
                         isCameraOn: _isCameraOn,
                         isMicOn: _isMicOn,
                         hasPermissions: _hasPermissions,
                         isLoading: _isPermissionLoading,
-                        onMicToggle: () => setState(() => _isMicOn = !_isMicOn),
+                        onMicToggle: () {
+                          setState(() => _isMicOn = !_isMicOn);
+                          if (widget.meetingId != null) {
+                            ref.read(meetingProvider(widget.meetingId!).notifier).toggleMic();
+                          }
+                        },
                         onCameraToggle: () {
                           setState(() => _isCameraOn = !_isCameraOn);
-                          _localStream?.getVideoTracks().forEach((track) {
-                            track.enabled = _isCameraOn;
-                          });
+                          if (widget.meetingId != null) {
+                            ref.read(meetingProvider(widget.meetingId!).notifier).toggleCamera();
+                          }
                         },
                       ),
 

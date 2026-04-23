@@ -137,8 +137,24 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                     context.go('/');
                   },
                   onOptionsTap: () => _showOptionsBottomSheet(context),
+                  hasWaitingParticipants: meetingState.waitingParticipants.isNotEmpty,
                 ),
               ),
+
+              // Join Requests Notification
+              if (meetingState.hostId == meetingState.userId && meetingState.waitingParticipants.isNotEmpty)
+                Positioned(
+                  top: 80,
+                  left: 16,
+                  right: 16,
+                  child: _JoinRequestBanner(
+                    count: meetingState.waitingParticipants.length,
+                    firstName: meetingState.waitingParticipants.first['name'] ?? 'Guest',
+                    onView: () => setState(() => _activePanel = 'participants'),
+                    onAdmit: () => meetingNotifier.admitParticipant(meetingState.waitingParticipants.first['socketId']),
+                    onDeny: () => meetingNotifier.denyParticipant(meetingState.waitingParticipants.first['socketId']),
+                  ),
+                ),
 
               // Panels
               if (_activePanel != null)
@@ -212,6 +228,10 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
         onOpenChat: () {
           Navigator.pop(context);
           setState(() => _activePanel = 'chat');
+        },
+        onOpenParticipants: () {
+          Navigator.pop(context);
+          setState(() => _activePanel = 'participants');
         },
         onOpenHostControls: () {
           Navigator.pop(context);
@@ -738,6 +758,7 @@ class _InCallControls extends StatelessWidget {
   final VoidCallback onCameraToggle;
   final VoidCallback onHangup;
   final VoidCallback onOptionsTap;
+  final bool hasWaitingParticipants;
 
   const _InCallControls({
     required this.isMicOn,
@@ -746,6 +767,7 @@ class _InCallControls extends StatelessWidget {
     required this.onCameraToggle,
     required this.onHangup,
     required this.onOptionsTap,
+    this.hasWaitingParticipants = false,
   });
 
   @override
@@ -785,10 +807,31 @@ class _InCallControls extends StatelessWidget {
               },
               size: 48,
             ),
-            ControlIconButton(
-              icon: Icons.more_vert,
-              onTap: onOptionsTap,
-              size: 48,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ControlIconButton(
+                  icon: Icons.more_vert,
+                  onTap: onOptionsTap,
+                  size: 48,
+                ),
+                if (hasWaitingParticipants)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 12,
+                        minHeight: 12,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             ControlIconButton(
               icon: Icons.call_end,
@@ -809,6 +852,7 @@ class _MoreOptionsSheet extends StatelessWidget {
   final bool isRaisingHand;
   final VoidCallback onRaiseHandToggle;
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenParticipants;
   final VoidCallback onOpenHostControls;
   final VoidCallback onOpenWhiteboard;
   final VoidCallback onToggleScreenShare;
@@ -820,6 +864,7 @@ class _MoreOptionsSheet extends StatelessWidget {
     required this.isRaisingHand,
     required this.onRaiseHandToggle,
     required this.onOpenChat,
+    required this.onOpenParticipants,
     required this.onOpenHostControls,
     required this.onOpenWhiteboard,
     required this.onToggleScreenShare,
@@ -927,7 +972,7 @@ class _MoreOptionsSheet extends StatelessWidget {
 
               const SizedBox(height: 8),
 
-              // Messages & Add others
+              // Messages & Participants
               Row(
                 children: [
                   Expanded(
@@ -940,14 +985,9 @@ class _MoreOptionsSheet extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: _SheetButton(
-                      icon: Icons.person_add_outlined,
-                      label: 'Add others',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Invite link copied')),
-                        );
-                      },
+                      icon: Icons.people_outline,
+                      label: 'Participants',
+                      onTap: onOpenParticipants,
                     ),
                   ),
                 ],
@@ -1440,15 +1480,29 @@ class _ParticipantsView extends ConsumerWidget {
                     child: Text(name[0].toUpperCase(), style: const TextStyle(color: MizdahTheme.primaryBlue)),
                   ),
                   title: Text(name, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                  trailing: TextButton(
-                    onPressed: () => ref.read(meetingProvider(meetingId).notifier).admitParticipant(p['socketId']),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: MizdahTheme.primaryBlue,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    ),
-                    child: const Text('Admit', style: TextStyle(fontSize: 12)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: () => ref.read(meetingProvider(meetingId).notifier).denyParticipant(p['socketId']),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                        child: const Text('Deny', style: TextStyle(fontSize: 12)),
+                      ),
+                      const SizedBox(width: 4),
+                      TextButton(
+                        onPressed: () => ref.read(meetingProvider(meetingId).notifier).admitParticipant(p['socketId']),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          backgroundColor: MizdahTheme.primaryBlue,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        ),
+                        child: const Text('Admit', style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -1833,6 +1887,60 @@ class _RoomItem extends StatelessWidget {
             isFullWidth: false,
             backgroundColor: Colors.white10,
             onTap: () {},
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _JoinRequestBanner extends StatelessWidget {
+  final int count;
+  final String firstName;
+  final VoidCallback onView;
+  final VoidCallback onAdmit;
+  final VoidCallback onDeny;
+
+  const _JoinRequestBanner({
+    required this.count,
+    required this.firstName,
+    required this.onView,
+    required this.onAdmit,
+    required this.onDeny,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      radius: 16,
+      opacity: 0.95,
+      child: Row(
+        children: [
+          const Icon(Icons.person_add_rounded, color: MizdahTheme.primaryBlue),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              count > 1 
+                ? '$firstName and ${count - 1} others want to join'
+                : '$firstName wants to join',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+          ),
+          TextButton(
+            onPressed: onView,
+            child: const Text('View', style: TextStyle(color: MizdahTheme.primaryBlue)),
+          ),
+          const SizedBox(width: 4),
+          TextButton(
+            onPressed: onDeny,
+            child: const Text('Deny', style: TextStyle(color: Colors.redAccent)),
+          ),
+          const SizedBox(width: 4),
+          MizdahButton(
+            label: 'Admit',
+            isFullWidth: false,
+            onTap: onAdmit,
           ),
         ],
       ),

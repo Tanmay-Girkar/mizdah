@@ -23,7 +23,7 @@ class MeetingUtils {
   /// Generates a proper Mizdah meeting link
   static String generateMeetingLink(String code) {
     final cleanCode = extractCode(code);
-    return 'https://mizdah.ogoul.cloud/meeting/$cleanCode';
+    return 'https://mizdah-front.ogoul.cloud/meeting/$cleanCode';
   }
 
   /// Generates a Google Calendar TEMPLATE URL for scheduling.

@@ -167,6 +167,7 @@ class ParticipantRepository {
 
   Future<List<CallHistory>> getUserHistory(String userId) async {
     try {
+      // 1. Fetch participated meetings
       final response = await _apiClient.get('${ApiConfig.userParticipation}/$userId');
       final dynamic data = response.data;
       List rawList = [];
@@ -176,9 +177,35 @@ class ParticipantRepository {
         rawList = data;
       }
 
+      // 2. Fetch hosted meetings to determine host status
+      List hostedMeetings = [];
+      try {
+        final hostedResponse = await _apiClient.get('${ApiConfig.userMeetings}/$userId');
+        final hostedData = hostedResponse.data;
+        if (hostedData is Map && hostedData.containsKey('data')) {
+          hostedMeetings = hostedData['data'] as List;
+        } else if (hostedData is List) {
+          hostedMeetings = hostedData;
+        }
+      } catch (e) {
+        debugPrint('Error fetching hosted meetings for history: $e');
+      }
+
+      final Set<String> hostedMeetingCodes = hostedMeetings.map((e) {
+        return (e['meeting_code'] ?? e['meetingCode'] ?? e['id'] ?? '').toString().replaceAll('-', '');
+      }).toSet();
+
       // Merge with integrated meetings for demonstration/integration
       final integrated = _integratedMeetings.map((json) => CallHistory.fromJson(json)).toList();
-      final history = rawList.map((json) => CallHistory.fromJson(json)).toList();
+      
+      final history = rawList.map((json) {
+        final meetingCode = (json['meeting_id'] ?? json['meetingId'] ?? '').toString().replaceAll('-', '');
+        if (hostedMeetingCodes.contains(meetingCode)) {
+          // Inject host_id if this is a hosted meeting
+          json['host_id'] = userId;
+        }
+        return CallHistory.fromJson(json);
+      }).toList();
       
       final combined = [...history, ...integrated];
 

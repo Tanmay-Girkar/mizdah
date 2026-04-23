@@ -22,7 +22,7 @@ class ApiConfig {
   static const String authUpdate = '$baseUrl/api/auth/update';
 
   static const String createMeeting = '$baseUrl/api/meetings/create';
-  static const String getMeeting = '$baseUrl/api/meetings'; 
+  static const String getMeeting = '$baseUrl/api/meeting'; 
   static const String userMeetings = '$baseUrl/api/meetings/user'; // + /{userId}
   
   static const String participantJoin = '$baseUrl/api/participant/join';
@@ -47,4 +47,9 @@ class ApiConfig {
   static const String files = '$baseUrl/api/files'; // + /{fileId}
   
   static const String adminUsers = '$baseUrl/api/admin/users';
+
+  // Waiting Room
+  static const String waitingRoomWaiting = '$baseUrl/api/waiting-room/waiting'; // + /{meetingId}
+  static const String waitingRoomAdmit = '$baseUrl/api/waiting-room/admit';
+  static const String waitingRoomDeny = '$baseUrl/api/waiting-room/deny';
 }

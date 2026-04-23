@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -111,6 +112,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final ParticipantRepository _participantRepository = ParticipantRepository();
   final ChatRepository _chatRepository = ChatRepository();
   final MeetingRepository _meetingRepository = MeetingRepository();
+  Timer? _waitingListTimer;
   io.Socket? _socket;
   io.Socket? get socket => _socket;
   io.Socket? _chatSocket;
@@ -132,43 +134,58 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       {'sender': 'Zohaib Ali', 'text': 'Hey Mustafa, the UI looks great!', 'time': DateTime.now().subtract(const Duration(minutes: 4)).toIso8601String()},
       {'sender': 'Ayesha Khan', 'text': 'Can we start the presentation?', 'time': DateTime.now().subtract(const Duration(minutes: 2)).toIso8601String()},
     ],
-  ));
+  )) {
+    // Proactively initialize the renderer so it's ready for PreJoin or Meeting Room
+    state.localRenderer.initialize().then((_) {
+      debugPrint("✅ Shared local renderer initialized");
+    }).catchError((e) {
+      debugPrint("❌ Shared local renderer init failed: $e");
+    });
+  }
+
+  Future<void> prepareLocalPreview() async {
+    if (_localStream == null) {
+      await _setupMedia(video: true, audio: true);
+    }
+  }
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken, {bool video = true, bool audio = true}) async {
-    print("🚩 1. joinMeeting entered: $meetingId");
+    debugPrint("🚩 1. joinMeeting entered: $meetingId");
     
-    // Non-blocking renderer init
-    state.localRenderer.initialize().then((_) {
-      print("✅ Local renderer initialized");
-    }).catchError((e) {
-      print("❌ Local renderer init failed: $e");
-    });
-    
-    final sanitizedMeetingId = meetingId.trim().replaceAll('-', '');
+    final cleanCode = meetingId.toLowerCase().trim();
 
-    // Phase 1: Fetch meeting info
-    print("🚩 2. Fetching meeting info for: $sanitizedMeetingId from: ${ApiConfig.getMeeting}/$sanitizedMeetingId");
-    final meetingInfo = await _meetingRepository.getMeetingInfo(sanitizedMeetingId);
-    final realMeetingId = meetingInfo?.id ?? sanitizedMeetingId;
+    // Phase 1: Fetch meeting info with retries (in case just created)
+    debugPrint("🚩 2. Fetching meeting info for: $cleanCode from: ${ApiConfig.getMeeting}/$cleanCode");
+    var meetingInfo = await _meetingRepository.getMeetingInfo(cleanCode);
+    
+    int retries = 3;
+    while (meetingInfo == null && retries > 0) {
+      debugPrint("🚩 2a. Meeting info not found. Retrying in 1s... ($retries left)");
+      await Future.delayed(const Duration(seconds: 1));
+      meetingInfo = await _meetingRepository.getMeetingInfo(cleanCode);
+      retries--;
+    }
+
+    final realMeetingId = meetingInfo?.id ?? cleanCode;
     final hostId = meetingInfo?.hostId;
     
-    print("🚩 3. Meeting info: ID=$realMeetingId, Host=$hostId");
+    debugPrint("🚩 3. Meeting info: ID=$realMeetingId, Host=$hostId");
 
-    // Phase 2: Log Participation (REST API)
-    print("🚩 4. Logging participation (REST) to: ${ApiConfig.participantJoin} for $realMeetingId");
-    await _participantRepository.logJoin(realMeetingId, userId);
-    print("✅ Participation logged successfully");
+    // Phase 2: Log Participation (REST API) - Use code as per guide
+    debugPrint("🚩 4. Logging participation (REST) to: ${ApiConfig.participantJoin} for $cleanCode");
+    await _participantRepository.logJoin(cleanCode, userId);
+    debugPrint("✅ Participation logged successfully");
     
     if (!mounted) return;
     state = state.copyWith(
       meetingId: realMeetingId,
-      meetingCode: sanitizedMeetingId,
+      meetingCode: cleanCode,
       userId: userId,
       hostId: hostId,
     );
 
     // Phase 3: Initialize Socket
-    print("🚩 5. Initializing Socket.IO to: ${ApiConfig.signalingUrl}");
+    debugPrint("🚩 5. Initializing Socket.IO to: ${ApiConfig.signalingUrl}");
     _socket = io.io(ApiConfig.signalingUrl, 
       io.OptionBuilder()
         .setTransports(['websocket']) // Required as per guide
@@ -188,8 +205,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     debugPrint("Socket IO attempting connection to: ${ApiConfig.signalingUrl}");
 
     _socket?.onConnect((_) {
-      final joinRoomId = (meetingInfo?.code ?? sanitizedMeetingId).replaceAll('-', '');
-      print("✅ Signaling Socket CONNECTED for room: $joinRoomId (Internal ID: $realMeetingId)");
+      debugPrint("✅ Signaling Socket CONNECTED for room: $cleanCode (Internal ID: $realMeetingId)");
       if (!mounted) return;
       state = state.copyWith(isConnected: true);
       
@@ -202,16 +218,20 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       final isHost = hostId != null && hostId == userId;
       final clientId = _socket?.id ?? 'flutter_${DateTime.now().millisecondsSinceEpoch}';
 
-      // Follow guide: socket.emit("join-meeting", [meetingCode, userId, userName, isHost, clientId]);
+      // Follow guide: socket.emit("join-meeting", [meetingCode, userId, displayName, isHost, clientId]);
+      final socketRoomId = cleanCode.replaceAll('-', '');
       final joinData = [
-        joinRoomId,
+        socketRoomId,
         userId,
         name,
         isHost,
         clientId,
       ];
-
+      
       debugPrint("📤 Emitting join-meeting: $joinData");
+      if (isHost) {
+        _startWaitingListPolling(socketRoomId);
+      }
       _socket?.emit('join-meeting', joinData);
       
       // Handle chat room join
@@ -244,7 +264,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.onAny((event, data) => debugPrint('📡 Signaling Socket EVENT: $event | DATA: $data'));
     
     _initSocketListeners();
-    await _setupMedia(video: video, audio: audio);
+    if (_localStream == null || (_localStream!.getVideoTracks().isEmpty && video) || (_localStream!.getAudioTracks().isEmpty && audio)) {
+      await _setupMedia(video: video, audio: audio);
+    }
   }
 
   void _initSocketListeners() {
@@ -255,7 +277,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('join-confirmation', (data) {
-      print("🚩 6. join-confirmation received: $data");
+      debugPrint("🚩 6. join-confirmation received: $data");
       if (!mounted) return;
       
       final participants = data['participants'] as List<dynamic>? ?? [];
@@ -271,9 +293,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
 
       if (isInWaitingRoom) {
-        print("⏳ Status: WAITING_FOR_APPROVAL");
+        debugPrint("⏳ Status: WAITING_FOR_APPROVAL");
       } else if (status == 'JOINED') {
-        print("✅ Status: JOINED");
+        debugPrint("✅ Status: JOINED");
       }
     });
 
@@ -283,6 +305,27 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       final waitingList = data as List<dynamic>? ?? [];
       state = state.copyWith(waitingParticipants: waitingList);
     });
+
+    _socket?.on('request-to-join', (data) {
+      debugPrint("Signaling Socket REQUEST TO JOIN: $data");
+      if (!mounted) return;
+      
+      Map<String, dynamic> newWaiting;
+      if (data is List && data.isNotEmpty) {
+        newWaiting = Map<String, dynamic>.from(data.first as Map);
+      } else if (data is Map) {
+        newWaiting = Map<String, dynamic>.from(data);
+      } else {
+        return;
+      }
+
+      // Avoid duplicates
+      final exists = state.waitingParticipants.any((p) => p['socketId'] == newWaiting['socketId']);
+      if (!exists) {
+        state = state.copyWith(waitingParticipants: [...state.waitingParticipants, newWaiting]);
+      }
+    });
+
 
     _socket?.on('user-joined', (data) {
       debugPrint("Signaling Socket USER JOINED: $data");
@@ -461,7 +504,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   void _setupSfu() {
     if (_mediaSocket == null) {
-      print("📡 Initializing Media Socket to: ${ApiConfig.signalingUrl} (Path: ${ApiConfig.mediaPath})");
+      debugPrint("📡 Initializing Media Socket to: ${ApiConfig.signalingUrl} (Path: ${ApiConfig.mediaPath})");
       _mediaSocket = io.io(ApiConfig.signalingUrl, 
         io.OptionBuilder()
           .setTransports(['websocket'])
@@ -471,18 +514,16 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
 
       _mediaSocket?.onConnect((_) {
-        print("✅ Media Socket CONNECTED");
-        final roomId = state.meetingCode ?? ''; 
+        debugPrint("✅ Media Socket CONNECTED");
+        final socketRoomId = (state.meetingCode ?? '').replaceAll('-', ''); 
         // As per guide, emit createRoom with meetingId (which is the code)
-        print("📤 Emitting createRoom: $roomId");
-        _mediaSocket?.emit('createRoom', {'meetingId': roomId});
+        debugPrint("📤 Emitting createRoom: $socketRoomId");
+        _mediaSocket?.emit('createRoom', {'meetingId': socketRoomId});
       });
 
       _mediaSocket?.on('router-rtp-capabilities', (data) async {
-        print("📥 Received Router RTP Capabilities");
-        if (_sfuService == null) {
-          _sfuService = SFUService(socket: _mediaSocket!);
-        }
+        debugPrint("📥 Received Router RTP Capabilities");
+        _sfuService ??= SFUService(socket: _mediaSocket!);
         await _sfuService!.initDevice(data);
         
         // After device is loaded, create transports
@@ -492,7 +533,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       _mediaSocket?.on('transport-options', (data) async {
         final direction = data['direction'];
-        print("📥 Received Transport Options for $direction");
+        debugPrint("📥 Received Transport Options for $direction");
         if (direction == 'send') {
           await _sfuService!.createSendTransport(data['options']);
           await _produceTracks();
@@ -501,8 +542,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         }
       });
 
-      _mediaSocket?.onConnectError((err) => print('❌ Media Socket CONNECT ERROR: $err'));
-      _mediaSocket?.onDisconnect((reason) => print('🔌 Media Socket DISCONNECTED: $reason'));
+      _mediaSocket?.onConnectError((err) => debugPrint('❌ Media Socket CONNECT ERROR: $err'));
+      _mediaSocket?.onDisconnect((reason) => debugPrint('🔌 Media Socket DISCONNECTED: $reason'));
     }
   }
 
@@ -686,8 +727,39 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   void admitParticipant(String socketId) {
-    debugPrint("Admitting participant: $socketId");
+    debugPrint("Admitting participant via Socket: $socketId");
     _socket?.emit('admit-user', {'socketId': socketId});
+    // Optimistically remove from local list
+    final updatedList = state.waitingParticipants.where((p) => p['socketId'] != socketId).toList();
+    state = state.copyWith(waitingParticipants: updatedList);
+  }
+
+  void denyParticipant(String socketId) {
+    debugPrint("Denying participant via Socket: $socketId");
+    _socket?.emit('deny-user', {'socketId': socketId});
+    final updatedList = state.waitingParticipants.where((p) => p['socketId'] != socketId).toList();
+    state = state.copyWith(waitingParticipants: updatedList);
+  }
+
+  void _startWaitingListPolling(String meetingId) {
+    _waitingListTimer?.cancel();
+    _waitingListTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (!mounted || _socket?.connected != true) {
+        timer.cancel();
+        return;
+      }
+      refreshWaitingList();
+    });
+  }
+
+  Future<void> refreshWaitingList() async {
+    final meetingId = state.meetingCode?.replaceAll('-', '');
+    if (meetingId == null) return;
+    
+    final list = await _meetingRepository.getWaitingParticipants(meetingId);
+    if (mounted) {
+      state = state.copyWith(waitingParticipants: list);
+    }
   }
 
   void muteAll() {
@@ -730,6 +802,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   @override
   void dispose() {
+    _waitingListTimer?.cancel();
     leaveMeeting();
     super.dispose();
   }

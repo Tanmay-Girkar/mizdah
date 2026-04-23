@@ -115,9 +115,6 @@ class SFUService {
     // Called when a producer is created
   }
 
-  dynamic _handleConsume(Consumer consumer) {
-    // Called when a consumer is created
-  }
 
   void dispose() {
     _sendTransport?.close();
