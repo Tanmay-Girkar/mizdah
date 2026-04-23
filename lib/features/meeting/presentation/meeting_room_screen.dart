@@ -15,6 +15,7 @@ import 'widgets/captions_view.dart';
 import 'widgets/whiteboard_view.dart';
 import '../providers/meeting_services_provider.dart';
 import '../../../../core/services/recording_service.dart';
+import '../../../core/utils/meeting_utils.dart';
 
 class MeetingRoomScreen extends ConsumerStatefulWidget {
   final String meetingId;
@@ -60,18 +61,18 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     ref.read(meetingProvider(widget.meetingId).notifier).leaveMeeting();
     super.dispose();
   }
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final meetingState = ref.watch(meetingProvider(widget.meetingId));
     final meetingNotifier = ref.watch(meetingProvider(widget.meetingId).notifier);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF020617),
+      backgroundColor: isDark ? const Color(0xFF020617) : MizdahTheme.lightBackground,
       body: Container(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
+        decoration: isDark ? const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -80,7 +81,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               Color(0xFF020617),
             ],
           ),
-        ),
+        ) : null,
         child: SafeArea(
           bottom: false,
           child: Stack(
@@ -150,7 +151,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               // Waiting Room Overlay
               if (meetingState.isInWaitingRoom)
                 Container(
-                  color: const Color(0xFF0F172A),
+                  color: isDark ? const Color(0xFF0F172A) : MizdahTheme.lightBackground,
                   width: double.infinity,
                   height: double.infinity,
                   child: Column(
@@ -158,14 +159,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                     children: [
                       const Icon(Icons.hourglass_empty_rounded, size: 64, color: MizdahTheme.primaryBlue),
                       const SizedBox(height: 24),
-                      const Text(
+                      Text(
                         'Wait for the host to let you in',
-                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87, 
+                          fontSize: 18, 
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         'The meeting host will let you in soon...',
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black54, 
+                          fontSize: 14,
+                        ),
                       ),
                       const SizedBox(height: 48),
                       MizdahButton(
@@ -288,18 +296,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   }
 
   void _showRecordingConsent() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: MizdahTheme.darkBackgroundTop,
+        backgroundColor: isDark ? MizdahTheme.darkBackgroundTop : Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: const Text(
+        title: Text(
           'Record this meeting?',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
         ),
-        content: const Text(
+        content: Text(
           'By starting the recording, you confirm that you have obtained consent from all participants to be recorded.',
-          style: TextStyle(color: Colors.white70),
+          style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
         ),
         actions: [
           TextButton(
@@ -482,9 +491,10 @@ class _SolitaryHeroView extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'meet.google.com/$meetingId',
+                    MeetingUtils.generateMeetingLink(meetingId),
                     style: TextStyle(
                       color: Theme.of(context).textTheme.bodyMedium?.color,
+                      fontSize: 13,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -511,7 +521,7 @@ class _SolitaryHeroView extends StatelessWidget {
             onTap: () {
               SharePlus.instance.share(
                 ShareParams(
-                  text: 'Join my Mizdah meeting using this link: https://meet.google.com/$meetingId',
+                  text: 'Join my Mizdah meeting using this link: ${MeetingUtils.generateMeetingLink(meetingId)}',
                 ),
               );
             },
@@ -1698,7 +1708,8 @@ class _ControlToggle extends StatelessWidget {
           : null,
       trailing: Switch.adaptive(
         value: value,
-        activeColor: MizdahTheme.primaryBlue,
+        activeThumbColor: Colors.white,
+        activeTrackColor: MizdahTheme.primaryBlue,
         onChanged: onChanged,
       ),
     );

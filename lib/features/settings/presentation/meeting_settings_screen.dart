@@ -208,7 +208,7 @@ class _MeetingSettingsScreenState extends ConsumerState<MeetingSettingsScreen> {
       trailing: Switch(
         value: value,
         onChanged: onChanged,
-        activeColor: Colors.white,
+        activeThumbColor: Colors.white,
         activeTrackColor: accentColor,
         inactiveThumbColor: Colors.grey[400],
         inactiveTrackColor: Colors.white10.withValues(alpha: 0.1),

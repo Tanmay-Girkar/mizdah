@@ -7,11 +7,12 @@ import '../../core/config/api_config.dart';
 class MeetingRepository {
   final ApiClient _apiClient = ApiClient();
 
-  Future<Meeting> createMeeting({String? hostId, String? customId}) async {
+  Future<Meeting> createMeeting({String? hostId, String? customId, String? type}) async {
     try {
       final response = await _apiClient.post(ApiConfig.createMeeting, data: {
         if (hostId != null) 'hostId': hostId,
         if (customId != null) 'id': customId,
+        if (type != null) 'type': type,
       });
       final dynamic data = response.data;
       if (data is Map<String, dynamic>) {

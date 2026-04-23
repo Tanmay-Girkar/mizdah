@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class MizdahTextField extends StatelessWidget {
-  final String label;
+  final String? label;
   final String hintText;
   final TextEditingController? controller;
   final bool isPassword;
@@ -9,10 +9,11 @@ class MizdahTextField extends StatelessWidget {
   final IconData? prefixIcon;
   final String? Function(String?)? validator;
   final void Function(String)? onChanged;
+  final void Function(String)? onSubmitted;
 
   const MizdahTextField({
     super.key,
-    required this.label,
+    this.label,
     required this.hintText,
     this.controller,
     this.isPassword = false,
@@ -20,6 +21,7 @@ class MizdahTextField extends StatelessWidget {
     this.prefixIcon,
     this.validator,
     this.onChanged,
+    this.onSubmitted,
   });
 
   @override
@@ -30,22 +32,24 @@ class MizdahTextField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 8),
-          child: Text(
-            label,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: isDark ? Colors.white70 : Colors.black87,
+        if (label != null && label!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              label!,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white70 : Colors.black87,
+              ),
             ),
           ),
-        ),
         TextFormField(
           controller: controller,
           obscureText: isPassword,
           keyboardType: keyboardType,
           validator: validator,
           onChanged: onChanged,
+          onFieldSubmitted: onSubmitted,
           style: const TextStyle(fontSize: 15),
           decoration: InputDecoration(
             hintText: hintText,

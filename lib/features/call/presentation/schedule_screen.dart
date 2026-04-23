@@ -102,12 +102,17 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: _repeatOptions.map((option) {
-              return RadioListTile<String>(
+              return ListTile(
                 title: Text(option),
-                value: option,
-                groupValue: _repeatOption,
-                onChanged: (String? value) {
-                  Navigator.of(context).pop(value);
+                leading: Radio<String>(
+                  value: option,
+                  groupValue: _repeatOption,
+                  onChanged: (String? value) {
+                    Navigator.of(context).pop(value);
+                  },
+                ),
+                onTap: () {
+                  Navigator.of(context).pop(option);
                 },
               );
             }).toList(),

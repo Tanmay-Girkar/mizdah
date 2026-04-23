@@ -32,6 +32,7 @@ class MeetingState {
 
   final int mockParticipantCount;
   final String? meetingId;
+  final String? meetingCode;
   final String? userId;
 
   MeetingState({
@@ -49,6 +50,7 @@ class MeetingState {
     this.isInWaitingRoom = false,
     this.mockParticipantCount = 0,
     this.meetingId,
+    this.meetingCode,
     this.userId,
     this.hostId,
     this.isSpeakerphoneOn = true,
@@ -71,6 +73,7 @@ class MeetingState {
     bool? isInWaitingRoom,
     int? mockParticipantCount,
     String? meetingId,
+    String? meetingCode,
     String? userId,
     String? hostId,
     bool? isSpeakerphoneOn,
@@ -93,6 +96,7 @@ class MeetingState {
       isInWaitingRoom: isInWaitingRoom ?? this.isInWaitingRoom,
       mockParticipantCount: mockParticipantCount ?? this.mockParticipantCount,
       meetingId: meetingId ?? this.meetingId,
+      meetingCode: meetingCode ?? this.meetingCode,
       userId: userId ?? this.userId,
       hostId: hostId ?? this.hostId,
       isSpeakerphoneOn: isSpeakerphoneOn ?? this.isSpeakerphoneOn,
@@ -111,6 +115,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   io.Socket? get socket => _socket;
   io.Socket? _chatSocket;
   io.Socket? get chatSocket => _chatSocket;
+  io.Socket? _mediaSocket;
+  io.Socket? get mediaSocket => _mediaSocket;
   
   MediaStream? _localStream;
   final Map<String, RTCPeerConnection> _peerConnections = {};
@@ -129,22 +135,51 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   ));
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken, {bool video = true, bool audio = true}) async {
-    // Explicitly initialize renderer before setting srcObject
-    await state.localRenderer.initialize();
+    print("🚩 1. joinMeeting entered: $meetingId");
     
-    // Trim for safety
-    final sanitizedMeetingId = meetingId.trim();
+    // Non-blocking renderer init
+    state.localRenderer.initialize().then((_) {
+      print("✅ Local renderer initialized");
+    }).catchError((e) {
+      print("❌ Local renderer init failed: $e");
+    });
     
+    final sanitizedMeetingId = meetingId.trim().replaceAll('-', '');
+
+    // Phase 1: Fetch meeting info
+    print("🚩 2. Fetching meeting info for: $sanitizedMeetingId from: ${ApiConfig.getMeeting}/$sanitizedMeetingId");
+    final meetingInfo = await _meetingRepository.getMeetingInfo(sanitizedMeetingId);
+    final realMeetingId = meetingInfo?.id ?? sanitizedMeetingId;
+    final hostId = meetingInfo?.hostId;
+    
+    print("🚩 3. Meeting info: ID=$realMeetingId, Host=$hostId");
+
+    // Phase 2: Log Participation (REST API)
+    print("🚩 4. Logging participation (REST) to: ${ApiConfig.participantJoin} for $realMeetingId");
+    await _participantRepository.logJoin(realMeetingId, userId);
+    print("✅ Participation logged successfully");
+    
+    if (!mounted) return;
+    state = state.copyWith(
+      meetingId: realMeetingId,
+      meetingCode: sanitizedMeetingId,
+      userId: userId,
+      hostId: hostId,
+    );
+
+    // Phase 3: Initialize Socket
+    print("🚩 5. Initializing Socket.IO to: ${ApiConfig.signalingUrl}");
     _socket = io.io(ApiConfig.signalingUrl, 
       io.OptionBuilder()
-        .setTransports(['websocket'])
+        .setTransports(['websocket']) // Required as per guide
+        .setPath('/signaling-fresh')  // Official path from guide
         .enableAutoConnect()
         .build()
     );
 
     _chatSocket = io.io(ApiConfig.chatSocketUrl, 
       io.OptionBuilder()
-        .setTransports(['websocket'])
+        .setTransports(['websocket', 'polling'])
         .enableAutoConnect()
         .setAuth({'token': jwtToken})
         .build()
@@ -152,92 +187,64 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     debugPrint("Socket IO attempting connection to: ${ApiConfig.signalingUrl}");
 
-    _socket?.onConnect((_) async {
-      debugPrint("Signaling Socket CONNECTED SUCCESSFULLY for room: $sanitizedMeetingId");
-      final meetingInfo = await _meetingRepository.getMeetingInfo(sanitizedMeetingId);
+    _socket?.onConnect((_) {
+      final joinRoomId = (meetingInfo?.code ?? sanitizedMeetingId).replaceAll('-', '');
+      print("✅ Signaling Socket CONNECTED for room: $joinRoomId (Internal ID: $realMeetingId)");
       if (!mounted) return;
-      state = state.copyWith(
-        isConnected: true, 
-        meetingId: sanitizedMeetingId, 
-        userId: userId,
-        hostId: meetingInfo?.hostId,
-      );
+      state = state.copyWith(isConnected: true);
       
-      // Phase 2: Log Participation
-      _participantRepository.logJoin(sanitizedMeetingId, userId);
-
       // Phase 4: Load Chat History
-      _loadChatHistory(sanitizedMeetingId, userId);
+      _loadChatHistory(realMeetingId, userId);
 
-      // New: Load Participants
-      _loadParticipants(sanitizedMeetingId);
+      // Phase 5: Load Participants
+      _loadParticipants(realMeetingId);
 
-      final isHost = meetingInfo?.hostId != null && meetingInfo?.hostId == userId;
-      final clientId = _socket?.id ?? 'flutter_client_${DateTime.now().millisecondsSinceEpoch}';
+      final isHost = hostId != null && hostId == userId;
+      final clientId = _socket?.id ?? 'flutter_${DateTime.now().millisecondsSinceEpoch}';
 
       // Follow guide: socket.emit("join-meeting", [meetingCode, userId, userName, isHost, clientId]);
       final joinData = [
-        sanitizedMeetingId,
+        joinRoomId,
         userId,
         name,
         isHost,
         clientId,
       ];
 
-      // Always emit to signaling
-      debugPrint("Emitting join-meeting with ID: $sanitizedMeetingId");
+      debugPrint("📤 Emitting join-meeting: $joinData");
       _socket?.emit('join-meeting', joinData);
       
-      // For chat, ensure we are in the correct room
-      void joinChatRoom() {
-        debugPrint("Emitting join-chat for meeting $sanitizedMeetingId");
-        _chatSocket?.emit('join-chat', {
-          'meetingId': sanitizedMeetingId,
-          'userId': userId,
-          'token': jwtToken, // Added token for safety
-        });
-      }
-
+      // Handle chat room join
       if (_chatSocket?.connected ?? false) {
-        joinChatRoom();
+        _emitJoinChat(realMeetingId, userId, jwtToken);
       } else {
-        // Listen once for the next connection event
-        _chatSocket?.on('connect', (_) {
-          debugPrint("Chat Socket CONNECTED via listener");
-          joinChatRoom();
-        });
+        _chatSocket?.once('connect', (_) => _emitJoinChat(realMeetingId, userId, jwtToken));
       }
-
-      _networkResilienceService ??= NetworkResilienceService(
-        socket: _socket!,
-        meetingId: meetingId,
-        userId: userId,
-        onBackgroundStateChanged: (inBackground) {
-          // If in background, camera track is disabled via service,
-          // but we can update state if necessary
-          if (inBackground && state.isCameraOn) {
-            if (!mounted) return;
-            state = state.copyWith(isCameraOn: false);
-          }
-        },
-      );
-      _networkResilienceService!.localStream = _localStream;
     });
 
-    _socket?.onConnect((_) => debugPrint('Signaling Socket (4012) CONNECTED SUCCESSFULLY'));
-    _socket?.onConnectError((err) => debugPrint('Signaling Socket (4012) CONNECT ERROR: $err'));
-    _socket?.on('connect_timeout', (err) => debugPrint('Signaling Socket (4012) CONNECT TIMEOUT: $err'));
-    _socket?.onError((err) => debugPrint('Signaling Socket (4012) ERROR: $err'));
-    _socket?.onDisconnect((reason) => debugPrint('Signaling Socket (4012) DISCONNECTED: $reason'));
-    _socket?.onAny((event, data) => debugPrint('Signaling Socket (4012) EVENT: $event | DATA: $data'));
+    _networkResilienceService ??= NetworkResilienceService(
+      socket: _socket!,
+      meetingId: meetingId,
+      userId: userId,
+      onBackgroundStateChanged: (inBackground) {
+        // If in background, camera track is disabled via service,
+        // but we can update state if necessary
+        if (inBackground && state.isCameraOn) {
+          if (!mounted) return;
+          state = state.copyWith(isCameraOn: false);
+        }
+      },
+    );
+    _networkResilienceService!.localStream = _localStream;
+
+    _socket?.onConnectError((err) => debugPrint('❌ Signaling Socket CONNECT ERROR: $err'));
+    _socket?.on('connect_timeout', (err) => debugPrint('🕒 Signaling Socket CONNECT TIMEOUT: $err'));
+    _socket?.onError((err) => debugPrint('⚠️ Signaling Socket ERROR: $err'));
+    _socket?.onDisconnect((reason) => debugPrint('🔌 Signaling Socket DISCONNECTED: $reason'));
+    _socket?.onAny((event, data) => debugPrint('📡 Signaling Socket EVENT: $event | DATA: $data'));
     
     _initSocketListeners();
-    // Use try-catch here as well to ensure media failure doesn't stop the joining process
-    try {
-      await _setupMedia(video: video, audio: audio);
-    } catch (e) {
-      debugPrint("Media setup failed during join: $e");
-    }
+    await _setupMedia(video: video, audio: audio);
   }
 
   void _initSocketListeners() {
@@ -248,23 +255,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('join-confirmation', (data) {
-      debugPrint("Signaling Socket JOIN CONFIRMED: $data");
+      print("🚩 6. join-confirmation received: $data");
       if (!mounted) return;
       
       final participants = data['participants'] as List<dynamic>? ?? [];
       final waitingParticipants = data['waitingParticipants'] as List<dynamic>? ?? [];
+      final status = data['status'];
+      final isInWaitingRoom = status == 'WAITING_FOR_APPROVAL' || status == 'WAITING';
       
       state = state.copyWith(
         participants: participants,
         waitingParticipants: waitingParticipants,
         hostId: data['hostId'] ?? state.hostId,
-        isInWaitingRoom: data['status'] == 'WAITING',
+        isInWaitingRoom: isInWaitingRoom,
       );
 
-      if (data['status'] == 'WAITING') {
-        debugPrint("You are in the waiting room.");
-      } else {
-        debugPrint("You joined the meeting successfully.");
+      if (isInWaitingRoom) {
+        print("⏳ Status: WAITING_FOR_APPROVAL");
+      } else if (status == 'JOINED') {
+        print("✅ Status: JOINED");
       }
     });
 
@@ -338,20 +347,48 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.on('router-rtp-capabilities', (data) async {
       if (_sfuService != null) {
         await _sfuService!.initDevice(Map<String, dynamic>.from(data));
-        _socket?.emit('create-webrtc-transport', {'forceTcp': false});
+        // Request both send and receive transports for full duplex media
+        _socket?.emit('create-webrtc-transport', {'forceTcp': false, 'producing': true, 'consuming': false});
+        _socket?.emit('create-webrtc-transport', {'forceTcp': false, 'producing': false, 'consuming': true});
       }
     });
 
-    // Assume backend returns transport details to create transports
     _socket?.on('webrtc-transport-created', (data) async {
       if (_sfuService != null) {
-        if (data['isSender'] == true) {
+        final isSender = data['isSender'] == true || data['producing'] == true;
+        if (isSender) {
           await _sfuService!.createSendTransport(Map<String,dynamic>.from(data['transportOptions']));
-          // Produce audio/video
           _produceTracks();
         } else {
           await _sfuService!.createRecvTransport(Map<String,dynamic>.from(data['transportOptions']));
+          // Ask server for existing producers in the room to consume them
+          _socket?.emit('get-producers', {});
         }
+      }
+    });
+
+    _socket?.on('new-producer', (data) async {
+      debugPrint("Mediasoup NEW PRODUCER: $data");
+      if (_sfuService != null) {
+        final producerId = data['producerId'];
+        final socketId = data['socketId'] ?? 'remote_${DateTime.now().millisecondsSinceEpoch}';
+        
+        await _sfuService!.consume(data, (track) async {
+          final stream = await createLocalMediaStream('remote_stream_$producerId');
+          stream.addTrack(track);
+          
+          if (!mounted) return;
+          final newRenderer = RTCVideoRenderer();
+          await newRenderer.initialize();
+          newRenderer.srcObject = stream;
+          
+          state = state.copyWith(
+            remoteRenderers: {
+              ...state.remoteRenderers,
+              socketId: newRenderer,
+            },
+          );
+        });
       }
     });
 
@@ -423,14 +460,49 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   void _setupSfu() {
-    if (_socket != null) {
-      _sfuService = SFUService(socket: _socket!);
-      _socket!.emit('get-router-rtp-capabilities', {});
-      // Destroy P2P connections safely
-      for (var pc in _peerConnections.values) {
-        pc.close();
-      }
-      _peerConnections.clear();
+    if (_mediaSocket == null) {
+      print("📡 Initializing Media Socket to: ${ApiConfig.signalingUrl} (Path: ${ApiConfig.mediaPath})");
+      _mediaSocket = io.io(ApiConfig.signalingUrl, 
+        io.OptionBuilder()
+          .setTransports(['websocket'])
+          .setPath(ApiConfig.mediaPath)
+          .enableAutoConnect()
+          .build()
+      );
+
+      _mediaSocket?.onConnect((_) {
+        print("✅ Media Socket CONNECTED");
+        final roomId = state.meetingCode ?? ''; 
+        // As per guide, emit createRoom with meetingId (which is the code)
+        print("📤 Emitting createRoom: $roomId");
+        _mediaSocket?.emit('createRoom', {'meetingId': roomId});
+      });
+
+      _mediaSocket?.on('router-rtp-capabilities', (data) async {
+        print("📥 Received Router RTP Capabilities");
+        if (_sfuService == null) {
+          _sfuService = SFUService(socket: _mediaSocket!);
+        }
+        await _sfuService!.initDevice(data);
+        
+        // After device is loaded, create transports
+        _mediaSocket?.emit('create-transport', {'direction': 'send'});
+        _mediaSocket?.emit('create-transport', {'direction': 'recv'});
+      });
+
+      _mediaSocket?.on('transport-options', (data) async {
+        final direction = data['direction'];
+        print("📥 Received Transport Options for $direction");
+        if (direction == 'send') {
+          await _sfuService!.createSendTransport(data['options']);
+          await _produceTracks();
+        } else {
+          await _sfuService!.createRecvTransport(data['options']);
+        }
+      });
+
+      _mediaSocket?.onConnectError((err) => print('❌ Media Socket CONNECT ERROR: $err'));
+      _mediaSocket?.onDisconnect((reason) => print('🔌 Media Socket DISCONNECTED: $reason'));
     }
   }
 
@@ -593,6 +665,15 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
+  void _emitJoinChat(String meetingId, String userId, String token) {
+    debugPrint("💬 Emitting join-chat for meeting $meetingId");
+    _chatSocket?.emit('join-chat', {
+      'meetingId': meetingId,
+      'userId': userId,
+      'token': token,
+    });
+  }
+
   Future<void> _loadParticipants(String meetingId) async {
     try {
       final participants = await _participantRepository.getMeetingParticipants(meetingId);
@@ -635,6 +716,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
     _socket?.disconnect();
     _chatSocket?.disconnect();
+    _mediaSocket?.disconnect();
     _localStream?.dispose();
     _screenShareService.stopScreenShare();
     _sfuService?.dispose();

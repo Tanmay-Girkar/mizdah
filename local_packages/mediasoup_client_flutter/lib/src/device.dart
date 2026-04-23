@@ -125,7 +125,7 @@ class Device {
         await handler.close();
       }
 
-      throw error;
+      rethrow;
     }
   }
 

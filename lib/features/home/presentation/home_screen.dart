@@ -15,6 +15,8 @@ import '../../auth/auth_provider.dart';
 import '../notification_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
+import '../../../core/services/google_calendar_service.dart';
 import '../../../data/repositories/mizdah_repository.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -50,31 +52,28 @@ class HomeScreen extends ConsumerWidget {
                     padding: const EdgeInsets.all(16),
                     children: [
                       // Restored Premium Action Cards
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _ActionCard(
-                              title: 'New Meeting',
-                              icon: Icons.video_call_rounded,
-                              color: MizdahTheme.primaryBlue,
-                              onTap: () => _handleNewMeeting(context, ref),
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: _ActionCard(
+                                title: 'New Meeting',
+                                icon: Icons.video_call_rounded,
+                                color: MizdahTheme.primaryBlue,
+                                onTap: () => _handleNewMeeting(context, ref),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _ActionCard(
-                              title: 'Join with code',
-                              icon: Icons.keyboard_rounded,
-                              color: Colors.white24,
-                              onTap: () => _showJoinCodeDialog(context, ref),
+                            const SizedBox(width: 16),
+                            const Expanded(
+                              child: JoinMeetingCard(),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
                       const UpcomingMeetingsSection(),
-                      const SizedBox(height: 16),
-                      const JoinMeetingCard(),
+                      const SizedBox(height: 24),
                       const SizedBox(height: 32),
 
                       // Recent History Section
@@ -209,35 +208,51 @@ class UpcomingMeetingsSection extends ConsumerWidget {
   }
 }
 
-class JoinMeetingCard extends StatelessWidget {
+class JoinMeetingCard extends StatefulWidget {
   const JoinMeetingCard({super.key});
 
   @override
+  State<JoinMeetingCard> createState() => _JoinMeetingCardState();
+}
+
+class _JoinMeetingCardState extends State<JoinMeetingCard> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _join() {
+    final code = MeetingUtils.extractCode(_controller.text);
+    if (code.isNotEmpty) {
+      context.push('/pre-join/$code');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Join meeting'),
-        const SizedBox(height: 16),
-        GlassCard(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              MizdahTextField(
-                label: 'Meeting Code or Link',
-                hintText: 'e.g. abc-defg-hij',
-                prefixIcon: Icons.link_rounded,
-                onChanged: (val) {
-                  final code = MeetingUtils.extractCode(val);
-                  if (code.length >= 9) {
-                    context.push('/pre-join/$code');
-                  }
-                },
-              ),
-            ],
+    return GlassCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          MizdahTextField(
+            controller: _controller,
+            hintText: 'abc-defg-hij',
+            prefixIcon: Icons.link_rounded,
+            onSubmitted: (_) => _join(),
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          MizdahButton(
+            label: 'Join',
+            onTap: _join,
+            isFullWidth: true,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -613,40 +628,77 @@ final schedulesProvider = FutureProvider<List<dynamic>>((ref) async {
   final repo = ref.watch(schedulingRepositoryProvider);
   return repo.getUserSchedules(authState.user!.id);
 });
+
+final googleCalendarServiceProvider = Provider((ref) => GoogleCalendarService());
 class _NewMeetingOptions extends StatelessWidget {
   final WidgetRef ref;
   const _NewMeetingOptions({required this.ref});
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
-      radius: 32,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? MizdahTheme.darkSurface : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 20,
+            spreadRadius: 5,
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Drag Handle
           Container(
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
+              color: isDark ? Colors.white24 : Colors.black12,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           const SizedBox(height: 24),
+          
+          const Text(
+            'Create Meeting',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+
           _OptionTile(
             icon: Icons.link_rounded,
             title: 'Create a meeting for later',
+            subtitle: 'Get a link you can share with others',
+            color: Colors.blue,
             onTap: () => _createMeeting(context, 'Share'),
           ),
+          const SizedBox(height: 12),
           _OptionTile(
             icon: Icons.video_call_rounded,
             title: 'Start an instant meeting',
-            onTap: () => _createMeeting(context, 'Join'),
+            subtitle: 'Join and invite people right now',
+            color: Colors.green,
+            onTap: () {
+              Navigator.pop(context);
+              context.push('/pre-join');
+            },
           ),
+          const SizedBox(height: 12),
           _OptionTile(
             icon: Icons.calendar_today_rounded,
             title: 'Schedule in Google Calendar',
+            subtitle: 'Plan a meeting in your calendar',
+            color: Colors.orange,
             onTap: () => _scheduleMeeting(context),
           ),
         ],
@@ -658,8 +710,6 @@ class _NewMeetingOptions extends StatelessWidget {
     final repository = ref.read(mizdahRepositoryProvider);
     final code = MeetingUtils.generateMeetingCode();
     
-    Navigator.pop(context); // Close sheet
-
     try {
       final meeting = await repository.createMeeting(
         title: 'Meeting', 
@@ -668,18 +718,25 @@ class _NewMeetingOptions extends StatelessWidget {
       );
       
       if (context.mounted) {
+        Navigator.pop(context); // Close sheet
+        
+        // Refresh data providers to show the latest meeting
+        ref.invalidate(callHistoryProvider);
+        ref.invalidate(schedulesProvider);
+
         if (mode == 'Share') {
-          showModalBottomSheet(
-            context: context,
-            backgroundColor: Colors.transparent,
-            builder: (context) => _ShareLinkModal(meeting: meeting),
-          );
-        } else {
-          context.push('/pre-join/${meeting.code}');
+          if (context.mounted) {
+            showModalBottomSheet(
+              context: context,
+              backgroundColor: Colors.transparent,
+              builder: (context) => _ShareLinkModal(meeting: meeting),
+            );
+          }
         }
       }
     } catch (e) {
       if (context.mounted) {
+        Navigator.pop(context); // Close sheet on error too
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to create meeting')));
       }
     }
@@ -687,25 +744,46 @@ class _NewMeetingOptions extends StatelessWidget {
 
   Future<void> _scheduleMeeting(BuildContext context) async {
     final repository = ref.read(mizdahRepositoryProvider);
+    final calendarService = ref.read(googleCalendarServiceProvider);
     final code = MeetingUtils.generateMeetingCode();
     
     Navigator.pop(context); // Close sheet
 
     try {
+      print("📅 1. Creating meeting in Mizdah backend...");
       await repository.createMeeting(
-        title: 'Scheduled Meeting', 
+        title: 'Mizdah Meeting', 
         dateTime: DateTime.now().add(const Duration(hours: 1)),
         code: code,
       );
       
-      final url = MeetingUtils.generateCalendarUrl(code);
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
+      print("📅 2. Mizdah meeting created. Starting Google Calendar sync...");
+      final link = MeetingUtils.generateMeetingLink(code);
+      final htmlLink = await calendarService.scheduleMeeting(
+        title: 'Mizdah Meeting',
+        description: 'Join the video call: $link',
+        startTime: DateTime.now().add(const Duration(hours: 1)),
+      );
+
+      print("📅 3. Google Calendar result: $htmlLink");
+
+      // Refresh data providers
+      ref.invalidate(schedulesProvider);
+      ref.invalidate(callHistoryProvider);
+      
+      if (htmlLink != null) {
+        final uri = Uri.parse(htmlLink);
+        print("📅 4. Launching Calendar URL: $htmlLink");
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        if (context.mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Meeting created, but failed to sync with Google Calendar')));
+        }
       }
     } catch (e) {
+      print("📅 ERROR during scheduling: $e");
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to schedule meeting')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to schedule meeting: $e')));
       }
     }
   }
@@ -714,17 +792,78 @@ class _NewMeetingOptions extends StatelessWidget {
 class _OptionTile extends StatelessWidget {
   final IconData icon;
   final String title;
+  final String subtitle;
+  final Color color;
   final VoidCallback onTap;
 
-  const _OptionTile({required this.icon, required this.title, required this.onTap});
+  const _OptionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: MizdahTheme.primaryBlue),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
-      onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.02),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: isDark ? Colors.white70 : Colors.black54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 14,
+                color: isDark ? Colors.white24 : Colors.black26,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -735,59 +874,124 @@ class _ShareLinkModal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
-      radius: 32,
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text(
-            'Meeting link ready',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Share this link with participants you want in the meeting.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey[400], fontSize: 13),
-          ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? MizdahTheme.darkSurface : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag Handle
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white24 : Colors.black12,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-            child: Row(
-              children: [
-                Expanded(child: Text(meeting.code, style: const TextStyle(fontWeight: FontWeight.w500))),
-                IconButton(
-                  icon: const Icon(Icons.copy_rounded, size: 20),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: meeting.code));
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied!')));
-                  },
+            const SizedBox(height: 24),
+            
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.link_rounded, color: MizdahTheme.primaryBlue, size: 36),
+            ),
+            const SizedBox(height: 20),
+            
+            const Text(
+              'Meeting link ready',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Share this link with participants you want in the meeting.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isDark ? Colors.white70 : Colors.black54,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 24),
+            
+            // Link Display Box
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.1),
                 ),
-              ],
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      MeetingUtils.generateMeetingLink(meeting.code),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: MeetingUtils.generateMeetingLink(meeting.code)));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Link copied to clipboard')),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.copy_rounded, size: 18, color: MizdahTheme.primaryBlue),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 32),
-          MizdahButton(
-            label: 'Share Invite',
-            icon: Icons.share_rounded,
-            onTap: () {},
-          ),
-          const SizedBox(height: 12),
-          MizdahButton(
-            label: 'Join Meeting',
-            backgroundColor: Colors.white.withValues(alpha: 0.05),
-            onTap: () {
-              Navigator.pop(context);
-              context.push('/pre-join/${meeting.code}');
-            },
-          ),
-        ],
+            const SizedBox(height: 24),
+            
+            MizdahButton(
+              label: 'Share Invite',
+              icon: Icons.share_rounded,
+              onTap: () {
+                final link = MeetingUtils.generateMeetingLink(meeting.code);
+                Share.share(
+                  'Join my Mizdah meeting: $link',
+                  subject: 'Mizdah Meeting Invite',
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            MizdahButton(
+              label: 'Join Meeting',
+              backgroundColor: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.05),
+              onTap: () {
+                Navigator.pop(context);
+                context.push('/pre-join/${meeting.code}');
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

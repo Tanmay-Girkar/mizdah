@@ -1,0 +1,28 @@
+Mizdah Flutter Identifier Consistency Fix
+-----------------------------------------
+
+Issue:
+Mobile and Web participants were ending up in different signaling rooms because:
+1. Mobile was sometimes using UUID (e.g., 6a4c1cbe...) for room names.
+2. Web was using Meeting Code (e.g., inmzqvcwzs).
+3. Signaling server was not normalizing these IDs.
+
+Resolution:
+We have standardized the Flutter app to use the following logic:
+
+1. REST API Calls (Join/Leave/Participants/Chat):
+   - USE: The meeting UUID (e.g., 017965c7-5655-44db-9f9a-99f77dc954a4).
+   - WHY: This is the primary key in the database and ensures persistence across sessions.
+
+2. Signaling Socket.IO (join-meeting):
+   - USE: The HYPHENLESS Meeting Code (e.g., inmzqvcwzs).
+   - WHY: This matches the room names used by the Web application (which derives them from the URL path) and ensures all participants meet in the same signaling room.
+
+Code Implementation in MeetingNotifier:
+- Fetch meeting metadata first using getMeetingInfo().
+- Extract 'id' for API logic.
+- Extract 'code' (sanitized) for Socket.IO 'join-meeting' emit.
+- Pass sanitized code as the first argument in the joinData array.
+
+Status:
+The Flutter app has been updated to follow this pattern. If participants still cannot see each other, ensure the signaling server is normalizing the 'join-meeting' room name to lowercase and stripping any remaining special characters.

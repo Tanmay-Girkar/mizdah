@@ -274,12 +274,15 @@ class _ThemeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RadioListTile<ThemeMode>(
+    return ListTile(
       title: Text(title, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-      value: mode,
-      groupValue: current,
-      activeColor: MizdahTheme.primaryBlue,
-      onChanged: (val) => ref.read(themeProvider.notifier).setTheme(val!),
+      leading: Radio<ThemeMode>(
+        value: mode,
+        groupValue: current,
+        activeColor: MizdahTheme.primaryBlue,
+        onChanged: (val) => ref.read(themeProvider.notifier).setTheme(val!),
+      ),
+      onTap: () => ref.read(themeProvider.notifier).setTheme(mode),
     );
   }
 }
@@ -376,12 +379,15 @@ class _NotificationSettingsState extends State<_NotificationSettings> {
         Text('Notifications', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 16),
         GlassCard(
-          child: SwitchListTile.adaptive(
+          child: ListTile(
             title: Text('Push Notifications', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
             subtitle: Text('Get notified about upcoming meetings', style: TextStyle(color: isDark ? Colors.white70 : Colors.black54)),
-            value: _pushEnabled,
-            activeColor: MizdahTheme.primaryBlue,
-            onChanged: (v) => setState(() => _pushEnabled = v),
+            trailing: Switch.adaptive(
+              value: _pushEnabled,
+              activeThumbColor: Colors.white,
+              activeTrackColor: MizdahTheme.primaryBlue,
+              onChanged: (v) => setState(() => _pushEnabled = v),
+            ),
           ),
         ),
       ],

@@ -11,14 +11,19 @@ class MeetingUtils {
 
   /// Extracts a meeting code from a URL or returns the code if it's already a code.
   static String extractCode(String input) {
-    if (input.contains('/')) {
-      final uri = Uri.tryParse(input);
-      if (uri != null && uri.pathSegments.isNotEmpty) {
-        return uri.pathSegments.last;
-      }
-    }
-    // Remove dashes and normalize
-    return input.replaceAll('-', '').trim().toLowerCase();
+    if (input.isEmpty) return '';
+    
+    // Split by '/' and take the last non-empty segment to handle various URL formats
+    final segments = input.split('/');
+    final code = segments.lastWhere((s) => s.isNotEmpty, orElse: () => input);
+    
+    return code.trim().toLowerCase();
+  }
+
+  /// Generates a proper Mizdah meeting link
+  static String generateMeetingLink(String code) {
+    final cleanCode = extractCode(code);
+    return 'https://mizdah.ogoul.cloud/meeting/$cleanCode';
   }
 
   /// Generates a Google Calendar TEMPLATE URL for scheduling.

@@ -1,3 +1,5 @@
+import '../../core/utils/meeting_utils.dart';
+
 class User {
   final String id;
   final String email;
@@ -74,8 +76,8 @@ class Meeting {
     return Meeting(
       id: json['id']?.toString() ?? json['dbId']?.toString() ?? json['meetingId']?.toString() ?? '',
       title: json['title'] ?? json['meeting_title'] ?? json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? 'Untitled Meeting',
-      dateTime: DateTime.tryParse(json['created_at'] ?? json['createdAt'] ?? '') ?? DateTime.now(),
-      code: (json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString().replaceAll('-', ''),
+      dateTime: (DateTime.tryParse(json['created_at'] ?? json['createdAt'] ?? '') ?? DateTime.now()).toLocal(),
+      code: MeetingUtils.extractCode((json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString()),
       participants: (json['participants'] as List?)?.map((e) => e.toString()).toList() ?? [],
       hostId: json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString(),
     );
@@ -149,7 +151,7 @@ class CallHistory {
     return CallHistory(
       id: json['meeting_id']?.toString() ?? json['meetingId']?.toString() ?? json['id']?.toString() ?? '',
       title: title,
-      timestamp: DateTime.tryParse(json['joined_at'] ?? json['joinedAt'] ?? json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now(),
+      timestamp: (DateTime.tryParse(json['joined_at'] ?? json['joinedAt'] ?? json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now()).toLocal(),
       duration: json['duration'] != null ? Duration(seconds: int.tryParse(json['duration'].toString()) ?? 0) : Duration.zero,
       isMissed: false,
       meetingCode: meetingCode,
@@ -181,7 +183,7 @@ class NotificationModel {
       title: json['title'] ?? 'Notification',
       body: json['content'] ?? json['body'] ?? '',
       type: json['type'] ?? 'info',
-      createdAt: DateTime.tryParse(json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now(),
+      createdAt: (DateTime.tryParse(json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now()).toLocal(),
       isRead: json['isRead'] ?? json['is_read'] ?? false,
     );
   }

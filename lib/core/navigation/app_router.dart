@@ -35,8 +35,12 @@ final appRouter = GoRouter(
     GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
     GoRoute(path: '/privacy', builder: (context, state) => const PrivacyScreen()),
     GoRoute(
+      path: '/pre-join',
+      builder: (context, state) => const PreJoinScreen(),
+    ),
+    GoRoute(
       path: '/pre-join/:id',
-      builder: (context, state) => PreJoinScreen(meetingId: state.pathParameters['id']!),
+      builder: (context, state) => PreJoinScreen(meetingId: state.pathParameters['id']),
     ),
     GoRoute(
       path: '/meeting/:id',

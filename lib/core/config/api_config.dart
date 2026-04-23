@@ -11,7 +11,9 @@ class ApiConfig {
 
   static const String baseUrl = 'https://mizdah-backend.ogoul.cloud';
   static const String signalingUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String signalingPath = '/signaling-fresh';
   static const String chatSocketUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String mediaPath = '/media-fresh';
 
   // API Endpoints
   static const String authSignup = '$baseUrl/api/auth/signup';
@@ -20,7 +22,7 @@ class ApiConfig {
   static const String authUpdate = '$baseUrl/api/auth/update';
 
   static const String createMeeting = '$baseUrl/api/meetings/create';
-  static const String getMeeting = '$baseUrl/api/meetings'; // + /{meetingCode}
+  static const String getMeeting = '$baseUrl/api/meetings'; 
   static const String userMeetings = '$baseUrl/api/meetings/user'; // + /{userId}
   
   static const String participantJoin = '$baseUrl/api/participant/join';

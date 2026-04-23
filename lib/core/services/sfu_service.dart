@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:mediasoup_client_flutter/mediasoup_client_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
@@ -6,6 +7,7 @@ class SFUService {
   Transport? _sendTransport;
   Transport? _recvTransport;
   final socket_io.Socket socket;
+  final Map<String, Completer<Consumer>> _pendingConsumers = {};
 
   SFUService({required this.socket});
 
@@ -21,19 +23,14 @@ class SFUService {
     );
 
     _sendTransport!.on('connect', (Map<String, dynamic> data) async {
-      // Emit 'transport-connect' to signaling server
       socket.emit('transport-connect', {
         'dtlsParameters': data['dtlsParameters'],
         'transportId': _sendTransport!.id,
       });
-      // The callback expects nothing on completion usually
       data['callback']?.call();
     });
 
     _sendTransport!.on('produce', (Map<String, dynamic> data) async {
-      // We expect the server to emit back an ID or use ACKs.
-      // With raw socket.io without ack wrappers, we typically use a Completer 
-      // but assuming server responds to 'transport-produce' or uses a callback:
       socket.emitWithAck('transport-produce', {
         'transportId': _sendTransport!.id,
         'kind': data['kind'],
@@ -52,7 +49,11 @@ class SFUService {
   Future<void> createRecvTransport(Map<String, dynamic> transportOptions) async {
     _recvTransport = _device.createRecvTransportFromMap(
       transportOptions,
-      consumerCallback: _handleConsume,
+      consumerCallback: (Consumer consumer, [Function? accept]) {
+        final completer = _pendingConsumers.remove(consumer.id);
+        completer?.complete(consumer);
+        accept?.call();
+      },
     );
 
     _recvTransport!.on('connect', (Map<String, dynamic> data) {
@@ -64,7 +65,7 @@ class SFUService {
     });
   }
 
-  Future<Producer?> produce(MediaStreamTrack track, MediaStream stream) async {
+  Future<void> produce(MediaStreamTrack track, MediaStream stream) async {
     if (_sendTransport == null) throw Exception("Send transport not created");
     _sendTransport!.produce(
       track: track,
@@ -72,19 +73,42 @@ class SFUService {
       source: 'webcam',
       appData: {'mediaType': track.kind},
     );
-    return null;
   }
 
-  Future<Consumer?> consume(Map<String, dynamic> consumerOptions) async {
+  Future<void> consume(Map<String, dynamic> consumerOptions, Function(MediaStreamTrack track) onTrack) async {
     if (_recvTransport == null) throw Exception("Recv transport not created");
-    _recvTransport!.consume(
-      id: consumerOptions['id'],
-      producerId: consumerOptions['producerId'],
-      kind: RTCRtpMediaTypeExtension.fromString(consumerOptions['kind']),
-      peerId: consumerOptions['peerId'] ?? 'unknown',
-      rtpParameters: RtpParameters.fromMap(consumerOptions['rtpParameters']),
-    );
-    return null;
+    
+    // 1. Request server to create a consumer
+    socket.emitWithAck('transport-consume', {
+      'transportId': _recvTransport!.id,
+      'producerId': consumerOptions['producerId'],
+      'rtpCapabilities': _device.rtpCapabilities.toMap(),
+    }, ack: (response) async {
+      if (response == null) return;
+      
+      final String consumerId = response['id'];
+      final completer = Completer<Consumer>();
+      _pendingConsumers[consumerId] = completer;
+
+      // 2. Trigger local consumption
+      _recvTransport!.consume(
+        id: consumerId,
+        producerId: response['producerId'],
+        kind: RTCRtpMediaTypeExtension.fromString(response['kind']),
+        rtpParameters: RtpParameters.fromMap(response['rtpParameters']),
+        peerId: response['peerId'] ?? 'remote',
+        appData: response['appData'] ?? {},
+      );
+      
+      // 3. Wait for the consumer to be created via callback
+      final consumer = await completer.future;
+      
+      // 4. Notify UI of new track
+      onTrack(consumer.track);
+      
+      // 5. Resume consumer on server
+      socket.emit('resume-consumer', {'consumerId': consumer.id});
+    });
   }
 
   dynamic _handleProduce(Producer producer) {
