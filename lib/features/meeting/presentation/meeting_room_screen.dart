@@ -142,7 +142,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               ),
 
               // Join Requests Notification
-              if (meetingState.hostId == meetingState.userId && meetingState.waitingParticipants.isNotEmpty)
+              if (meetingState.isHost && meetingState.waitingParticipants.isNotEmpty)
                 Positioned(
                   top: 80,
                   left: 16,
