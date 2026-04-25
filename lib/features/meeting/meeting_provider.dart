@@ -190,6 +190,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       hostId: hostId,
       isHost: hostMatch,
     );
+    _log('Local host match: $hostMatch (hostId=$hostId, userId=$userId)');
+
+    // If we're locally the host, start REST polling for waiting room
+    // immediately. The signaling server may or may not push
+    // `request-to-join` (auth/edge cases), so polling is the reliable path.
+    if (hostMatch) {
+      _log('🛎  Starting waiting-room polling (local host match)');
+      _startWaitingListPolling(cleanCode);
+      // Kick an immediate fetch so the UI updates without waiting 5s.
+      refreshWaitingList();
+    }
 
     // 3. CRITICAL: set up local media BEFORE opening signaling socket.
     // If a peer offers immediately, our PC must already have local tracks.
@@ -306,6 +317,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       if (isHostConfirmed) {
         _startWaitingListPolling(realMeetingId);
+        refreshWaitingList();
       }
 
       // BOOTSTRAP: as the new joiner, initiate offers to every existing
@@ -793,10 +805,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   Future<void> refreshWaitingList() async {
-    final meetingId = state.meetingCode?.replaceAll('-', '');
-    if (meetingId == null) return;
-    final list = await _meetingRepository.getWaitingParticipants(meetingId);
+    // Try the original code first; the backend may key on either the
+    // raw code (e.g. `iggbofigzr`) or the stripped form. If both fail
+    // we just keep the current list.
+    final code = state.meetingCode;
+    if (code == null) return;
+    var list = await _meetingRepository.getWaitingParticipants(code);
+    if (list.isEmpty && code.contains('-')) {
+      list = await _meetingRepository.getWaitingParticipants(code.replaceAll('-', ''));
+    }
     if (mounted && !_disposed) {
+      _log('🛎  Waiting-room poll → ${list.length} participants');
       state = state.copyWith(waitingParticipants: list);
     }
   }
