@@ -401,17 +401,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         refreshWaitingList();
       }
 
-      // BOOTSTRAP: as the new joiner, initiate offers to every existing
-      // participant. This avoids the brittle "host-only initiates" rule
-      // and supports guests where host detection is unreliable.
-      for (final p in participants) {
-        if (p is! Map) continue;
-        final remoteSid = p['socketId']?.toString();
-        if (remoteSid == null || remoteSid.isEmpty) continue;
-        if (remoteSid == _socket?.id) continue;
-        _log('Bootstrapping connection to existing participant: $remoteSid');
-        await _createPeerConnection(remoteSid, isOfferer: true);
-      }
+      // We are the NEW joiner here. Per the backend protocol
+      // (TECHNICAL_DOCUMENTATION.md §5) existing participants will
+      // initiate offers to us via the `user-joined` event they receive.
+      // We simply wait for those offers — initiating from this side
+      // would cause SDP "glare" (both peers offering simultaneously).
     });
 
     _socket?.on('request-to-join', (data) {
@@ -443,7 +437,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       state = state.copyWith(waitingParticipants: waitingList);
     });
 
-    _socket?.on('user-joined', (data) {
+    _socket?.on('user-joined', (data) async {
       _log('👋 user-joined: $data');
       if (!mounted || _disposed) return;
 
@@ -464,9 +458,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         state = state.copyWith(participants: [...state.participants, newParticipant]);
       }
 
-      // We do NOT initiate here. The new joiner is responsible for offering
-      // to all existing participants (see join-confirmation handler). This
-      // prevents glare (both sides offering simultaneously).
+      // We're an EXISTING participant; the joiner is the one we need
+      // to reach. Per the backend protocol we initiate the offer.
+      // (TECHNICAL_DOCUMENTATION.md §5: H -> S: emit offer to P)
+      _log('Initiating offer to new participant $remoteSid');
+      await _createPeerConnection(remoteSid, isOfferer: true);
     });
 
     _socket?.on('user-left', (data) {
