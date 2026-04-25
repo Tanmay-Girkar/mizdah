@@ -137,6 +137,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
   final Map<String, MediaStream?> _remoteStreams = {};
 
+  // Cross-instance handoff for the live camera stream. The pre-join
+  // screen stages the running stream here right before navigation; the
+  // meeting room's joinMeeting picks it up so the camera doesn't
+  // close-and-reopen. We can't hand it through a provider directly
+  // because `ref.read(...notifier)` doesn't establish a watcher and
+  // autoDispose can fire between `ref.read` and `await`.
+  static MediaStream? _stagedLocalStream;
+  static void stageLocalStream(MediaStream stream) {
+    _stagedLocalStream = stream;
+  }
+
   // Completes once the local RTCVideoRenderer is initialised. Anything
   // that touches `state.localRenderer.srcObject` MUST await this — the
   // first Start Now click was racing the constructor's async init and
@@ -232,7 +243,18 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     // 3. CRITICAL: set up local media BEFORE opening signaling socket.
     // If a peer offers immediately, our PC must already have local tracks.
-    if (_localStream == null) {
+    // First, see if the pre-join screen staged a live stream — if so we
+    // adopt it directly and skip getUserMedia (avoids camera flicker).
+    if (_localStream == null && _stagedLocalStream != null) {
+      _log('Adopting staged local stream from pre-join');
+      _localStream = _stagedLocalStream;
+      _stagedLocalStream = null;
+      await _rendererReady;
+      state.localRenderer.srcObject = _localStream;
+      if (mounted && !_disposed) {
+        state = state.copyWith(isCameraOn: video, isMicOn: audio);
+      }
+    } else if (_localStream == null) {
       _log('Setting up local media (video=$video audio=$audio)');
       await _setupMedia(video: video, audio: audio);
     } else {
@@ -885,23 +907,30 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   Future<void> refreshWaitingList() async {
+    if (!mounted || _disposed) return;
     final code = state.meetingCode;
     if (code == null) return;
     var list = await _meetingRepository.getWaitingParticipants(code);
+    if (!mounted || _disposed) return;
     if (list == null && code.contains('-')) {
       list = await _meetingRepository.getWaitingParticipants(code.replaceAll('-', ''));
     }
+    if (!mounted || _disposed) return;
     if (list == null) {
-      // Backend has no REST waiting-room endpoint. Stop polling and
-      // rely entirely on socket `request-to-join` / `waiting-list-update`.
       _log('🛎  Waiting-room REST unavailable — disabling poll, using sockets only');
       _waitingListTimer?.cancel();
       _waitingListTimer = null;
       return;
     }
-    if (mounted && !_disposed) {
-      _log('🛎  Waiting-room poll → ${list.length} participants');
+    _log('🛎  Waiting-room poll → ${list.length} participants');
+    // Wrap the assignment: a Riverpod consumer of this provider may have
+    // unmounted between the guard above and the synchronous listener
+    // notification below (e.g. during navigation). Disposed/defunct
+    // listeners would otherwise crash the runtime.
+    try {
       state = state.copyWith(waitingParticipants: list);
+    } catch (e) {
+      _log('refreshWaitingList: state set skipped ($e)');
     }
   }
 

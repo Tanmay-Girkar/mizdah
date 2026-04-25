@@ -121,18 +121,18 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
 
       if (!mounted) return;
       // Hand the already-running camera over to the in-meeting
-      // provider so we don't close-and-reopen it during navigation.
+      // provider via a static stage. We can't write into the new
+      // provider directly — `ref.read(...notifier)` doesn't establish
+      // a watcher, so its autoDispose can fire while we await and the
+      // assignment then throws "Bad state: ... after dispose was called".
       final previewKey = widget.meetingId ?? '';
       final previewNotifier =
           ref.read(meetingProvider(previewKey).notifier);
       final liveStream = previewNotifier.releaseLocalStream();
       if (liveStream != null) {
-        await ref
-            .read(meetingProvider(finalMeetingId).notifier)
-            .adoptLocalStream(liveStream);
+        MeetingNotifier.stageLocalStream(liveStream);
       }
 
-      if (!mounted) return;
       context.pushReplacement(
         Uri(
           path: '/meeting/$finalMeetingId',
