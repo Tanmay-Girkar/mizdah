@@ -1,11 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../meeting_provider.dart';
 import '../../auth/auth_provider.dart';
-import '../../../core/widgets/control_icon_button.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/mizdah_button.dart';
@@ -662,77 +663,156 @@ class _SolitaryHeroView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final link = MeetingUtils.generateMeetingLink(meetingId);
+    final textPrimary = isDark ? Colors.white : Colors.black87;
+    final textSecondary =
+        isDark ? Colors.white.withValues(alpha: 0.6) : Colors.black54;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "You're the only one here",
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.normal,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            "Share this meeting link with others that you want in the meeting",
-            style: TextStyle(
-              fontSize: 14,
-              color: isDark ? Colors.grey[300] : Colors.grey[600],
-            ),
-          ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    MeetingUtils.generateMeetingLink(meetingId),
-                    style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color,
-                      fontSize: 13,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Decorative crest — matches Google Meet's "alone" hint
+              Container(
+                width: 84,
+                height: 84,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: MizdahTheme.primaryBlue.withValues(alpha: 0.12),
+                  border: Border.all(
+                    color: MizdahTheme.primaryBlue.withValues(alpha: 0.25),
+                    width: 1.5,
                   ),
                 ),
-                GestureDetector(
+                child: const Icon(
+                  Icons.people_alt_rounded,
+                  size: 38,
+                  color: MizdahTheme.primaryBlue,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                "You're the only one here",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.3,
+                  color: textPrimary,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Share this meeting link with others you want in the meeting.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.5,
+                  color: textSecondary,
+                ),
+              ),
+              const SizedBox(height: 28),
+
+              // Link card with copy
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: link));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Meeting link copied'),
+                      behavior: SnackBarBehavior.floating,
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.05)
+                        : const Color(0xFFF1F3F4),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.07)
+                          : Colors.black.withValues(alpha: 0.05),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: MizdahTheme.primaryBlue.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.link_rounded,
+                            size: 18, color: MizdahTheme.primaryBlue),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Meeting link',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: textSecondary,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              link,
+                              style: TextStyle(
+                                color: textPrimary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(
+                        Icons.copy_rounded,
+                        size: 18,
+                        color: textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Primary CTA — Share invite
+              SizedBox(
+                width: double.infinity,
+                child: MizdahButton(
+                  label: 'Share invite',
+                  icon: Icons.person_add_alt_1_rounded,
                   onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Meeting link copied')),
+                    SharePlus.instance.share(
+                      ShareParams(
+                        text:
+                            'Join my Mizdah meeting using this link: $link',
+                      ),
                     );
                   },
-                  child: Icon(
-                    Icons.copy_outlined,
-                    color: Theme.of(context).iconTheme.color,
-                  ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-          MizdahButton(
-            label: 'Share invite',
-            icon: Icons.share_outlined,
-            isFullWidth: false,
-            onTap: () {
-              SharePlus.instance.share(
-                ShareParams(
-                  text: 'Join my Mizdah meeting using this link: ${MeetingUtils.generateMeetingLink(meetingId)}',
-                ),
-              );
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -753,31 +833,75 @@ class _SelfViewCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 120,
-      height: 180,
+      height: 168,
       decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white10),
+        color: const Color(0xFF1C1F22),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.45),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          transitionBuilder: (child, animation) =>
-              FadeTransition(opacity: animation, child: child),
-          child: isCameraOn
-              ? RepaintBoundary(
-                  key: const ValueKey('self-video'),
-                  child: RTCVideoView(
-                    renderer,
-                    mirror: true,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
-                )
-              : const KeyedSubtree(
-                  key: ValueKey('self-avatar'),
-                  child: _AvatarPlaceholder(name: 'You', size: 56),
+        borderRadius: BorderRadius.circular(18),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              transitionBuilder: (child, animation) =>
+                  FadeTransition(opacity: animation, child: child),
+              child: isCameraOn
+                  ? RepaintBoundary(
+                      key: const ValueKey('self-video'),
+                      child: RTCVideoView(
+                        renderer,
+                        mirror: true,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
+                    )
+                  : const KeyedSubtree(
+                      key: ValueKey('self-avatar'),
+                      child: _AvatarPlaceholder(name: 'You', size: 48),
+                    ),
+            ),
+
+            // Name + mic-off badge bottom-left, like Google Meet
+            Positioned(
+              left: 8,
+              bottom: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
                 ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!isMicOn) ...[
+                      const Icon(Icons.mic_off_rounded,
+                          size: 12, color: Colors.redAccent),
+                      const SizedBox(width: 4),
+                    ],
+                    const Text(
+                      'You',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -848,7 +972,7 @@ class _MeetingTopBar extends StatelessWidget {
   final VoidCallback onSwitchCamera;
 
   const _MeetingTopBar({
-    required this.meetingId, 
+    required this.meetingId,
     required this.isRecording,
     required this.isSpeakerphoneOn,
     required this.onToggleSpeakerphone,
@@ -859,65 +983,73 @@ class _MeetingTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final iconColor = isDark ? Colors.white : Colors.black87;
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.55)
+        : Colors.black.withValues(alpha: 0.5);
 
-    return Container(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       child: Row(
         children: [
           _TopBarIconButton(
-            icon: Icons.arrow_back,
+            icon: Icons.arrow_back_rounded,
             onTap: () => context.pop(),
           ),
-          const SizedBox(width: 8),
-          GlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            radius: 20,
-            opacity: isDark ? 0.1 : 0.05,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.lock_rounded, color: isDark ? MizdahTheme.primaryBlue : Colors.black54, size: 14),
-                const SizedBox(width: 8),
-                Text(
-                  meetingId,
-                  style: TextStyle(
-                    color: iconColor,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                Icon(Icons.keyboard_arrow_down, color: iconColor.withValues(alpha: 0.5), size: 18),
-              ],
-            ),
-          ),
-          if (isRecording) ...[
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
-              ),
+          const SizedBox(width: 10),
+
+          // Meeting code chip — encryption icon, code, dropdown affordance
+          Flexible(
+            child: GlassCard(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              radius: 22,
+              opacity: isDark ? 0.08 : 0.05,
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.circle, color: Colors.red, size: 8),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'REC',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: MizdahTheme.primaryBlue.withValues(alpha: 0.18),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.lock_rounded,
+                        color: MizdahTheme.primaryBlue, size: 12),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      meetingId,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: iconColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.keyboard_arrow_down_rounded,
+                      color: mutedColor, size: 18),
                 ],
               ),
             ),
-          ],
+          ),
+
+          const SizedBox(width: 8),
+
+          // Live meeting timer + optional REC pill
+          _LiveMeetingTimer(
+            color: mutedColor,
+            isRecording: isRecording,
+          ),
+
           const Spacer(),
+
           _TopBarIconButton(
-            icon: isSpeakerphoneOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+            icon: isSpeakerphoneOn
+                ? Icons.volume_up_rounded
+                : Icons.volume_off_rounded,
             onTap: onToggleSpeakerphone,
           ),
           const SizedBox(width: 8),
@@ -927,6 +1059,93 @@ class _MeetingTopBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Ticking meeting clock displayed in the top bar. Uses a private
+/// timer + setState (single owner) so the rest of the screen never
+/// rebuilds because the seconds advanced.
+class _LiveMeetingTimer extends StatefulWidget {
+  final Color color;
+  final bool isRecording;
+  const _LiveMeetingTimer({required this.color, required this.isRecording});
+
+  @override
+  State<_LiveMeetingTimer> createState() => _LiveMeetingTimerState();
+}
+
+class _LiveMeetingTimerState extends State<_LiveMeetingTimer> {
+  late final DateTime _start;
+  Timer? _ticker;
+  Duration _elapsed = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = DateTime.now();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _elapsed = DateTime.now().difference(_start));
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  String _format(Duration d) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    final h = d.inHours;
+    final m = two(d.inMinutes % 60);
+    final s = two(d.inSeconds % 60);
+    return h > 0 ? '$h:$m:$s' : '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _format(_elapsed),
+          style: TextStyle(
+            color: widget.color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        if (widget.isRecording) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Icon(Icons.fiber_manual_record, color: Colors.red, size: 8),
+                SizedBox(width: 4),
+                Text(
+                  'REC',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -975,77 +1194,162 @@ class _InCallControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: GlassCard(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-        radius: 32,
-        opacity: isDark ? 0.05 : 0.08,
-        child: Row(
-          mainAxisSize: MainAxisSize.max,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            ControlIconButton(
-              icon: isCameraOn ? Icons.videocam : Icons.videocam_off,
-              isActive: !isCameraOn,
-              activeColor: Colors.red,
-              onTap: onCameraToggle,
-              size: 48,
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.black.withValues(alpha: 0.55)
+                : Colors.white.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(40),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.05),
             ),
-            ControlIconButton(
-              icon: isMicOn ? Icons.mic : Icons.mic_off,
-              isActive: !isMicOn,
-              activeColor: Colors.red,
-              onTap: onMicToggle,
-              size: 48,
-            ),
-            ControlIconButton(
-              icon: Icons.sentiment_satisfied_alt_outlined,
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Reactions coming soon')),
-                );
-              },
-              size: 48,
-            ),
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                ControlIconButton(
-                  icon: Icons.more_vert,
-                  onTap: onOptionsTap,
-                  size: 48,
-                ),
-                if (hasWaitingParticipants)
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(
-                        minWidth: 12,
-                        minHeight: 12,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.12),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _MeetCircleButton(
+                icon: isCameraOn
+                    ? Icons.videocam_rounded
+                    : Icons.videocam_off_rounded,
+                tooltip: isCameraOn ? 'Turn camera off' : 'Turn camera on',
+                isOff: !isCameraOn,
+                onTap: onCameraToggle,
+              ),
+              _MeetCircleButton(
+                icon: isMicOn ? Icons.mic_rounded : Icons.mic_off_rounded,
+                tooltip: isMicOn ? 'Mute' : 'Unmute',
+                isOff: !isMicOn,
+                onTap: onMicToggle,
+              ),
+              _MeetCircleButton(
+                icon: Icons.sentiment_satisfied_alt_rounded,
+                tooltip: 'Reactions',
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Reactions coming soon'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+              ),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _MeetCircleButton(
+                    icon: Icons.more_vert_rounded,
+                    tooltip: 'More options',
+                    onTap: onOptionsTap,
+                  ),
+                  if (hasWaitingParticipants)
+                    Positioned(
+                      top: 2,
+                      right: 2,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isDark
+                                ? const Color(0xFF0F172A)
+                                : Colors.white,
+                            width: 2,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-            ControlIconButton(
-              icon: Icons.call_end,
-              backgroundColor: Colors.red,
-              activeColor: Colors.white,
-              inactiveColor: Colors.white,
-              onTap: onHangup,
-              size: 64,
-            ),
-          ],
+                ],
+              ),
+              _MeetCircleButton(
+                icon: Icons.call_end_rounded,
+                tooltip: 'Leave call',
+                onTap: onHangup,
+                background: const Color(0xFFE53935),
+                iconColor: Colors.white,
+                size: 60,
+                iconSize: 26,
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+}
+
+/// A single circular control button matching Google Meet's mobile UI:
+///  - "on" state: subtle dark circle, white icon
+///  - "off" state: white-ish circle, dark icon (so it reads as inverted)
+///  - destructive: solid red circle, white icon
+class _MeetCircleButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? tooltip;
+  final bool isOff;
+  final Color? background;
+  final Color? iconColor;
+  final double size;
+  final double iconSize;
+
+  const _MeetCircleButton({
+    required this.icon,
+    required this.onTap,
+    this.tooltip,
+    this.isOff = false,
+    this.background,
+    this.iconColor,
+    this.size = 48,
+    this.iconSize = 22,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final Color bg = background ??
+        (isOff
+            ? Colors.white
+            : (isDark
+                ? Colors.white.withValues(alpha: 0.10)
+                : Colors.black.withValues(alpha: 0.06)));
+    final Color fg = iconColor ??
+        (isOff
+            ? const Color(0xFF202124)
+            : (isDark ? Colors.white : Colors.black87));
+
+    final btn = Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        decoration: ShapeDecoration(color: bg, shape: const CircleBorder()),
+        width: size,
+        height: size,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Center(child: Icon(icon, color: fg, size: iconSize)),
+        ),
+      ),
+    );
+
+    return tooltip == null ? btn : Tooltip(message: tooltip!, child: btn);
   }
 }
 
