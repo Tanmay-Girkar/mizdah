@@ -1109,12 +1109,18 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final cameraTrackId = _localStream?.getVideoTracks().isNotEmpty == true
         ? _localStream!.getVideoTracks().first.id
         : null;
+    // While we're presenting, the video transceiver carries the
+    // screen track regardless of whether the camera is on. Telling
+    // peers `videoEnabled: false` here would make their UI flip to
+    // an avatar even though screen frames are still flowing — the
+    // user just turned the camera off, the share is unaffected.
+    final hasOutboundVideo = state.isScreenSharing || state.isCameraOn;
     final payload = {
       'meetingId': state.meetingId,
       'type': 'MEDIA_TOGGLE',
       'name': _userName,
       'audioEnabled': state.isMicOn,
-      'videoEnabled': state.isCameraOn,
+      'videoEnabled': hasOutboundVideo,
       'isSharing': state.isScreenSharing,
       'isHandRaised': false,
       'cameraVideoTrackId': cameraTrackId,
