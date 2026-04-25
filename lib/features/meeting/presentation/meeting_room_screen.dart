@@ -203,6 +203,33 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   ),
                 ),
 
+              // Incoming-message toast (sender + preview).
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 200,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (child, anim) => SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.3),
+                      end: Offset.zero,
+                    ).animate(anim),
+                    child: FadeTransition(opacity: anim, child: child),
+                  ),
+                  child: meetingState.incomingChatToast == null
+                      ? const SizedBox.shrink(key: ValueKey('chat-toast-empty'))
+                      : _ChatToast(
+                          key: ValueKey(meetingState.incomingChatToast!['at']),
+                          sender: (meetingState.incomingChatToast!['sender'] ?? '').toString(),
+                          text: (meetingState.incomingChatToast!['text'] ?? '').toString(),
+                          onTap: () => setState(() => _activePanel = 'chat'),
+                        ),
+                ),
+              ),
+
               // Join Requests Notification
               if (meetingState.isHost && meetingState.waitingParticipants.isNotEmpty)
                 Positioned(
@@ -1536,13 +1563,21 @@ class _ChatViewState extends ConsumerState<_ChatView> {
             itemCount: widget.messages.length,
             itemBuilder: (context, index) {
               final msg = widget.messages[index];
-              final isMe = msg['sender'] == 'You' || 
-                           msg['sender'] == 'Mustafa Omen' || 
-                           msg['sender'] == currentUser?.name;
-              
-              final timeStr = msg['time'] != null 
-                  ? DateFormat('h:mm a').format(DateTime.parse(msg['time']))
-                  : DateFormat('h:mm a').format(DateTime.now());
+              final senderRaw = (msg['sender'] ?? '').toString();
+              final isMe = senderRaw == 'You' ||
+                  (currentUser?.name != null &&
+                      senderRaw.trim().toLowerCase() ==
+                          currentUser!.name.trim().toLowerCase());
+
+              DateTime parsedTime;
+              try {
+                parsedTime = msg['time'] != null
+                    ? DateTime.parse(msg['time'].toString())
+                    : DateTime.now();
+              } catch (_) {
+                parsedTime = DateTime.now();
+              }
+              final timeStr = DateFormat('h:mm a').format(parsedTime);
               
               return Padding(
                 padding: const EdgeInsets.only(bottom: 16),
@@ -2292,6 +2327,84 @@ class _JoinRequestBanner extends StatelessWidget {
             onTap: onAdmit,
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chat toast — surfaces the latest incoming message over the video grid
+// ---------------------------------------------------------------------------
+
+class _ChatToast extends StatelessWidget {
+  final String sender;
+  final String text;
+  final VoidCallback onTap;
+  const _ChatToast({
+    super.key,
+    required this.sender,
+    required this.text,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: MizdahTheme.primaryBlue.withValues(alpha: 0.18),
+                child: Text(
+                  sender.isNotEmpty ? sender[0].toUpperCase() : '?',
+                  style: const TextStyle(
+                    color: MizdahTheme.primaryBlue,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      sender,
+                      style: const TextStyle(
+                        color: MizdahTheme.primaryBlue,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.chat_bubble_outline_rounded,
+                  color: Colors.white54, size: 16),
+            ],
+          ),
+        ),
       ),
     );
   }

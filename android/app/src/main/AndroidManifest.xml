@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Required for screen-share on Android 14+ : MediaProjection
+         demands a foreground service of TYPE_MEDIA_PROJECTION before
+         the user-grant intent can be consumed. Without these the
+         flutter_webrtc plugin's getDisplayMedia call throws
+         SecurityException and the app crashes. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
     
@@ -40,6 +49,19 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Foreground service for screen capture on Android 14+.
+             Starting Android 14, MediaProjection requires a running
+             foreground service of TYPE_MEDIA_PROJECTION before the
+             OS will hand over the projection token.
+             The service class is implemented in Kotlin under
+             android/app/src/main/kotlin/.../MediaProjectionFgService.kt
+             — Flutter starts/stops it via a method channel before
+             calling getDisplayMedia. -->
+        <service
+            android:name=".MediaProjectionFgService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

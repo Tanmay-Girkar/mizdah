@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel, PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -61,6 +63,10 @@ class MeetingState {
   final String? userId;
   final MeetingPhase phase;
   final List<ReactionEvent> reactions;
+  /// Most recently received message FROM ANOTHER PARTICIPANT, used to
+  /// flash a small banner over the video (Google Meet's "Mustafa: hi"
+  /// toast). Null after the toast auto-dismisses.
+  final Map<String, dynamic>? incomingChatToast;
 
   MeetingState({
     this.isConnected = false,
@@ -87,6 +93,7 @@ class MeetingState {
     this.hostAllowsChat = true,
     this.phase = MeetingPhase.idle,
     this.reactions = const [],
+    this.incomingChatToast,
   });
 
   MeetingState copyWith({
@@ -113,6 +120,8 @@ class MeetingState {
     bool? isHost,
     MeetingPhase? phase,
     List<ReactionEvent>? reactions,
+    Map<String, dynamic>? incomingChatToast,
+    bool clearChatToast = false,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -139,6 +148,9 @@ class MeetingState {
       hostAllowsChat: hostAllowsChat ?? this.hostAllowsChat,
       phase: phase ?? this.phase,
       reactions: reactions ?? this.reactions,
+      incomingChatToast: clearChatToast
+          ? null
+          : (incomingChatToast ?? this.incomingChatToast),
     );
   }
 }
@@ -530,18 +542,28 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       await _handleIceCandidate(from, candidate);
     });
 
-    // Floating-emoji reactions. Server may broadcast either name —
-    // listen on both. We add the reaction to state and auto-remove it
-    // after a few seconds via _addReaction.
+    // Floating-emoji reactions. Server may broadcast under any of
+    // these names depending on its implementation — listen on all.
     void onReaction(dynamic data) {
       if (!mounted || _disposed || data is! Map) return;
+      final senderId = (data['senderId'] ?? data['userId'])?.toString();
+      // Skip our own reaction echoing back from the server.
+      if (senderId != null && senderId == state.userId) return;
       final emoji = data['emoji']?.toString();
-      final name = data['name']?.toString() ?? 'Someone';
+      final name = data['name']?.toString() ?? data['senderName']?.toString() ?? 'Someone';
       if (emoji == null) return;
       _addReaction(emoji, name);
     }
-    _socket?.on('reaction-remote', onReaction);
-    _socket?.on('reaction', onReaction);
+    for (final ev in const [
+      'reaction-remote',
+      'reaction',
+      'reaction-broadcast',
+      'send-reaction',
+      'emoji',
+      'emoji-remote',
+    ]) {
+      _socket?.on(ev, onReaction);
+    }
 
     // Peers announce mic/camera/screen-share state changes via this
     // event. We mirror it onto the matching `participants` entry so
@@ -600,12 +622,33 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     // Skip our own messages — we already added them optimistically.
     final senderId = (msg['senderId'] ?? msg['userId'])?.toString();
     if (senderId != null && senderId == state.userId) return;
+    final text = (msg['content'] ?? msg['text'] ?? '').toString();
+    final sender = (msg['senderName'] ?? msg['sender'] ?? 'Unknown').toString();
     final formattedMsg = {
-      'text': msg['content'] ?? msg['text'] ?? '',
-      'sender': msg['senderName'] ?? msg['sender'] ?? 'Unknown',
+      'text': text,
+      'sender': sender,
       'time': msg['time'] ?? msg['createdAt'] ?? DateTime.now().toIso8601String(),
     };
-    state = state.copyWith(chatMessages: [...state.chatMessages, formattedMsg]);
+    final toast = {
+      'text': text,
+      'sender': sender,
+      'at': DateTime.now().millisecondsSinceEpoch,
+    };
+    state = state.copyWith(
+      chatMessages: [...state.chatMessages, formattedMsg],
+      incomingChatToast: toast,
+    );
+    // Auto-dismiss the toast after a few seconds.
+    Future.delayed(const Duration(seconds: 4), () {
+      if (!mounted || _disposed) return;
+      // Only clear if the same toast is still showing — a newer
+      // message should not be erased by an older delayed callback.
+      if (state.incomingChatToast?['at'] == toast['at']) {
+        try {
+          state = state.copyWith(clearChatToast: true);
+        } catch (_) {}
+      }
+    });
   }
 
   Future<RTCPeerConnection> _createPeerConnection(String remoteSocketId,
@@ -961,14 +1004,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     // 1. Socket — real-time delivery to other clients in the room.
     final socketPayload = {
       'meetingId': mid,
+      'roomId': mid,
       'userId': uid,
       'senderId': uid,
       'content': trimmed,
+      'message': trimmed,
+      'text': trimmed,
       'senderName': senderName,
+      'name': senderName,
       'createdAt': isoNow,
+      'time': isoNow,
     };
-    _socket?.emit('chat-send', socketPayload);
-    _socket?.emit('chat-message', socketPayload);
+    for (final ev in const [
+      'chat-send',
+      'chat-message',
+      'send-message',
+      'new-message',
+      'message',
+    ]) {
+      _socket?.emit(ev, socketPayload);
+    }
 
     // 2. REST — persistence so the message survives reconnects and
     // shows up in chat history later.
@@ -1008,9 +1063,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
+  static const _screenShareFg = MethodChannel('com.mizdah/screen_share_fg');
+
   Future<void> _startScreenShare() async {
     try {
       _log('🖥️  starting screen share');
+
+      // Android 14+ refuses MediaProjection unless a foreground
+      // service of TYPE_MEDIA_PROJECTION is already running. Start
+      // ours first; on iOS / web this is a no-op.
+      if (Platform.isAndroid) {
+        try {
+          await _screenShareFg.invokeMethod('start');
+        } catch (e) {
+          _log('foreground-service start failed: $e');
+        }
+      }
+
       final stream = await navigator.mediaDevices.getDisplayMedia({
         'audio': false,
         'video': true,
@@ -1058,15 +1127,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         state = state.copyWith(isScreenSharing: true);
       }
       _broadcastMediaState();
+    } on PlatformException catch (e) {
+      _log('❌ startScreenShare PlatformException: ${e.code} ${e.message}');
+      _screenStream = null;
+      _savedCameraTrack = null;
+      if (Platform.isAndroid) {
+        try {
+          await _screenShareFg.invokeMethod('stop');
+        } catch (_) {}
+      }
     } catch (e) {
       _log('❌ startScreenShare failed: $e');
       _screenStream = null;
       _savedCameraTrack = null;
+      if (Platform.isAndroid) {
+        try {
+          await _screenShareFg.invokeMethod('stop');
+        } catch (_) {}
+      }
     }
   }
 
   Future<void> _stopScreenShare() async {
     _log('🖥️  stopping screen share');
+    if (Platform.isAndroid) {
+      try {
+        await _screenShareFg.invokeMethod('stop');
+      } catch (_) {}
+    }
     try {
       _screenStream?.getTracks().forEach((t) => t.stop());
       await _screenStream?.dispose();
@@ -1098,12 +1186,24 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (state.meetingId == null) return;
     final payload = {
       'meetingId': state.meetingId,
+      'roomId': state.meetingId,
+      'senderId': state.userId,
+      'userId': state.userId,
       'emoji': emoji,
       'name': _userName ?? 'You',
+      'senderName': _userName ?? 'You',
     };
     _log('🎉 emit reaction $emoji');
-    _socket?.emit('reaction', payload);
-    _socket?.emit('reaction-remote', payload);
+    // Server might handle any of these names — emit all so we don't
+    // depend on a specific signaling implementation.
+    for (final ev in const [
+      'reaction',
+      'reaction-remote',
+      'send-reaction',
+      'emoji',
+    ]) {
+      _socket?.emit(ev, payload);
+    }
     _addReaction(emoji, _userName ?? 'You');
   }
 
