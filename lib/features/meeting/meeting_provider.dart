@@ -1078,7 +1078,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   void _loadParticipants(String meetingId) async {
     final participants = await _participantRepository.getMeetingParticipants(meetingId);
     if (mounted && !_disposed) {
-      state = state.copyWith(participants: participants);
+      // The participant service includes the current user in its list.
+      // Adding ourselves to `participants` makes the grid render a self
+      // tile (avatar "A — akbar") on top of the PIP, then snap back to
+      // the solitary hero view when join-confirmation lands with the
+      // server's authoritative list — that's the flicker the user saw.
+      final filtered = participants.where((p) {
+        if (p is! Map) return true;
+        return p['userId'] != state.userId &&
+            p['user_id'] != state.userId;
+      }).toList();
+      state = state.copyWith(participants: filtered);
     }
   }
 

@@ -368,12 +368,16 @@ class _VideoGrid extends StatelessWidget {
     final tiles = <_ParticipantTileData>[];
     for (final p in meetingState.participants) {
       if (p is! Map) continue;
+      final pUserId = (p['userId'] ?? p['user_id'])?.toString();
+      // Never render ourselves in the grid — the self-view is the PIP.
+      // Without this filter the brief window between the REST
+      // _loadParticipants response and the socket join-confirmation
+      // shows our own avatar tile, which the user saw as a flicker.
+      if (pUserId != null && pUserId == meetingState.userId) continue;
       final socketId = (p['socketId'] ?? p['userId'])?.toString();
+      if (socketId != null && socketId == meetingState.userId) continue;
       final name = (p['name'] ?? p['displayName'] ?? 'Participant').toString();
       final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
-      // `videoEnabled` from media-toggle-remote — null means we haven't
-      // heard yet, treat as enabled. When the peer turns their camera
-      // off the renderer would otherwise freeze on the last frame.
       final videoEnabled = p['videoEnabled'] != false;
       final audioEnabled = p['audioEnabled'] != false;
       tiles.add(_ParticipantTileData(
