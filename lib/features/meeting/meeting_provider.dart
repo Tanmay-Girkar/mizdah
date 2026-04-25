@@ -217,25 +217,24 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     // 4. Open signaling and chat sockets.
+    // IMPORTANT: matches the working test_socket.js / guest_test.js — those
+    // scripts pass NO auth and join the room successfully. Adding setAuth
+    // here previously caused the gateway/middleware to silently drop the
+    // join-meeting emit so the host never received `request-to-join`.
     _log('Connecting signaling socket → ${ApiConfig.signalingUrl}${ApiConfig.signalingPath}');
-    _socket = io.io(
-      ApiConfig.signalingUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .setPath(ApiConfig.signalingPath)
-          .enableAutoConnect()
-          .setAuth({'token': jwtToken})
-          .build(),
-    );
+    final signalingOpts = io.OptionBuilder()
+        .setTransports(['websocket'])
+        .setPath(ApiConfig.signalingPath)
+        .enableAutoConnect();
+    _socket = io.io(ApiConfig.signalingUrl, signalingOpts.build());
 
-    _chatSocket = io.io(
-      ApiConfig.chatSocketUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket', 'polling'])
-          .enableAutoConnect()
-          .setAuth({'token': jwtToken})
-          .build(),
-    );
+    final chatOpts = io.OptionBuilder()
+        .setTransports(['websocket', 'polling'])
+        .enableAutoConnect();
+    if (jwtToken.isNotEmpty) {
+      chatOpts.setAuth({'token': jwtToken});
+    }
+    _chatSocket = io.io(ApiConfig.chatSocketUrl, chatOpts.build());
 
     _initSocketListeners(realMeetingId, userId, name, jwtToken, !video);
 
@@ -262,8 +261,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.onAny((event, data) => _log('📡 EVENT: $event | DATA: $data'));
   }
 
-  /// Emit join in the format documented by the backend signaling service:
-  /// `[code, userId, name, isCameraOff]` (positional args).
+  /// Emit join in the format used by the working test scripts:
+  /// `socket.emit("join-meeting", code, userId, name, isCameraOff)` — passed
+  /// from Dart as a List which socket_io_client v3 spreads as variadic args.
+  /// If the server doesn't respond with `join-confirmation` within 4 s we
+  /// log loudly so the issue is visible in the device log.
   void _emitJoin(String code, String userId, String name, bool isCameraOff) {
     if (_hasJoinedRoom) {
       _log('_emitJoin skipped — already joined');
@@ -272,6 +274,16 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _hasJoinedRoom = true;
     _log('📤 emit join-meeting [$code, $userId, $name, isCameraOff=$isCameraOff]');
     _socket?.emit('join-meeting', [code, userId, name, isCameraOff]);
+
+    // Silent-failure detector. If the server never sends join-confirmation,
+    // either it didn't receive our emit or our payload is malformed.
+    Future.delayed(const Duration(seconds: 4), () {
+      if (!mounted || _disposed) return;
+      if (state.isConnected && state.participants.isEmpty && !state.isInWaitingRoom) {
+        _log('⚠️  No join-confirmation 4 s after emit — server silently dropped join-meeting');
+        _log('    → check (1) server log for join handler, (2) auth middleware, (3) payload shape');
+      }
+    });
   }
 
   void _initSocketListeners(
