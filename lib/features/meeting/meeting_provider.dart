@@ -7,7 +7,6 @@ import '../../data/repositories/chat_repository.dart';
 import '../../core/config/api_config.dart';
 import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
-import '../../core/services/screen_share_service.dart';
 import '../../core/services/network_resilience_service.dart';
 import '../../core/services/local_media_service.dart';
 import '../../data/repositories/meeting_repository.dart';
@@ -24,6 +23,15 @@ enum MeetingPhase {
   connecting,  // sockets opening, REST validate, getUserMedia
   inMeeting,   // join-confirmation JOINED
   ended,       // user hung up or remote ended the call
+}
+
+/// One transient reaction that floats up over the meeting view for a
+/// few seconds before being removed.
+class ReactionEvent {
+  final String emoji;
+  final String name;
+  final DateTime at;
+  ReactionEvent({required this.emoji, required this.name, required this.at});
 }
 
 class MeetingState {
@@ -52,6 +60,7 @@ class MeetingState {
   final String? meetingCode;
   final String? userId;
   final MeetingPhase phase;
+  final List<ReactionEvent> reactions;
 
   MeetingState({
     this.isConnected = false,
@@ -77,6 +86,7 @@ class MeetingState {
     this.hostAllowsCam = true,
     this.hostAllowsChat = true,
     this.phase = MeetingPhase.idle,
+    this.reactions = const [],
   });
 
   MeetingState copyWith({
@@ -102,6 +112,7 @@ class MeetingState {
     bool? hostAllowsChat,
     bool? isHost,
     MeetingPhase? phase,
+    List<ReactionEvent>? reactions,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -127,6 +138,7 @@ class MeetingState {
       hostAllowsCam: hostAllowsCam ?? this.hostAllowsCam,
       hostAllowsChat: hostAllowsChat ?? this.hostAllowsChat,
       phase: phase ?? this.phase,
+      reactions: reactions ?? this.reactions,
     );
   }
 }
@@ -135,7 +147,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final MeetingRepository _meetingRepository = MeetingRepository();
   final ParticipantRepository _participantRepository = ParticipantRepository();
   final ChatRepository _chatRepository = ChatRepository();
-  final ScreenShareService _screenShareService = ScreenShareService();
 
   io.Socket? _socket;
   io.Socket? _chatSocket;
@@ -518,6 +529,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       if (from == null || candidate == null) return;
       await _handleIceCandidate(from, candidate);
     });
+
+    // Floating-emoji reactions. Server may broadcast either name —
+    // listen on both. We add the reaction to state and auto-remove it
+    // after a few seconds via _addReaction.
+    void onReaction(dynamic data) {
+      if (!mounted || _disposed || data is! Map) return;
+      final emoji = data['emoji']?.toString();
+      final name = data['name']?.toString() ?? 'Someone';
+      if (emoji == null) return;
+      _addReaction(emoji, name);
+    }
+    _socket?.on('reaction-remote', onReaction);
+    _socket?.on('reaction', onReaction);
 
     // Peers announce mic/camera/screen-share state changes via this
     // event. We mirror it onto the matching `participants` entry so
@@ -940,16 +964,131 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     return true;
   }
 
-  void toggleScreenShare() async {
+  // Active screen-capture stream (null when not sharing).
+  MediaStream? _screenStream;
+  // Camera track held while screen share is active so we can put it
+  // back on the senders when sharing stops.
+  MediaStreamTrack? _savedCameraTrack;
+
+  Future<void> toggleScreenShare() async {
     if (state.isScreenSharing) {
-      _screenShareService.stopScreenShare();
-      state = state.copyWith(isScreenSharing: false);
+      await _stopScreenShare();
     } else {
-      final stream = await _screenShareService.startScreenShare();
-      if (stream != null) {
+      await _startScreenShare();
+    }
+  }
+
+  Future<void> _startScreenShare() async {
+    try {
+      _log('🖥️  starting screen share');
+      final stream = await navigator.mediaDevices.getDisplayMedia({
+        'audio': false,
+        'video': true,
+      });
+      final tracks = stream.getVideoTracks();
+      if (tracks.isEmpty) {
+        _log('❌ getDisplayMedia returned no video track');
+        await stream.dispose();
+        return;
+      }
+      _screenStream = stream;
+      final screenTrack = tracks.first;
+
+      // Save the running camera track so we can restore it when the
+      // user stops sharing.
+      final localStream = LocalMediaService.instance.stream;
+      _savedCameraTrack = (localStream != null && localStream.getVideoTracks().isNotEmpty)
+          ? localStream.getVideoTracks().first
+          : null;
+
+      // Hot-swap the video sender on every peer connection. The
+      // receiving side's renderer keeps the same SSRC — frames just
+      // start coming from the screen instead of the camera.
+      var swapped = 0;
+      for (final pc in _peerConnections.values) {
+        final senders = await pc.getSenders();
+        for (final sender in senders) {
+          if (sender.track?.kind == 'video') {
+            await sender.replaceTrack(screenTrack);
+            swapped++;
+          }
+        }
+      }
+      _log('🖥️  replaced video sender on $swapped peer(s)');
+
+      // The OS lets the user revoke screen capture from the system UI;
+      // when that happens the track ends and we should stop cleanly.
+      screenTrack.onEnded = () {
+        if (state.isScreenSharing) {
+          _stopScreenShare();
+        }
+      };
+
+      if (mounted && !_disposed) {
         state = state.copyWith(isScreenSharing: true);
       }
+      _broadcastMediaState();
+    } catch (e) {
+      _log('❌ startScreenShare failed: $e');
+      _screenStream = null;
+      _savedCameraTrack = null;
     }
+  }
+
+  Future<void> _stopScreenShare() async {
+    _log('🖥️  stopping screen share');
+    try {
+      _screenStream?.getTracks().forEach((t) => t.stop());
+      await _screenStream?.dispose();
+    } catch (_) {}
+    _screenStream = null;
+
+    // Put the camera track back on every peer-connection sender.
+    if (_savedCameraTrack != null) {
+      for (final pc in _peerConnections.values) {
+        final senders = await pc.getSenders();
+        for (final sender in senders) {
+          if (sender.track?.kind == 'video') {
+            await sender.replaceTrack(_savedCameraTrack);
+          }
+        }
+      }
+    }
+    _savedCameraTrack = null;
+
+    if (mounted && !_disposed) {
+      state = state.copyWith(isScreenSharing: false);
+    }
+    _broadcastMediaState();
+  }
+
+  /// Send a one-shot emoji reaction to the room. Shows immediately
+  /// for the sender and broadcasts to other clients via socket.
+  void sendReaction(String emoji) {
+    if (state.meetingId == null) return;
+    final payload = {
+      'meetingId': state.meetingId,
+      'emoji': emoji,
+      'name': _userName ?? 'You',
+    };
+    _log('🎉 emit reaction $emoji');
+    _socket?.emit('reaction', payload);
+    _socket?.emit('reaction-remote', payload);
+    _addReaction(emoji, _userName ?? 'You');
+  }
+
+  void _addReaction(String emoji, String name) {
+    if (!mounted || _disposed) return;
+    final reaction = ReactionEvent(emoji: emoji, name: name, at: DateTime.now());
+    state = state.copyWith(reactions: [...state.reactions, reaction]);
+    Future.delayed(const Duration(milliseconds: 3500), () {
+      if (!mounted || _disposed) return;
+      try {
+        state = state.copyWith(
+          reactions: state.reactions.where((r) => r != reaction).toList(),
+        );
+      } catch (_) {}
+    });
   }
 
   void muteAll() => _socket?.emit('mute-all');

@@ -189,9 +189,18 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                     context.go('/');
                   },
                   onOptionsTap: () => _showOptionsBottomSheet(context),
+                  onReactions: () => _showReactionsPicker(context),
                   hasWaitingParticipants: meetingState.waitingParticipants.isNotEmpty,
                 ),
               ),
+
+              // Floating reactions overlay (above grid, below controls).
+              if (meetingState.reactions.isNotEmpty)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: _ReactionsOverlay(reactions: meetingState.reactions),
+                  ),
+                ),
 
               // Join Requests Notification
               if (meetingState.isHost && meetingState.waitingParticipants.isNotEmpty)
@@ -280,6 +289,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       return true;
     }
     return false;
+  }
+
+  void _showReactionsPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => _ReactionsPickerSheet(
+        onPick: (emoji) {
+          Navigator.pop(sheetContext);
+          ref.read(meetingProvider(widget.meetingId).notifier).sendReaction(emoji);
+        },
+      ),
+    );
   }
 
   void _showOptionsBottomSheet(BuildContext context) {
@@ -959,6 +981,7 @@ class _InCallControls extends StatelessWidget {
   final VoidCallback onCameraToggle;
   final VoidCallback onHangup;
   final VoidCallback onOptionsTap;
+  final VoidCallback onReactions;
   final bool hasWaitingParticipants;
 
   const _InCallControls({
@@ -968,6 +991,7 @@ class _InCallControls extends StatelessWidget {
     required this.onCameraToggle,
     required this.onHangup,
     required this.onOptionsTap,
+    required this.onReactions,
     this.hasWaitingParticipants = false,
   });
 
@@ -1001,11 +1025,7 @@ class _InCallControls extends StatelessWidget {
             ),
             ControlIconButton(
               icon: Icons.sentiment_satisfied_alt_outlined,
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Reactions coming soon')),
-                );
-              },
+              onTap: onReactions,
               size: 48,
             ),
             Stack(
@@ -2145,6 +2165,154 @@ class _JoinRequestBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reactions UI
+// ---------------------------------------------------------------------------
+
+/// Bottom sheet with a row of common emojis. Tapping one fires the
+/// `onPick` callback (which sends the reaction and dismisses the sheet).
+class _ReactionsPickerSheet extends StatelessWidget {
+  final ValueChanged<String> onPick;
+  const _ReactionsPickerSheet({required this.onPick});
+
+  static const List<String> _emojis = [
+    '👍', '❤️', '😂', '😮', '🎉', '👏', '🙌', '🔥',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1A1F26) : Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          children: _emojis.map((e) {
+            return InkResponse(
+              onTap: () => onPick(e),
+              radius: 28,
+              child: Container(
+                width: 48,
+                height: 48,
+                alignment: Alignment.center,
+                child: Text(e, style: const TextStyle(fontSize: 28)),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floats every reaction up from the bottom for a few seconds. Each
+/// reaction has its own animated entry — they never block taps and
+/// stop receiving rebuilds once the notifier removes them from state.
+class _ReactionsOverlay extends StatelessWidget {
+  final List<ReactionEvent> reactions;
+  const _ReactionsOverlay({required this.reactions});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (final r in reactions)
+          _FloatingReaction(key: ValueKey(r), reaction: r),
+      ],
+    );
+  }
+}
+
+class _FloatingReaction extends StatefulWidget {
+  final ReactionEvent reaction;
+  const _FloatingReaction({super.key, required this.reaction});
+
+  @override
+  State<_FloatingReaction> createState() => _FloatingReactionState();
+}
+
+class _FloatingReactionState extends State<_FloatingReaction>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final double _xOffset;
+
+  @override
+  void initState() {
+    super.initState();
+    // Random horizontal jitter so multiple reactions don't stack.
+    _xOffset = (widget.reaction.hashCode % 60) - 30.0;
+    _ctrl = AnimationController(
+      duration: const Duration(milliseconds: 3200),
+      vsync: this,
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        final t = Curves.easeOut.transform(_ctrl.value);
+        final size = MediaQuery.of(context).size;
+        // Travel from ~60% of height up to 15% of height.
+        final dy = size.height * (0.60 - t * 0.45);
+        final dx = (size.width / 2) - 28 + _xOffset;
+        // Fade in fast, out slow.
+        final opacity = t < 0.1 ? t * 10 : (1.0 - ((t - 0.1) / 0.9) * 0.85);
+        return Positioned(
+          left: dx,
+          top: dy,
+          child: Opacity(
+            opacity: opacity.clamp(0.0, 1.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(widget.reaction.emoji, style: const TextStyle(fontSize: 48)),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    widget.reaction.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
