@@ -67,6 +67,25 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     final meetingState = ref.watch(meetingProvider(widget.meetingId));
     final meetingNotifier = ref.watch(meetingProvider(widget.meetingId).notifier);
 
+    // When the host hangs up the backend broadcasts end-meeting-for-all
+    // to every participant; the notifier flips phase -> ended. Watch
+    // for that transition and bounce back to the home screen with a
+    // snackbar so the user understands why the call closed.
+    ref.listen<MeetingPhase>(
+      meetingProvider(widget.meetingId).select((s) => s.phase),
+      (prev, next) {
+        if (next == MeetingPhase.ended && prev != MeetingPhase.ended) {
+          if (!context.mounted) return;
+          if (!meetingState.isHost) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Meeting ended by host')),
+            );
+          }
+          context.go('/');
+        }
+      },
+    );
+
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF020617) : MizdahTheme.lightBackground,
       body: Container(
@@ -160,7 +179,13 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   onMicToggle: meetingNotifier.toggleMic,
                   onCameraToggle: meetingNotifier.toggleCamera,
                   onHangup: () {
-                    meetingNotifier.leaveMeeting();
+                    // Host hanging up = meeting ends for everyone.
+                    // Non-hosts just leave their own seat in the room.
+                    if (meetingState.isHost) {
+                      meetingNotifier.endMeetingForAll();
+                    } else {
+                      meetingNotifier.leaveMeeting();
+                    }
                     context.go('/');
                   },
                   onOptionsTap: () => _showOptionsBottomSheet(context),

@@ -551,6 +551,20 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _setupSfu();
     });
 
+    // Host-initiated room termination. Backend broadcasts this to
+    // every participant in the room when the host hangs up. We tear
+    // down our peer connections, drop the socket and flip phase to
+    // `ended` — the meeting screen watches that and navigates home.
+    void onMeetingEnded(_) {
+      _log('🛑 meeting ended remotely (host hung up)');
+      if (!mounted || _disposed) return;
+      state = state.copyWith(phase: MeetingPhase.ended);
+      leaveMeeting();
+    }
+    _socket?.on('end-meeting-for-all', onMeetingEnded);
+    _socket?.on('meeting-ended', onMeetingEnded);
+    _socket?.on('host-left', onMeetingEnded);
+
     _chatSocket?.on('chat-receive', _handleNewMessage);
   }
 
