@@ -471,6 +471,13 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       // (TECHNICAL_DOCUMENTATION.md §5: H -> S: emit offer to P)
       _log('Initiating offer to new participant $remoteSid');
       await _createPeerConnection(remoteSid, isOfferer: true);
+
+      // Re-announce our media state so the new joiner doesn't default
+      // their UI to "muted / camera off". Without this, the host's
+      // initial mic+cam=on broadcast (fired 500ms after their own
+      // connect) is lost — the web user wasn't in the room yet, and
+      // socket.io doesn't replay events on connect.
+      _broadcastMediaState();
     });
 
     _socket?.on('user-left', (data) {
