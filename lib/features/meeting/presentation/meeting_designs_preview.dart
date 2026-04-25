@@ -68,6 +68,25 @@ class _MeetingDesignsPreviewScreenState
               fontWeight: FontWeight.w600,
             ),
           ),
+          const SizedBox(width: 8),
+          // Quick link to the screen-share UX preview.
+          TextButton.icon(
+            onPressed: () => context.push('/screen-share-designs'),
+            icon: const Icon(Icons.present_to_all_rounded,
+                color: Colors.white70, size: 16),
+            label: const Text(
+              'Share UX',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: SizedBox(

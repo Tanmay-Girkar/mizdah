@@ -10,6 +10,7 @@ import '../../features/settings/presentation/meeting_settings_screen.dart';
 import '../../features/meeting/presentation/meeting_room_screen.dart';
 import '../../features/meeting/presentation/pre_join_screen.dart';
 import '../../features/meeting/presentation/meeting_designs_preview.dart';
+import '../../features/meeting/presentation/screen_share_designs_preview.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
 import '../../features/auth/two_factor_screen.dart';
@@ -46,6 +47,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/meeting-designs',
       builder: (context, state) => const MeetingDesignsPreviewScreen(),
+    ),
+    GoRoute(
+      path: '/screen-share-designs',
+      builder: (context, state) => const ScreenShareDesignsPreviewScreen(),
     ),
     GoRoute(
       path: '/meeting/:id',
