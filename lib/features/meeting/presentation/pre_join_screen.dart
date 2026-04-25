@@ -91,9 +91,10 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   }
 
   Future<void> _setupMedia() async {
-    if (widget.meetingId != null) {
-      ref.read(meetingProvider(widget.meetingId!).notifier).prepareLocalPreview();
-    }
+    // Always start the camera preview, including instant-meeting flow
+    // (widget.meetingId == null). Without this the preview area renders
+    // an empty black box because the renderer never gets a srcObject.
+    ref.read(meetingProvider(widget.meetingId ?? '').notifier).prepareLocalPreview();
   }
 
   Future<void> _handleJoin() async {

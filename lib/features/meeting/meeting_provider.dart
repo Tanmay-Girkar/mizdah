@@ -529,9 +529,29 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     };
 
     pc.onTrack = (RTCTrackEvent event) async {
-      _log('🎬 onTrack[$remoteSocketId] kind=${event.track.kind} streams=${event.streams.length}');
-      if (event.streams.isEmpty || !mounted || _disposed) return;
-      final stream = event.streams.first;
+      _log('🎬 onTrack[$remoteSocketId] kind=${event.track.kind} '
+          'streams=${event.streams.length} trackId=${event.track.id}');
+      if (!mounted || _disposed) return;
+      MediaStream stream;
+      if (event.streams.isNotEmpty) {
+        stream = event.streams.first;
+      } else {
+        // Unified-plan / addTransceiver path: tracks can arrive without
+        // an associated stream. Build one so the renderer has a srcObject.
+        final synthetic = await createLocalMediaStream('remote-$remoteSocketId');
+        await synthetic.addTrack(event.track);
+        stream = synthetic;
+        _log('   built synthetic stream ${stream.id} for $remoteSocketId');
+      }
+      await _attachRemoteStream(remoteSocketId, stream);
+    };
+
+    // Some flutter_webrtc builds fire onAddStream instead of (or in
+    // addition to) onTrack. Cover both paths.
+    pc.onAddStream = (MediaStream stream) async {
+      _log('🎬 onAddStream[$remoteSocketId] streamId=${stream.id} '
+          'tracks=${stream.getTracks().map((t) => t.kind).join(",")}');
+      if (!mounted || _disposed) return;
       await _attachRemoteStream(remoteSocketId, stream);
     };
 

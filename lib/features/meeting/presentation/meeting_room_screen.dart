@@ -117,17 +117,18 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                 child: CaptionsView(),
               ),
 
-              // PIP for Self if solitary
-              if (_participantCount(meetingState) == 0)
-                Positioned(
-                  bottom: 100,
-                  right: 16,
-                  child: _SelfViewCard(
-                    isMicOn: meetingState.isMicOn,
-                    isCameraOn: meetingState.isCameraOn,
-                    renderer: meetingState.localRenderer,
-                  ),
+              // PIP for Self — always visible above the controls so the
+              // host can see themselves whether alone OR with remote
+              // participants in the grid (matches Google Meet behaviour).
+              Positioned(
+                bottom: 100,
+                right: 16,
+                child: _SelfViewCard(
+                  isMicOn: meetingState.isMicOn,
+                  isCameraOn: meetingState.isCameraOn,
+                  renderer: meetingState.localRenderer,
                 ),
+              ),
               // Bottom Controls
               Align(
                 alignment: Alignment.bottomCenter,
@@ -215,8 +216,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     );
   }
 
-  int _participantCount(MeetingState state) => state.participants.length;
-  String? _activePanel; 
+  String? _activePanel;
 
   void _showOptionsBottomSheet(BuildContext context) {
     showModalBottomSheet(
