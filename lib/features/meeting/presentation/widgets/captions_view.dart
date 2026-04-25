@@ -1,22 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as socket_io;
-import 'package:mizdah/core/config/api_config.dart';
-import '../../../../core/services/caption_service.dart';
-
-// Safe provider initialization
-final captionProvider = StateNotifierProvider<CaptionNotifier, CaptionState>((ref) {
-  // Use a dummy socket to prevent crashes during initialization
-  final dummySocket = socket_io.io(ApiConfig.signalingUrl, socket_io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
-  return CaptionNotifier(socket: dummySocket); 
-});
+import '../../providers/meeting_services_provider.dart';
 
 class CaptionsView extends ConsumerWidget {
-  const CaptionsView({super.key});
+  final String meetingId;
+  const CaptionsView({super.key, required this.meetingId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(captionProvider);
+    final state = ref.watch(captionServiceProvider(meetingId));
 
     if (!state.isEnabled || state.activeCaptions.isEmpty) {
       return const SizedBox.shrink();

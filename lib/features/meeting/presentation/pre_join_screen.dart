@@ -119,17 +119,29 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
         ref.invalidate(schedulesProvider);
       }
 
-      if (mounted) {
-        context.pushReplacement(
-          Uri(
-            path: '/meeting/$finalMeetingId',
-            queryParameters: {
-              'video': _isCameraOn.toString(),
-              'audio': _isMicOn.toString(),
-            },
-          ).toString(),
-        );
+      if (!mounted) return;
+      // Hand the already-running camera over to the in-meeting
+      // provider so we don't close-and-reopen it during navigation.
+      final previewKey = widget.meetingId ?? '';
+      final previewNotifier =
+          ref.read(meetingProvider(previewKey).notifier);
+      final liveStream = previewNotifier.releaseLocalStream();
+      if (liveStream != null) {
+        await ref
+            .read(meetingProvider(finalMeetingId).notifier)
+            .adoptLocalStream(liveStream);
       }
+
+      if (!mounted) return;
+      context.pushReplacement(
+        Uri(
+          path: '/meeting/$finalMeetingId',
+          queryParameters: {
+            'video': _isCameraOn.toString(),
+            'audio': _isMicOn.toString(),
+          },
+        ).toString(),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

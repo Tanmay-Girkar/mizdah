@@ -153,6 +153,30 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
+  /// Detach the active local stream WITHOUT stopping it. Used when the
+  /// pre-join screen hands the live camera over to the in-meeting
+  /// provider so the camera doesn't have to close-and-reopen (the
+  /// visible "flicker" the user reported on Start Now).
+  MediaStream? releaseLocalStream() {
+    final s = _localStream;
+    _localStream = null;
+    state.localRenderer.srcObject = null;
+    return s;
+  }
+
+  /// Adopt a live MediaStream produced by another notifier (typically
+  /// the pre-join preview). Skips any further getUserMedia call.
+  Future<void> adoptLocalStream(MediaStream stream) async {
+    _localStream = stream;
+    if (!state.localRenderer.textureId.toString().isNotEmpty) {
+      await state.localRenderer.initialize();
+    }
+    state.localRenderer.srcObject = stream;
+    if (mounted && !_disposed) {
+      state = state.copyWith(isCameraOn: true, isMicOn: true);
+    }
+  }
+
   /// Top-level join sequence. Order matters: media MUST be ready before
   /// we open the signaling socket so the first incoming offer/answer
   /// can attach our local tracks.

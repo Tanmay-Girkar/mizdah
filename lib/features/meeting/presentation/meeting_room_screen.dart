@@ -110,11 +110,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
               ),
 
               // Captions Overlay
-              const Positioned(
+              Positioned(
                 bottom: 140, // above controls
                 left: 16,
                 right: 16,
-                child: CaptionsView(),
+                child: CaptionsView(meetingId: widget.meetingId),
               ),
 
               // PIP for Self — always visible above the controls so the
@@ -313,7 +313,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
       case 'breakout':
         return const _BreakoutRoomsView();
       case 'whiteboard':
-        return const WhiteboardView();
+        return WhiteboardView(meetingId: widget.meetingId);
       default:
         return const SizedBox.shrink();
     }
@@ -360,39 +360,95 @@ class _VideoGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final count = meetingState.remoteRenderers.isNotEmpty 
-        ? meetingState.remoteRenderers.length 
-        : meetingState.mockParticipantCount;
+    // Build one tile per known participant. If we have a live renderer
+    // for that participant's socketId we show their video, otherwise an
+    // avatar tile with their name. This way the grid reflects the
+    // participant list immediately, even while WebRTC is still
+    // negotiating individual peer connections.
+    final tiles = <_ParticipantTileData>[];
+    for (final p in meetingState.participants) {
+      if (p is! Map) continue;
+      final socketId = (p['socketId'] ?? p['userId'])?.toString();
+      final name = (p['name'] ?? p['displayName'] ?? 'Participant').toString();
+      final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
+      tiles.add(_ParticipantTileData(name: name, renderer: renderer));
+    }
+    // Cover renderers that arrived for a peer not yet in the list.
+    for (final entry in meetingState.remoteRenderers.entries) {
+      final already = tiles.any((t) => t.renderer == entry.value);
+      if (!already) {
+        tiles.add(_ParticipantTileData(name: 'Participant', renderer: entry.value));
+      }
+    }
+    final count = tiles.isNotEmpty ? tiles.length : meetingState.mockParticipantCount;
 
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),
       physics: const BouncingScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: count <= 1 ? 1 : 2,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: 0.75, // Taller cards for mobile
+        childAspectRatio: count <= 1 ? 0.6 : 0.75,
       ),
       itemCount: count,
       itemBuilder: (context, index) {
-        if (meetingState.remoteRenderers.isNotEmpty) {
-          final entry = meetingState.remoteRenderers.entries.elementAt(index);
-          final hasVideo = entry.value.srcObject?.getVideoTracks().where((t) => t.enabled).isNotEmpty ?? false;
-          
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              color: const Color(0xFF3C4043), // Google Meet dark grey
-              child: hasVideo 
-                ? RTCVideoView(entry.value, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
-                : const _AvatarPlaceholder(name: 'Participant', size: 64),
-            ),
-          );
-        } else {
-          // Mock tiles for UI development
-          return _MockParticipantTile(index: index);
-        }
+        if (tiles.isEmpty) return _MockParticipantTile(index: index);
+        return _RemoteParticipantTile(data: tiles[index]);
       },
+    );
+  }
+}
+
+class _ParticipantTileData {
+  final String name;
+  final RTCVideoRenderer? renderer;
+  const _ParticipantTileData({required this.name, this.renderer});
+}
+
+class _RemoteParticipantTile extends StatelessWidget {
+  final _ParticipantTileData data;
+  const _RemoteParticipantTile({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final renderer = data.renderer;
+    final hasVideo = renderer?.srcObject
+            ?.getVideoTracks()
+            .where((t) => t.enabled)
+            .isNotEmpty ??
+        false;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        color: const Color(0xFF3C4043),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (hasVideo && renderer != null)
+              RTCVideoView(renderer,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+            else
+              _AvatarPlaceholder(name: data.name, size: 72),
+            Positioned(
+              left: 8,
+              bottom: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  data.name,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

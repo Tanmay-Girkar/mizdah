@@ -1,18 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:socket_io_client/socket_io_client.dart' as socket_io;
-import 'package:mizdah/core/config/api_config.dart';
 import '../../../../core/services/whiteboard_service.dart';
 import '../../../../core/theme/theme_provider.dart';
-
-// Safe provider initialization
-final whiteboardProvider = StateNotifierProvider<WhiteboardNotifier, WhiteboardState>((ref) {
-  final dummySocket = socket_io.io(ApiConfig.signalingUrl, socket_io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
-  return WhiteboardNotifier(socket: dummySocket);
-});
+import '../../providers/meeting_services_provider.dart';
 
 class WhiteboardView extends ConsumerStatefulWidget {
-  const WhiteboardView({super.key});
+  final String meetingId;
+  const WhiteboardView({super.key, required this.meetingId});
 
   @override
   ConsumerState<WhiteboardView> createState() => _WhiteboardViewState();
@@ -35,7 +29,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
       type: 'start',
     );
     _currentAction = action;
-    ref.read(whiteboardProvider.notifier).sendDrawAction(action);
+    ref.read(whiteboardServiceProvider(widget.meetingId).notifier).sendDrawAction(action);
   }
 
   void _onPanUpdate(DragUpdateDetails details, BoxConstraints constraints) {
@@ -49,7 +43,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
       strokeWidth: _currentStrokeWidth,
       type: 'move',
     );
-    ref.read(whiteboardProvider.notifier).sendDrawAction(action);
+    ref.read(whiteboardServiceProvider(widget.meetingId).notifier).sendDrawAction(action);
   }
 
   void _onPanEnd(DragEndDetails details) {
@@ -61,14 +55,14 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
         strokeWidth: _currentAction!.strokeWidth,
         type: 'end',
       );
-      ref.read(whiteboardProvider.notifier).sendDrawAction(endAction);
+      ref.read(whiteboardServiceProvider(widget.meetingId).notifier).sendDrawAction(endAction);
       _currentAction = null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(whiteboardProvider);
+    final state = ref.watch(whiteboardServiceProvider(widget.meetingId));
 
     return Column(
       children: [
@@ -87,7 +81,7 @@ class _WhiteboardViewState extends ConsumerState<WhiteboardView> {
               ),
               IconButton(
                 icon: const Icon(Icons.delete, color: Colors.white),
-                onPressed: () => ref.read(whiteboardProvider.notifier).clearBoard(),
+                onPressed: () => ref.read(whiteboardServiceProvider(widget.meetingId).notifier).clearBoard(),
               ),
             ],
           ),
