@@ -534,6 +534,19 @@ class _VideoGrid extends ConsumerWidget {
         tiles.add(_ParticipantTileData(name: 'Participant', renderer: entry.value));
       }
     }
+    // While the local user is presenting their screen, show it as
+    // the first tile so the host can see what they're sharing
+    // (Google Meet does the same — a "You — Presentation" tile that
+    // surfaces the captured stream alongside everyone else).
+    if (meetingState.isScreenSharing && meetingState.screenRenderer != null) {
+      tiles.insert(
+        0,
+        _ParticipantTileData(
+          name: 'You · Presentation',
+          renderer: meetingState.screenRenderer,
+        ),
+      );
+    }
     if (tiles.isEmpty && meetingState.mockParticipantCount > 0) {
       return GridView.builder(
         padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),

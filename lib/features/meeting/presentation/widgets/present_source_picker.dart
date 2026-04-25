@@ -46,7 +46,10 @@ class _PresentSourcePickerState extends State<PresentSourcePicker> {
   ];
 
   int _tabIndex = 2; // Default: Entire screen (matches Chrome's default)
-  bool _selected = false;
+  // Pre-selected — when there's only one source on a tab Chrome
+  // auto-selects it. Without this the Share button is disabled
+  // until the user taps the preview, which feels broken.
+  bool _selected = true;
   bool _shareSystemAudio = false;
 
   PresentSource get _currentSource => _tabs[_tabIndex].source;
@@ -122,7 +125,9 @@ class _PresentSourcePickerState extends State<PresentSourcePicker> {
             child: InkWell(
               onTap: () => setState(() {
                 _tabIndex = i;
-                _selected = false;
+                // New tab → keep the source pre-selected so Share is
+                // immediately tappable (mirrors Chrome's behaviour).
+                _selected = true;
               }),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 16),

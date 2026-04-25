@@ -40,6 +40,10 @@ class MeetingState {
   final bool isConnected;
   final RTCVideoRenderer localRenderer;
   final Map<String, RTCVideoRenderer> remoteRenderers;
+  /// Renderer attached to the LOCAL screen-share stream. Non-null
+  /// only while the local user is presenting; the grid surfaces it
+  /// as a dedicated tile so the host can see what they're sharing.
+  final RTCVideoRenderer? screenRenderer;
   final bool isMicOn;
   final bool isCameraOn;
   final bool isRecording;
@@ -94,6 +98,7 @@ class MeetingState {
     this.phase = MeetingPhase.idle,
     this.reactions = const [],
     this.incomingChatToast,
+    this.screenRenderer,
   });
 
   MeetingState copyWith({
@@ -122,6 +127,8 @@ class MeetingState {
     List<ReactionEvent>? reactions,
     Map<String, dynamic>? incomingChatToast,
     bool clearChatToast = false,
+    RTCVideoRenderer? screenRenderer,
+    bool clearScreenRenderer = false,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -151,6 +158,9 @@ class MeetingState {
       incomingChatToast: clearChatToast
           ? null
           : (incomingChatToast ?? this.incomingChatToast),
+      screenRenderer: clearScreenRenderer
+          ? null
+          : (screenRenderer ?? this.screenRenderer),
     );
   }
 }
@@ -1150,8 +1160,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         }
       };
 
+      // Allocate a local renderer so the host's own UI can show
+      // what they're sharing — without this, only remote peers see
+      // the screen (and the host has no idea what landed).
+      final localScreenRenderer = RTCVideoRenderer();
+      try {
+        await localScreenRenderer.initialize();
+        localScreenRenderer.srcObject = stream;
+      } catch (e) {
+        _log('screen renderer init failed: $e');
+      }
+
       if (mounted && !_disposed) {
-        state = state.copyWith(isScreenSharing: true);
+        state = state.copyWith(
+          isScreenSharing: true,
+          screenRenderer: localScreenRenderer,
+        );
       }
       _broadcastMediaState();
     } on PlatformException catch (e) {
@@ -1201,8 +1225,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
     _savedCameraTrack = null;
 
+    // Tear down the local screen renderer so the host's preview
+    // tile disappears.
+    final r = state.screenRenderer;
+    if (r != null) {
+      try {
+        r.srcObject = null;
+        await r.dispose();
+      } catch (_) {}
+    }
+
     if (mounted && !_disposed) {
-      state = state.copyWith(isScreenSharing: false);
+      state = state.copyWith(
+        isScreenSharing: false,
+        clearScreenRenderer: true,
+      );
     }
     _broadcastMediaState();
   }
