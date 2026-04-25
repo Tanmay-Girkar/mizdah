@@ -217,27 +217,33 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     // 4. Open signaling and chat sockets.
-    // IMPORTANT: matches the working test_socket.js / guest_test.js — those
-    // scripts pass NO auth and join the room successfully. Adding setAuth
-    // here previously caused the gateway/middleware to silently drop the
-    // join-meeting emit so the host never received `request-to-join`.
-    _log('Connecting signaling socket → ${ApiConfig.signalingUrl}${ApiConfig.signalingPath}');
+    //
+    // CRITICAL ORDER: build with `disableAutoConnect`, attach EVERY listener
+    // (connect, connect_error, error, disconnect, onAny, and all event
+    // handlers via _initSocketListeners), THEN call .connect(). With auto-
+    // connect on, the socket can fire `connect` or `connect_error` before
+    // our handlers are attached — those events fire once and are lost,
+    // which is what we were seeing in the device log.
+    //
+    // Transports: include 'polling' fallback. Some networks (Cloudflare +
+    // mobile carrier proxies) don't reliably establish raw websockets on
+    // first try; polling lets the engine.io upgrade handshake succeed.
+    _log('Building signaling socket → ${ApiConfig.signalingUrl}${ApiConfig.signalingPath}');
     final signalingOpts = io.OptionBuilder()
-        .setTransports(['websocket'])
+        .setTransports(['websocket', 'polling'])
         .setPath(ApiConfig.signalingPath)
-        .enableAutoConnect();
+        .disableAutoConnect();
     _socket = io.io(ApiConfig.signalingUrl, signalingOpts.build());
 
     final chatOpts = io.OptionBuilder()
         .setTransports(['websocket', 'polling'])
-        .enableAutoConnect();
+        .disableAutoConnect();
     if (jwtToken.isNotEmpty) {
       chatOpts.setAuth({'token': jwtToken});
     }
     _chatSocket = io.io(ApiConfig.chatSocketUrl, chatOpts.build());
 
-    _initSocketListeners(realMeetingId, userId, name, jwtToken, !video);
-
+    // Attach lifecycle handlers FIRST.
     _socket?.onConnect((_) {
       _log('✅ Signaling socket CONNECTED (sid=${_socket?.id})');
       if (!mounted || _disposed) return;
@@ -259,6 +265,27 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.onError((err) => _log('❌ Signaling ERROR: $err'));
     _socket?.onDisconnect((reason) => _log('⚠️ Signaling disconnected: $reason'));
     _socket?.onAny((event, data) => _log('📡 EVENT: $event | DATA: $data'));
+
+    _chatSocket?.onConnect((_) => _log('✅ Chat socket CONNECTED'));
+    _chatSocket?.onConnectError((err) => _log('❌ Chat CONNECT_ERROR: $err'));
+
+    // Then attach domain event handlers.
+    _initSocketListeners(realMeetingId, userId, name, jwtToken, !video);
+
+    // Finally connect — handlers are guaranteed attached.
+    _log('Connecting signaling socket now…');
+    _socket?.connect();
+    _chatSocket?.connect();
+
+    // Diagnostic: surface socket state at 1/3/8 s so a stalled handshake
+    // is obvious without needing a deeper debugger.
+    for (final secs in [1, 3, 8]) {
+      Future.delayed(Duration(seconds: secs), () {
+        if (!mounted || _disposed) return;
+        _log('⏱  t=${secs}s: signaling.connected=${_socket?.connected} '
+            'chat.connected=${_chatSocket?.connected}');
+      });
+    }
   }
 
   /// Emit join in the format used by the working test scripts:
