@@ -534,16 +534,18 @@ class _VideoGrid extends ConsumerWidget {
         tiles.add(_ParticipantTileData(name: 'Participant', renderer: entry.value));
       }
     }
-    // While the local user is presenting their screen, show it as
-    // the first tile so the host can see what they're sharing
-    // (Google Meet does the same — a "You — Presentation" tile that
-    // surfaces the captured stream alongside everyone else).
-    if (meetingState.isScreenSharing && meetingState.screenRenderer != null) {
+    // While the local user is presenting, show a STATIC placeholder
+    // tile — never the live screen renderer. Rendering the screen
+    // capture inside the same screen creates infinite mirror
+    // recursion (the screenshot the user sent shows ~20 nested
+    // 'You — Presentation' tiles cascading off the edge).
+    if (meetingState.isScreenSharing) {
       tiles.insert(
         0,
-        _ParticipantTileData(
-          name: 'You · Presentation',
-          renderer: meetingState.screenRenderer,
+        const _ParticipantTileData(
+          name: 'You · Presenting',
+          videoEnabled: false,
+          isPresentingPlaceholder: true,
         ),
       );
     }
@@ -737,11 +739,17 @@ class _ParticipantTileData {
   final RTCVideoRenderer? renderer;
   final bool videoEnabled;
   final bool audioEnabled;
+  /// Tells the tile to render the "you are presenting" badge
+  /// instead of an avatar — used for the local screen-share slot
+  /// (we never render the live screen renderer locally to avoid
+  /// the infinite-mirror recursion).
+  final bool isPresentingPlaceholder;
   const _ParticipantTileData({
     required this.name,
     this.renderer,
     this.videoEnabled = true,
     this.audioEnabled = true,
+    this.isPresentingPlaceholder = false,
   });
 }
 
@@ -764,20 +772,26 @@ class _RemoteParticipantTile extends StatelessWidget {
     // happens inside an AnimatedSwitcher. The label / mute badge are
     // kept in the same Positioned slot regardless of state, so they
     // never re-layout when the swap happens.
-    final inner = hasVideo
-        ? RepaintBoundary(
-            // Key by renderer identity so AnimatedSwitcher knows it's
-            // a "different child" the moment a real renderer arrives.
-            key: ValueKey('video-${identityHashCode(renderer)}'),
-            child: RTCVideoView(
-              renderer,
-              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
-          )
-        : KeyedSubtree(
-            key: ValueKey('avatar-${data.name}'),
-            child: _AvatarPlaceholder(name: data.name, size: 72),
-          );
+    final Widget inner;
+    if (data.isPresentingPlaceholder) {
+      inner = const KeyedSubtree(
+        key: ValueKey('presenting-placeholder'),
+        child: _PresentingPlaceholder(),
+      );
+    } else if (hasVideo) {
+      inner = RepaintBoundary(
+        key: ValueKey('video-${identityHashCode(renderer)}'),
+        child: RTCVideoView(
+          renderer,
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        ),
+      );
+    } else {
+      inner = KeyedSubtree(
+        key: ValueKey('avatar-${data.name}'),
+        child: _AvatarPlaceholder(name: data.name, size: 72),
+      );
+    }
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -1032,6 +1046,66 @@ class _SelfViewCard extends StatelessWidget {
                   key: ValueKey('self-avatar'),
                   child: _AvatarPlaceholder(name: 'You', size: 56),
                 ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Static "you are presenting" tile shown to the host while they
+/// share their screen. We deliberately do NOT render the live
+/// screen renderer here — displaying a live screen-capture stream
+/// inside the same screen creates infinite recursive nesting (the
+/// camera captures the display capturing the display capturing…).
+class _PresentingPlaceholder extends StatelessWidget {
+  const _PresentingPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1A73E8), Color(0xFF0B47A1)],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 60,
+              height: 60,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.cast_connected_rounded,
+                color: Colors.white,
+                size: 28,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              "You're presenting",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Others can see your screen',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.75),
+                fontSize: 11,
+              ),
+            ),
+          ],
         ),
       ),
     );

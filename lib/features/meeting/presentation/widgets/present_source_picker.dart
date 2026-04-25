@@ -208,10 +208,7 @@ class _PresentSourcePickerState extends State<PresentSourcePicker> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Faux thumbnail — gradient + icon. On web the browser
-              // would render an actual screenshot here; we stand in
-              // with a styled placeholder so the dialog still
-              // communicates intent.
+              // Faux desktop background — gradient.
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -221,18 +218,59 @@ class _PresentSourcePickerState extends State<PresentSourcePicker> {
                   ),
                 ),
               ),
+              // Faux app windows — give the preview some visual
+              // weight so it reads as a screen rather than a blank
+              // tile. We can't show a real screenshot on mobile;
+              // these stand-in chrome rectangles communicate intent.
+              Positioned(
+                left: 22, top: 22, right: 80, bottom: 60,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.10),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 22, top: 38, width: 52, height: 80,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.10),
+                    ),
+                  ),
+                ),
+              ),
+              // Faux dock at the bottom.
+              Positioned(
+                left: 22, right: 22, bottom: 16, height: 18,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+              // Centered icon + label that names the source.
               Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(spec.icon,
-                        color: Colors.white.withValues(alpha: 0.5), size: 56),
-                    const SizedBox(height: 8),
+                        color: Colors.white.withValues(alpha: 0.85),
+                        size: 44),
+                    const SizedBox(height: 6),
                     Text(
                       spec.label,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.6),
+                        color: Colors.white.withValues(alpha: 0.85),
                         fontSize: 12,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],

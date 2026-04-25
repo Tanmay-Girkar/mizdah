@@ -1160,22 +1160,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         }
       };
 
-      // Allocate a local renderer so the host's own UI can show
-      // what they're sharing — without this, only remote peers see
-      // the screen (and the host has no idea what landed).
-      final localScreenRenderer = RTCVideoRenderer();
-      try {
-        await localScreenRenderer.initialize();
-        localScreenRenderer.srcObject = stream;
-      } catch (e) {
-        _log('screen renderer init failed: $e');
-      }
+      // Don't allocate a local renderer for the screen capture.
+      // Displaying our own screen-capture stream inside the same
+      // screen creates infinite recursive nesting — the host sees
+      // a static "You are presenting" placeholder tile instead.
+      // Remote peers still see the actual screen via WebRTC.
 
       if (mounted && !_disposed) {
-        state = state.copyWith(
-          isScreenSharing: true,
-          screenRenderer: localScreenRenderer,
-        );
+        state = state.copyWith(isScreenSharing: true);
       }
       _broadcastMediaState();
     } on PlatformException catch (e) {
