@@ -242,19 +242,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     // 3. CRITICAL: set up local media BEFORE opening signaling socket.
-    // If a peer offers immediately, our PC must already have local tracks.
-    // First, see if the pre-join screen staged a live stream — if so we
-    // adopt it directly and skip getUserMedia (avoids camera flicker).
-    if (_localStream == null && _stagedLocalStream != null) {
-      _log('Adopting staged local stream from pre-join');
-      _localStream = _stagedLocalStream;
+    // We previously tried to adopt a stream staged by the pre-join
+    // screen to avoid the camera close-and-reopen flicker, but the
+    // texture handoff between renderers was unreliable on Android and
+    // left the local PIP black. Stop the staged stream cleanly and
+    // open the camera fresh — short flicker, but correct rendering.
+    if (_stagedLocalStream != null) {
+      _log('Disposing staged stream — will re-open camera cleanly');
+      try {
+        for (final t in _stagedLocalStream!.getTracks()) {
+          t.stop();
+        }
+        await _stagedLocalStream!.dispose();
+      } catch (_) {}
       _stagedLocalStream = null;
-      await _rendererReady;
-      state.localRenderer.srcObject = _localStream;
-      if (mounted && !_disposed) {
-        state = state.copyWith(isCameraOn: video, isMicOn: audio);
-      }
-    } else if (_localStream == null) {
+    }
+    if (_localStream == null) {
       _log('Setting up local media (video=$video audio=$audio)');
       await _setupMedia(video: video, audio: audio);
     } else {
@@ -303,6 +306,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _loadParticipants(realMeetingId);
       _emitJoin(cleanCode, userId, name, !video);
       _emitJoinChat(realMeetingId, userId, jwtToken);
+      // Tell the room our initial mic/camera state so peers don't
+      // render us with their default (muted/no-video) assumption.
+      Future.delayed(const Duration(milliseconds: 500), _broadcastMediaState);
     });
 
     _socket?.onConnectError((err) => _log('❌ Signaling CONNECT_ERROR: $err'));
@@ -499,6 +505,31 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       final candidate = data['candidate'];
       if (from == null || candidate == null) return;
       await _handleIceCandidate(from, candidate);
+    });
+
+    // Peers announce mic/camera/screen-share state changes via this
+    // event. We mirror it onto the matching `participants` entry so
+    // the grid can swap between live video and an avatar tile when
+    // a remote turns their camera off (otherwise the renderer keeps
+    // showing the last frame, which the user reported as "stuck").
+    _socket?.on('media-toggle-remote', (data) {
+      if (!mounted || _disposed || data is! Map) return;
+      final from = data['from']?.toString();
+      if (from == null) return;
+      final updated = state.participants.map((p) {
+        if (p is Map && p['socketId'] == from) {
+          final m = Map<String, dynamic>.from(p);
+          if (data.containsKey('audioEnabled')) m['audioEnabled'] = data['audioEnabled'];
+          if (data.containsKey('videoEnabled')) m['videoEnabled'] = data['videoEnabled'];
+          if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
+          if (data.containsKey('name')) m['name'] = data['name'] ?? m['name'];
+          return m;
+        }
+        return p;
+      }).toList();
+      try {
+        state = state.copyWith(participants: updated);
+      } catch (_) {}
     });
 
     _socket?.on('switch-to-sfu', (_) {
@@ -816,6 +847,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (tracks.isEmpty) return;
     tracks.first.enabled = !tracks.first.enabled;
     state = state.copyWith(isMicOn: tracks.first.enabled);
+    _broadcastMediaState();
   }
 
   void toggleCamera() {
@@ -824,6 +856,27 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (tracks.isEmpty) return;
     tracks.first.enabled = !tracks.first.enabled;
     state = state.copyWith(isCameraOn: tracks.first.enabled);
+    _broadcastMediaState();
+  }
+
+  /// Tell the rest of the room what our mic / camera / screen share
+  /// state is, in the same `media-toggle-remote` shape the web client
+  /// emits. Without this the mute / camera-off icons on other clients
+  /// are stuck on whatever default they assumed at connect time.
+  void _broadcastMediaState() {
+    final cameraTrackId = _localStream?.getVideoTracks().isNotEmpty == true
+        ? _localStream!.getVideoTracks().first.id
+        : null;
+    _socket?.emit('media-toggle-remote', {
+      'meetingId': state.meetingId,
+      'type': 'MEDIA_TOGGLE',
+      'name': null, // backend fills name
+      'audioEnabled': state.isMicOn,
+      'videoEnabled': state.isCameraOn,
+      'isSharing': state.isScreenSharing,
+      'isHandRaised': false,
+      'cameraVideoTrackId': cameraTrackId,
+    });
   }
 
   void switchCamera() async {

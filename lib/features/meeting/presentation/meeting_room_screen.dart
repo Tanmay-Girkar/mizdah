@@ -371,7 +371,17 @@ class _VideoGrid extends StatelessWidget {
       final socketId = (p['socketId'] ?? p['userId'])?.toString();
       final name = (p['name'] ?? p['displayName'] ?? 'Participant').toString();
       final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
-      tiles.add(_ParticipantTileData(name: name, renderer: renderer));
+      // `videoEnabled` from media-toggle-remote — null means we haven't
+      // heard yet, treat as enabled. When the peer turns their camera
+      // off the renderer would otherwise freeze on the last frame.
+      final videoEnabled = p['videoEnabled'] != false;
+      final audioEnabled = p['audioEnabled'] != false;
+      tiles.add(_ParticipantTileData(
+        name: name,
+        renderer: renderer,
+        videoEnabled: videoEnabled,
+        audioEnabled: audioEnabled,
+      ));
     }
     // Cover renderers that arrived for a peer not yet in the list.
     for (final entry in meetingState.remoteRenderers.entries) {
@@ -403,7 +413,14 @@ class _VideoGrid extends StatelessWidget {
 class _ParticipantTileData {
   final String name;
   final RTCVideoRenderer? renderer;
-  const _ParticipantTileData({required this.name, this.renderer});
+  final bool videoEnabled;
+  final bool audioEnabled;
+  const _ParticipantTileData({
+    required this.name,
+    this.renderer,
+    this.videoEnabled = true,
+    this.audioEnabled = true,
+  });
 }
 
 class _RemoteParticipantTile extends StatelessWidget {
@@ -413,11 +430,13 @@ class _RemoteParticipantTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final renderer = data.renderer;
-    final hasVideo = renderer?.srcObject
-            ?.getVideoTracks()
-            .where((t) => t.enabled)
-            .isNotEmpty ??
-        false;
+    // Show video only if the peer has video enabled AND we have a
+    // renderer with a stream attached. Otherwise fall back to avatar
+    // (prevents the "frozen last frame" the user reported when a peer
+    // turns off their camera mid-call).
+    final hasVideo = data.videoEnabled &&
+        renderer != null &&
+        (renderer.srcObject?.getVideoTracks().isNotEmpty ?? false);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -426,7 +445,7 @@ class _RemoteParticipantTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (hasVideo && renderer != null)
+            if (hasVideo)
               RTCVideoView(renderer,
                   objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
             else
@@ -434,16 +453,33 @@ class _RemoteParticipantTile extends StatelessWidget {
             Positioned(
               left: 8,
               bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  data.name,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      data.name,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ),
+                  if (!data.audioEnabled) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.85),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.mic_off,
+                          color: Colors.white, size: 12),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
