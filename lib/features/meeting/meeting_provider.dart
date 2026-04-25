@@ -216,34 +216,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       return;
     }
 
-    // 4. Open signaling and chat sockets.
+    // 4. Open the signaling socket.
     //
-    // CRITICAL ORDER: build with `disableAutoConnect`, attach EVERY listener
-    // (connect, connect_error, error, disconnect, onAny, and all event
-    // handlers via _initSocketListeners), THEN call .connect(). With auto-
-    // connect on, the socket can fire `connect` or `connect_error` before
-    // our handlers are attached — those events fire once and are lost,
-    // which is what we were seeing in the device log.
+    // IMPORTANT: previous attempts created a separate _chatSocket on the
+    // SAME URL (`mizdah-backend.ogoul.cloud`). socket_io_client's manager
+    // cache reused the signaling manager but the chat OptionBuilder didn't
+    // setPath, which mutated `options['path']` to `/socket.io` on the
+    // shared manager — and the gateway has no `/socket.io` route, so the
+    // WS handshake returned 502 for both sockets. Use ONE socket; chat
+    // events ride the same `/signaling-fresh` channel (the gateway only
+    // exposes /signaling-fresh and /media-fresh as socket prefixes).
     //
-    // Transports: include 'polling' fallback. Some networks (Cloudflare +
-    // mobile carrier proxies) don't reliably establish raw websockets on
-    // first try; polling lets the engine.io upgrade handshake succeed.
+    // Use enableForceNew() to bypass the manager cache entirely, and pass
+    // a raw Map so what we set is exactly what the manager gets.
     _log('Building signaling socket → ${ApiConfig.signalingUrl}${ApiConfig.signalingPath}');
-    final signalingOpts = io.OptionBuilder()
-        .setTransports(['websocket', 'polling'])
-        .setPath(ApiConfig.signalingPath)
-        .disableAutoConnect();
-    _socket = io.io(ApiConfig.signalingUrl, signalingOpts.build());
+    final Map<String, dynamic> sigOpts = {
+      'path': ApiConfig.signalingPath,
+      'transports': ['websocket', 'polling'],
+      'autoConnect': false,
+      'forceNew': true,
+      'reconnection': true,
+      'reconnectionAttempts': 5,
+      'reconnectionDelay': 1000,
+    };
+    _socket = io.io(ApiConfig.signalingUrl, sigOpts);
+    _chatSocket = _socket; // alias — chat events go through the same socket
 
-    final chatOpts = io.OptionBuilder()
-        .setTransports(['websocket', 'polling'])
-        .disableAutoConnect();
-    if (jwtToken.isNotEmpty) {
-      chatOpts.setAuth({'token': jwtToken});
-    }
-    _chatSocket = io.io(ApiConfig.chatSocketUrl, chatOpts.build());
-
-    // Attach lifecycle handlers FIRST.
+    // Attach lifecycle handlers FIRST so we never miss the first connect
+    // or connect_error.
     _socket?.onConnect((_) {
       _log('✅ Signaling socket CONNECTED (sid=${_socket?.id})');
       if (!mounted || _disposed) return;
@@ -251,14 +251,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       _loadChatHistory(realMeetingId, userId);
       _loadParticipants(realMeetingId);
-
       _emitJoin(cleanCode, userId, name, !video);
-
-      if (_chatSocket?.connected ?? false) {
-        _emitJoinChat(realMeetingId, userId, jwtToken);
-      } else {
-        _chatSocket?.once('connect', (_) => _emitJoinChat(realMeetingId, userId, jwtToken));
-      }
+      _emitJoinChat(realMeetingId, userId, jwtToken);
     });
 
     _socket?.onConnectError((err) => _log('❌ Signaling CONNECT_ERROR: $err'));
@@ -266,24 +260,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.onDisconnect((reason) => _log('⚠️ Signaling disconnected: $reason'));
     _socket?.onAny((event, data) => _log('📡 EVENT: $event | DATA: $data'));
 
-    _chatSocket?.onConnect((_) => _log('✅ Chat socket CONNECTED'));
-    _chatSocket?.onConnectError((err) => _log('❌ Chat CONNECT_ERROR: $err'));
-
-    // Then attach domain event handlers.
     _initSocketListeners(realMeetingId, userId, name, jwtToken, !video);
 
-    // Finally connect — handlers are guaranteed attached.
+    // Verify the manager actually has the path we asked for. If you ever
+    // see this log say `/socket.io` instead of `/signaling-fresh`, the
+    // option propagation is broken and we'd see the 502s from before.
+    _log('Manager opts.path=${_socket?.io.options?['path']} '
+        'transports=${_socket?.io.options?['transports']}');
+
     _log('Connecting signaling socket now…');
     _socket?.connect();
-    _chatSocket?.connect();
 
-    // Diagnostic: surface socket state at 1/3/8 s so a stalled handshake
-    // is obvious without needing a deeper debugger.
     for (final secs in [1, 3, 8]) {
       Future.delayed(Duration(seconds: secs), () {
         if (!mounted || _disposed) return;
         _log('⏱  t=${secs}s: signaling.connected=${_socket?.connected} '
-            'chat.connected=${_chatSocket?.connected}');
+            'sid=${_socket?.id}');
       });
     }
   }
