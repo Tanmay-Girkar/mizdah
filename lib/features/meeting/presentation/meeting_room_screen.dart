@@ -1,6 +1,7 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import '../../settings/meeting_layout_provider.dart';
+import 'widgets/present_source_picker.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -372,9 +373,28 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           Navigator.pop(context);
           setState(() => _activePanel = 'whiteboard');
         },
-        onToggleScreenShare: () {
+        onToggleScreenShare: () async {
           Navigator.pop(context);
-          ref.read(meetingProvider(widget.meetingId).notifier).toggleScreenShare();
+          final notifier =
+              ref.read(meetingProvider(widget.meetingId).notifier);
+          // If we're already sharing, the same control stops sharing
+          // immediately — no picker needed.
+          final isSharing =
+              ref.read(meetingProvider(widget.meetingId)).isScreenSharing;
+          if (isSharing) {
+            notifier.toggleScreenShare();
+            return;
+          }
+          // Show the Chrome-style picker dialog. The actual capture
+          // (which on mobile triggers the OS native picker) only
+          // fires once the user taps Share in the dialog.
+          if (!context.mounted) return;
+          final source = await PresentSourcePicker.show(
+            context,
+            origin: 'mizdah-front.ogoul.cloud',
+          );
+          if (source == null) return;
+          notifier.toggleScreenShare();
         },
         onToggleCaptions: () {
           Navigator.pop(context);
