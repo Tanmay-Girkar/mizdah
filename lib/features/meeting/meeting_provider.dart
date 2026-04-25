@@ -72,6 +72,18 @@ class MeetingState {
   /// toast). Null after the toast auto-dismisses.
   final Map<String, dynamic>? incomingChatToast;
 
+  /// Inbound remote-control request — set when another participant
+  /// asks to control our screen. UI surfaces the grant/deny dialog
+  /// while non-null. Cleared after we respond.
+  final Map<String, dynamic>? incomingControlRequest;
+  /// SocketId of the participant we've granted control to (we're the
+  /// presenter being controlled). Null when no one has control.
+  final String? controllingPeerSocketId;
+  /// SocketId of the participant currently granting us control of
+  /// their screen (we're the controller). Null when we don't have
+  /// control of anyone.
+  final String? controlOfPeerSocketId;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -99,6 +111,9 @@ class MeetingState {
     this.reactions = const [],
     this.incomingChatToast,
     this.screenRenderer,
+    this.incomingControlRequest,
+    this.controllingPeerSocketId,
+    this.controlOfPeerSocketId,
   });
 
   MeetingState copyWith({
@@ -129,6 +144,12 @@ class MeetingState {
     bool clearChatToast = false,
     RTCVideoRenderer? screenRenderer,
     bool clearScreenRenderer = false,
+    Map<String, dynamic>? incomingControlRequest,
+    bool clearIncomingControlRequest = false,
+    String? controllingPeerSocketId,
+    bool clearControllingPeer = false,
+    String? controlOfPeerSocketId,
+    bool clearControlOfPeer = false,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -161,6 +182,15 @@ class MeetingState {
       screenRenderer: clearScreenRenderer
           ? null
           : (screenRenderer ?? this.screenRenderer),
+      incomingControlRequest: clearIncomingControlRequest
+          ? null
+          : (incomingControlRequest ?? this.incomingControlRequest),
+      controllingPeerSocketId: clearControllingPeer
+          ? null
+          : (controllingPeerSocketId ?? this.controllingPeerSocketId),
+      controlOfPeerSocketId: clearControlOfPeer
+          ? null
+          : (controlOfPeerSocketId ?? this.controlOfPeerSocketId),
     );
   }
 }
@@ -628,13 +658,12 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             if (p is Map && p['socketId'] == from) {
               final m = Map<String, dynamic>.from(p);
               if (data.containsKey('audioEnabled')) m['audioEnabled'] = data['audioEnabled'];
-              if (stoppedSharing) {
-                // Don't trust videoEnabled in the share-stop message
-                // — force avatar until the peer re-broadcasts their
-                // real camera state. Stops the frozen screen frame
-                // from sitting in the tile forever.
-                m['videoEnabled'] = false;
-              } else if (data.containsKey('videoEnabled')) {
+              // Trust the remote's videoEnabled flag — if their
+              // camera is on after stopping share, show the camera
+              // (not the avatar). The renderer flush below clears
+              // any cached screen frame so new camera frames render
+              // cleanly.
+              if (data.containsKey('videoEnabled')) {
                 m['videoEnabled'] = data['videoEnabled'];
               }
               if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
@@ -664,6 +693,44 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             }
           }
       }
+    });
+
+    // Remote-control protocol. Three events:
+    //   request-control       (client → server, target socketId)
+    //   control-request       (server → target client; we pop dialog)
+    //   control-response      (target → requester; granted bool)
+    _socket?.on('control-request', (data) {
+      if (!mounted || _disposed || data is! Map) return;
+      final from = (data['from'] ?? data['socketId'])?.toString();
+      final name = (data['name'] ?? data['senderName'] ?? 'A participant').toString();
+      if (from == null) return;
+      _log('🖱  control-request from $from ($name)');
+      state = state.copyWith(incomingControlRequest: {
+        'from': from,
+        'name': name,
+        'at': DateTime.now().millisecondsSinceEpoch,
+      });
+    });
+
+    _socket?.on('control-response', (data) {
+      if (!mounted || _disposed || data is! Map) return;
+      final from = (data['from'] ?? data['socketId'])?.toString();
+      final granted = data['granted'] == true;
+      _log('🖱  control-response from $from granted=$granted');
+      if (granted && from != null) {
+        state = state.copyWith(controlOfPeerSocketId: from);
+      } else {
+        state = state.copyWith(clearControlOfPeer: true);
+      }
+    });
+
+    _socket?.on('control-revoked', (data) {
+      if (!mounted || _disposed) return;
+      _log('🖱  control revoked');
+      state = state.copyWith(
+        clearControllingPeer: true,
+        clearControlOfPeer: true,
+      );
     });
 
     _socket?.on('switch-to-sfu', (_) {
@@ -1323,6 +1390,65 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         );
       } catch (_) {}
     });
+  }
+
+  // ----- Remote-control flow ----------------------------------------
+
+  /// Ask a peer (the presenter) to grant control of their screen.
+  /// Their client will pop a grant/deny dialog; the response comes
+  /// back via the `control-response` socket event.
+  void requestRemoteControl(String targetSocketId) {
+    if (state.meetingId == null) return;
+    final payload = {
+      'meetingId': state.meetingCode ?? state.meetingId,
+      'to': targetSocketId,
+      'from': _socket?.id,
+      'name': _userName ?? 'You',
+      'senderId': state.userId,
+    };
+    _log('🖱  emit request-control → $targetSocketId');
+    _socket?.emit('request-control', payload);
+  }
+
+  /// Respond to an incoming control request. Clears the dialog state
+  /// either way; if granted, remember which peer can drive us so the
+  /// UI can show a banner.
+  void respondRemoteControl({required bool granted}) {
+    final req = state.incomingControlRequest;
+    if (req == null) return;
+    final to = req['from']?.toString();
+    if (to != null) {
+      _socket?.emit('control-response', {
+        'meetingId': state.meetingCode ?? state.meetingId,
+        'to': to,
+        'from': _socket?.id,
+        'name': _userName ?? 'You',
+        'granted': granted,
+      });
+    }
+    _log('🖱  emit control-response granted=$granted to=$to');
+    state = state.copyWith(
+      clearIncomingControlRequest: true,
+      controllingPeerSocketId: granted ? to : null,
+      clearControllingPeer: !granted,
+    );
+  }
+
+  /// Either side can revoke an active control session. Clears local
+  /// state and tells the other party.
+  void revokeRemoteControl() {
+    final to = state.controllingPeerSocketId ?? state.controlOfPeerSocketId;
+    if (to != null) {
+      _socket?.emit('revoke-control', {
+        'meetingId': state.meetingCode ?? state.meetingId,
+        'to': to,
+        'from': _socket?.id,
+      });
+    }
+    state = state.copyWith(
+      clearControllingPeer: true,
+      clearControlOfPeer: true,
+    );
   }
 
   void muteAll() => _socket?.emit('mute-all');

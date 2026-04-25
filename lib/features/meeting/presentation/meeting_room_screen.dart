@@ -2,6 +2,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import '../../settings/meeting_layout_provider.dart';
 import 'widgets/present_source_picker.dart';
+import 'widgets/remote_control_dialog.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -86,6 +87,22 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           }
           context.go('/');
         }
+      },
+    );
+
+    // Inbound remote-control request — pop the grant/deny dialog
+    // the moment notifier state has it, regardless of which panel
+    // is currently open.
+    ref.listen<Map<String, dynamic>?>(
+      meetingProvider(widget.meetingId).select((s) => s.incomingControlRequest),
+      (prev, next) async {
+        if (next == null || prev == next) return;
+        if (!context.mounted) return;
+        final granted = await RemoteControlRequestDialog.show(
+          context,
+          requesterName: (next['name'] ?? 'A participant').toString(),
+        );
+        meetingNotifier.respondRemoteControl(granted: granted == true);
       },
     );
 
@@ -214,6 +231,22 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   right: 16,
                   child: _PresentingBanner(
                     onStop: () => meetingNotifier.toggleScreenShare(),
+                  ),
+                ),
+
+              // Active remote-control banner — visible when someone
+              // ELSE is currently controlling our screen (we granted),
+              // OR when we've been granted control of someone else.
+              if (meetingState.controllingPeerSocketId != null ||
+                  meetingState.controlOfPeerSocketId != null)
+                Positioned(
+                  top: meetingState.isScreenSharing ? 132 : 80,
+                  left: 16,
+                  right: 16,
+                  child: _RemoteControlActiveBanner(
+                    isHostBeingControlled:
+                        meetingState.controllingPeerSocketId != null,
+                    onRevoke: () => meetingNotifier.revokeRemoteControl(),
                   ),
                 ),
 
@@ -521,11 +554,15 @@ class _VideoGrid extends ConsumerWidget {
       final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
       final videoEnabled = p['videoEnabled'] != false;
       final audioEnabled = p['audioEnabled'] != false;
+      final isPresenting = p['isSharing'] == true;
       tiles.add(_ParticipantTileData(
         name: name,
         renderer: renderer,
         videoEnabled: videoEnabled,
         audioEnabled: audioEnabled,
+        isPresenting: isPresenting,
+        socketId: socketId,
+        meetingId: meetingState.meetingCode ?? meetingState.meetingId,
       ));
     }
     for (final entry in meetingState.remoteRenderers.entries) {
@@ -744,21 +781,34 @@ class _ParticipantTileData {
   /// (we never render the live screen renderer locally to avoid
   /// the infinite-mirror recursion).
   final bool isPresentingPlaceholder;
+  /// True if this participant is currently presenting their screen
+  /// (their `isSharing` flag from media-toggle is true). Used by
+  /// the tile to surface a "Request control" button overlay.
+  final bool isPresenting;
+  /// SocketId of the participant — passed to the requestRemoteControl
+  /// callback so we know who to send the request to.
+  final String? socketId;
+  /// Routing key for the meetingProvider so the tile can fire
+  /// notifier methods (e.g. requestRemoteControl).
+  final String? meetingId;
   const _ParticipantTileData({
     required this.name,
     this.renderer,
     this.videoEnabled = true,
     this.audioEnabled = true,
     this.isPresentingPlaceholder = false,
+    this.isPresenting = false,
+    this.socketId,
+    this.meetingId,
   });
 }
 
-class _RemoteParticipantTile extends StatelessWidget {
+class _RemoteParticipantTile extends ConsumerWidget {
   final _ParticipantTileData data;
   const _RemoteParticipantTile({required this.data});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final renderer = data.renderer;
     // Show video only if the peer has video enabled AND we have a
     // renderer with a stream attached. Otherwise fall back to avatar
@@ -793,6 +843,27 @@ class _RemoteParticipantTile extends StatelessWidget {
       );
     }
 
+    // If this remote participant is currently presenting their
+    // screen, surface a "Request control" button in the corner.
+    // Tapping it asks them via socket; their client pops the
+    // grant/deny dialog. Hide it for the local presenting placeholder
+    // (you don't request control of your own screen).
+    final canRequestControl = data.isPresenting &&
+        !data.isPresentingPlaceholder &&
+        data.socketId != null &&
+        data.meetingId != null;
+
+    String? alreadyControllingId;
+    if (canRequestControl) {
+      // Cheap watch — only touches state.controlOfPeerSocketId so
+      // re-runs only when control state changes.
+      alreadyControllingId = ref.watch(
+        meetingProvider(data.meetingId!)
+            .select((s) => s.controlOfPeerSocketId),
+      );
+    }
+    final iAmControlling = alreadyControllingId == data.socketId;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Container(
@@ -808,6 +879,7 @@ class _RemoteParticipantTile extends StatelessWidget {
                   FadeTransition(opacity: animation, child: child),
               child: inner,
             ),
+            // Bottom-left name + mute badge
             Positioned(
               left: 8,
               bottom: 8,
@@ -840,7 +912,87 @@ class _RemoteParticipantTile extends StatelessWidget {
                 ],
               ),
             ),
+            // Top-right Request-control / Stop-controlling pill —
+            // only visible while the participant is presenting.
+            if (canRequestControl)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: _RequestControlPill(
+                  active: iAmControlling,
+                  onTap: () {
+                    final notifier = ref.read(
+                      meetingProvider(data.meetingId!).notifier,
+                    );
+                    if (iAmControlling) {
+                      notifier.revokeRemoteControl();
+                    } else {
+                      notifier.requestRemoteControl(data.socketId!);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Control request sent to ${data.name}'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RequestControlPill extends StatelessWidget {
+  final bool active;
+  final VoidCallback onTap;
+  const _RequestControlPill({required this.active, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = active ? Colors.red : const Color(0xFF1A73E8);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                active
+                    ? Icons.stop_circle_outlined
+                    : Icons.near_me_rounded,
+                color: Colors.white,
+                size: 14,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                active ? 'Stop control' : 'Request control',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2608,6 +2760,83 @@ class _JoinRequestBanner extends StatelessWidget {
             label: 'Admit',
             isFullWidth: false,
             onTap: onAdmit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Remote-control active banner — visible while a control session is open
+// ---------------------------------------------------------------------------
+
+class _RemoteControlActiveBanner extends StatelessWidget {
+  final bool isHostBeingControlled;
+  final VoidCallback onRevoke;
+  const _RemoteControlActiveBanner({
+    required this.isHostBeingControlled,
+    required this.onRevoke,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF8E24AA).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.near_me_rounded,
+                color: Colors.white, size: 16),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isHostBeingControlled
+                  ? 'Someone is controlling your screen'
+                  : 'You are controlling a remote screen',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onRevoke,
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF8E24AA),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(
+              isHostBeingControlled ? 'Revoke' : 'Stop',
+              style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),

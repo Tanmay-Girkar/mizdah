@@ -208,15 +208,16 @@ class UpcomingMeetingsSection extends ConsumerWidget {
   }
 }
 
-class JoinMeetingCard extends StatefulWidget {
+class JoinMeetingCard extends ConsumerStatefulWidget {
   const JoinMeetingCard({super.key});
 
   @override
-  State<JoinMeetingCard> createState() => _JoinMeetingCardState();
+  ConsumerState<JoinMeetingCard> createState() => _JoinMeetingCardState();
 }
 
-class _JoinMeetingCardState extends State<JoinMeetingCard> {
+class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
   final _controller = TextEditingController();
+  bool _validating = false;
 
   @override
   void dispose() {
@@ -224,11 +225,39 @@ class _JoinMeetingCardState extends State<JoinMeetingCard> {
     super.dispose();
   }
 
-  void _join() {
+  Future<void> _join() async {
     final code = MeetingUtils.extractCode(_controller.text);
-    if (code.isNotEmpty) {
-      context.push('/pre-join/$code');
+    if (code.isEmpty) {
+      _showError('Please enter a meeting code');
+      return;
     }
+    setState(() => _validating = true);
+    final repo = ref.read(meetingRepositoryProvider);
+    final meeting = await repo.getMeetingInfo(code);
+    if (!mounted) return;
+    setState(() => _validating = false);
+    if (meeting == null) {
+      _showError('Meeting code is not valid');
+      return;
+    }
+    context.push('/pre-join/$code');
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(msg)),
+          ],
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFFB71C1C),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
@@ -247,8 +276,8 @@ class _JoinMeetingCardState extends State<JoinMeetingCard> {
           ),
           const SizedBox(height: 12),
           MizdahButton(
-            label: 'Join',
-            onTap: _join,
+            label: _validating ? 'Checking…' : 'Join',
+            onTap: _validating ? null : _join,
             isFullWidth: true,
           ),
         ],
