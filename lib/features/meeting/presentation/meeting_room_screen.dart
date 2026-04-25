@@ -86,8 +86,12 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           bottom: false,
           child: Stack(
             children: [
-              // Main Video Grid
-              (meetingState.participants.isNotEmpty || meetingState.mockParticipantCount > 0)
+              // Main Video Grid — show as soon as we have any remote video
+              // OR a known participant. (Participant list and renderers
+              // populate on different events, so check both.)
+              (meetingState.remoteRenderers.isNotEmpty
+                      || meetingState.participants.isNotEmpty
+                      || meetingState.mockParticipantCount > 0)
                 ? _VideoGrid(meetingState: meetingState)
                 : _SolitaryHeroView(meetingId: widget.meetingId),
 
