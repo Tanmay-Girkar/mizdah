@@ -16,6 +16,16 @@ import '../../data/repositories/meeting_repository.dart';
 const String _kLogTag = '[MEET]';
 void _log(String msg) => debugPrint('$_kLogTag $msg');
 
+/// Coarse-grained call phase. UI watches this instead of inferring
+/// state from a half-dozen booleans, which makes the transitions
+/// (placeholder → live tile, hangup → cleanup) reliably one-shot.
+enum MeetingPhase {
+  idle,        // initial, before joinMeeting fires
+  connecting,  // sockets opening, REST validate, getUserMedia
+  inMeeting,   // join-confirmation JOINED
+  ended,       // user hung up or remote ended the call
+}
+
 class MeetingState {
   final bool isConnected;
   final RTCVideoRenderer localRenderer;
@@ -41,6 +51,7 @@ class MeetingState {
   final String? meetingId;
   final String? meetingCode;
   final String? userId;
+  final MeetingPhase phase;
 
   MeetingState({
     this.isConnected = false,
@@ -65,6 +76,7 @@ class MeetingState {
     this.hostAllowsMic = true,
     this.hostAllowsCam = true,
     this.hostAllowsChat = true,
+    this.phase = MeetingPhase.idle,
   });
 
   MeetingState copyWith({
@@ -89,6 +101,7 @@ class MeetingState {
     bool? hostAllowsCam,
     bool? hostAllowsChat,
     bool? isHost,
+    MeetingPhase? phase,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -113,6 +126,7 @@ class MeetingState {
       hostAllowsMic: hostAllowsMic ?? this.hostAllowsMic,
       hostAllowsCam: hostAllowsCam ?? this.hostAllowsCam,
       hostAllowsChat: hostAllowsChat ?? this.hostAllowsChat,
+      phase: phase ?? this.phase,
     );
   }
 }
@@ -183,6 +197,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       {bool video = true, bool audio = true}) async {
     _log('joinMeeting → meetingId=$meetingId userId=$userId name=$name video=$video audio=$audio');
     _userName = name;
+    if (mounted && !_disposed) {
+      state = state.copyWith(phase: MeetingPhase.connecting);
+    }
 
     final cleanCode = meetingId.toLowerCase().trim();
 
@@ -373,6 +390,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         isInWaitingRoom: false,
         isHost: isHostConfirmed || state.isHost,
         hostId: data['hostId']?.toString() ?? state.hostId,
+        phase: MeetingPhase.inMeeting,
       );
 
       if (isHostConfirmed) {
@@ -977,6 +995,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _networkResilienceService?.dispose();
     _sfuService?.dispose();
     _hasJoinedRoom = false;
+    if (mounted && !_disposed) {
+      state = state.copyWith(phase: MeetingPhase.ended);
+    }
   }
 
   void _startWaitingListPolling(String meetingId) {

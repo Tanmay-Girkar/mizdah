@@ -86,14 +86,36 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
           bottom: false,
           child: Stack(
             children: [
-              // Main Video Grid — show as soon as we have any remote video
-              // OR a known participant. (Participant list and renderers
-              // populate on different events, so check both.)
-              (meetingState.remoteRenderers.isNotEmpty
-                      || meetingState.participants.isNotEmpty
-                      || meetingState.mockParticipantCount > 0)
-                ? _VideoGrid(meetingState: meetingState)
-                : _SolitaryHeroView(meetingId: widget.meetingId),
+              // Main body — single layout, cross-faded internally so
+              // we never tear down and rebuild the surrounding chrome
+              // when a peer joins or their video starts arriving.
+              Positioned.fill(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(opacity: animation, child: child),
+                  layoutBuilder: (current, previous) => Stack(
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      ...previous,
+                      if (current != null) current,
+                    ],
+                  ),
+                  child: (meetingState.remoteRenderers.isNotEmpty ||
+                          _hasOtherParticipants(meetingState) ||
+                          meetingState.mockParticipantCount > 0)
+                      ? KeyedSubtree(
+                          key: const ValueKey('grid'),
+                          child: _VideoGrid(meetingState: meetingState),
+                        )
+                      : KeyedSubtree(
+                          key: const ValueKey('solitary'),
+                          child: _SolitaryHeroView(meetingId: widget.meetingId),
+                        ),
+                ),
+              ),
 
               // Floating Top Bar
               Positioned(
@@ -217,6 +239,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   }
 
   String? _activePanel;
+
+  /// True iff the participants list contains anyone other than us.
+  /// Used at the body-switcher to avoid showing the grid for a
+  /// list that's just `[self]` (which would empty out a moment later
+  /// when join-confirmation lands and cause a flicker).
+  bool _hasOtherParticipants(MeetingState s) {
+    for (final p in s.participants) {
+      if (p is! Map) continue;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != null && pid != s.userId) return true;
+      final sid = (p['socketId'])?.toString();
+      if (sid != null && sid != s.userId) return true;
+    }
+    return false;
+  }
 
   void _showOptionsBottomSheet(BuildContext context) {
     showModalBottomSheet(
@@ -442,6 +479,25 @@ class _RemoteParticipantTile extends StatelessWidget {
         renderer != null &&
         (renderer.srcObject?.getVideoTracks().isNotEmpty ?? false);
 
+    // Single Stack layout for the tile — the avatar/video crossfade
+    // happens inside an AnimatedSwitcher. The label / mute badge are
+    // kept in the same Positioned slot regardless of state, so they
+    // never re-layout when the swap happens.
+    final inner = hasVideo
+        ? RepaintBoundary(
+            // Key by renderer identity so AnimatedSwitcher knows it's
+            // a "different child" the moment a real renderer arrives.
+            key: ValueKey('video-${identityHashCode(renderer)}'),
+            child: RTCVideoView(
+              renderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            ),
+          )
+        : KeyedSubtree(
+            key: ValueKey('avatar-${data.name}'),
+            child: _AvatarPlaceholder(name: data.name, size: 72),
+          );
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Container(
@@ -449,15 +505,14 @@ class _RemoteParticipantTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (hasVideo)
-              RepaintBoundary(
-                child: RTCVideoView(
-                  renderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                ),
-              )
-            else
-              _AvatarPlaceholder(name: data.name, size: 72),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) =>
+                  FadeTransition(opacity: animation, child: child),
+              child: inner,
+            ),
             Positioned(
               left: 8,
               bottom: 8,
@@ -679,15 +734,24 @@ class _SelfViewCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: isCameraOn
-            ? RepaintBoundary(
-                child: RTCVideoView(
-                  renderer,
-                  mirror: true,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: isCameraOn
+              ? RepaintBoundary(
+                  key: const ValueKey('self-video'),
+                  child: RTCVideoView(
+                    renderer,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                )
+              : const KeyedSubtree(
+                  key: ValueKey('self-avatar'),
+                  child: _AvatarPlaceholder(name: 'You', size: 56),
                 ),
-              )
-            : const _AvatarPlaceholder(name: 'You', size: 56),
+        ),
       ),
     );
   }
