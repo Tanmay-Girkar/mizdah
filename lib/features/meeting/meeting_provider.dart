@@ -805,14 +805,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   Future<void> refreshWaitingList() async {
-    // Try the original code first; the backend may key on either the
-    // raw code (e.g. `iggbofigzr`) or the stripped form. If both fail
-    // we just keep the current list.
     final code = state.meetingCode;
     if (code == null) return;
     var list = await _meetingRepository.getWaitingParticipants(code);
-    if (list.isEmpty && code.contains('-')) {
+    if (list == null && code.contains('-')) {
       list = await _meetingRepository.getWaitingParticipants(code.replaceAll('-', ''));
+    }
+    if (list == null) {
+      // Backend has no REST waiting-room endpoint. Stop polling and
+      // rely entirely on socket `request-to-join` / `waiting-list-update`.
+      _log('🛎  Waiting-room REST unavailable — disabling poll, using sockets only');
+      _waitingListTimer?.cancel();
+      _waitingListTimer = null;
+      return;
     }
     if (mounted && !_disposed) {
       _log('🛎  Waiting-room poll → ${list.length} participants');

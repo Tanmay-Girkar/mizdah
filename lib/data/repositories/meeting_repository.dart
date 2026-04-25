@@ -72,17 +72,32 @@ class MeetingRepository {
   }
 
   // Waiting Room Management
-  Future<List<Map<String, dynamic>>> getWaitingParticipants(String meetingId) async {
-    try {
-      final response = await _apiClient.get('${ApiConfig.waitingRoomWaiting}/$meetingId');
-      if (response.data is List) {
-        return List<Map<String, dynamic>>.from(response.data);
+  //
+  // NOTE: as of 2026-04-25 the gateway has NO `/api/waiting-room/*` route.
+  // Waiting-room state is delivered exclusively via the signaling socket
+  // (`request-to-join`, `waiting-list-update`). This method tries the
+  // documented REST paths and any candidates the backend might add in
+  // future, returning null if none resolve so the caller can stop polling.
+  Future<List<Map<String, dynamic>>?> getWaitingParticipants(String meetingId) async {
+    final candidates = <String>[
+      '${ApiConfig.waitingRoomWaiting}/$meetingId',
+      '${ApiConfig.getMeeting}/$meetingId/waiting',
+      '${ApiConfig.meetingParticipants}/$meetingId/waiting',
+    ];
+    for (final url in candidates) {
+      try {
+        final response = await _apiClient.get(url);
+        if (response.data is List) {
+          return List<Map<String, dynamic>>.from(response.data);
+        }
+        if (response.data is Map && response.data['data'] is List) {
+          return List<Map<String, dynamic>>.from(response.data['data']);
+        }
+      } catch (_) {
+        // try next candidate
       }
-      return [];
-    } catch (e) {
-      debugPrint('Error fetching waiting participants: $e');
-      return [];
     }
+    return null;
   }
 
   Future<bool> admitParticipant(String socketId) async {
