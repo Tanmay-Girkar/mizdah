@@ -652,6 +652,13 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (senderId != null && senderId == state.userId) return;
     final text = (msg['content'] ?? msg['text'] ?? '').toString();
     final sender = (msg['senderName'] ?? msg['sender'] ?? 'Unknown').toString();
+    // CHAT-shaped reaction fallback (see sendReaction). Treat single
+    // emoji content tagged isReaction as a floating reaction, NOT a
+    // chat message.
+    if (msg['isReaction'] == true && text.isNotEmpty) {
+      _addReaction(text, sender);
+      return;
+    }
     final formattedMsg = {
       'text': text,
       'sender': sender,
@@ -1222,28 +1229,69 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   /// Send a one-shot emoji reaction to the room. Shows immediately
   /// for the sender and broadcasts to other clients via socket.
-  /// Same channel as chat — `media-toggle` with `type: REACTION`.
+  ///
+  /// The reaction payload is sent with the same envelope shape that
+  /// the web client uses for chat (which we've confirmed the server
+  /// relays). We try several `type` values + bare event names + a
+  /// CHAT-shaped fallback so the emoji still surfaces on the other
+  /// end even if the web app doesn't have a dedicated reaction
+  /// receiver. The receiving Flutter client can tell a reaction from
+  /// a real chat message because `isReaction: true` is set.
   void sendReaction(String emoji) {
     if (state.meetingId == null) return;
-    final payload = {
-      'meetingId': state.meetingId,
-      'roomId': state.meetingId,
-      'senderId': state.userId,
-      'userId': state.userId,
-      'type': 'REACTION',
-      'emoji': emoji,
-      'content': emoji,
-      'name': _userName ?? 'You',
-      'senderName': _userName ?? 'You',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    final mid = state.meetingId;
+    final uid = state.userId;
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final id = '$ts-${(ts % 100000).toString().padLeft(5, '0')}';
+    final name = _userName ?? 'You';
+
+    final base = <String, dynamic>{
+      'id': id,
+      'meetingId': mid,
+      'roomId': mid,
+      'senderId': uid,
+      'userId': uid,
+      'name': name,
+      'senderName': name,
+      'timestamp': ts,
+      'createdAt': DateTime.now().toIso8601String(),
     };
+
     _log('🎉 emit reaction $emoji');
-    _socket?.emit('media-toggle', payload);
-    _socket?.emit('media-toggle-remote', payload);
-    for (final ev in const ['reaction', 'reaction-remote', 'send-reaction', 'emoji']) {
-      _socket?.emit(ev, payload);
+
+    // 1) Reaction-shaped payloads on the generic relay channel.
+    for (final t in const ['REACTION', 'EMOJI', 'REACT']) {
+      final p = {...base, 'type': t, 'emoji': emoji, 'content': emoji};
+      _socket?.emit('media-toggle', p);
+      _socket?.emit('media-toggle-remote', p);
     }
-    _addReaction(emoji, _userName ?? 'You');
+
+    // 2) Bare event-name fallbacks (some servers route on these).
+    for (final ev in const [
+      'reaction',
+      'reaction-remote',
+      'send-reaction',
+      'emoji',
+      'emoji-remote',
+    ]) {
+      _socket?.emit(ev, {...base, 'emoji': emoji, 'content': emoji});
+    }
+
+    // 3) CHAT-shaped fallback. Confirmed working channel — even if
+    //    the web app has no reaction receiver, the emoji will at
+    //    least appear in their chat. `isReaction: true` lets other
+    //    Flutter clients render it as a floating emoji instead of a
+    //    chat bubble.
+    _socket?.emit('media-toggle', {
+      ...base,
+      'type': 'CHAT',
+      'content': emoji,
+      'message': emoji,
+      'text': emoji,
+      'isReaction': true,
+    });
+
+    _addReaction(emoji, name);
   }
 
   void _addReaction(String emoji, String name) {
