@@ -1,3 +1,4 @@
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1434,6 +1435,64 @@ class _ChatView extends ConsumerStatefulWidget {
 class _ChatViewState extends ConsumerState<_ChatView> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _inputFocus = FocusNode();
+  bool _emojiPanelOpen = false;
+
+  void _toggleEmojiPanel() {
+    setState(() => _emojiPanelOpen = !_emojiPanelOpen);
+    if (_emojiPanelOpen) {
+      _inputFocus.unfocus();
+    } else {
+      _inputFocus.requestFocus();
+    }
+  }
+
+  void _onEmojiSelected(Category? _, Emoji emoji) {
+    final ctrl = _textController;
+    final selection = ctrl.selection;
+    final text = ctrl.text;
+    final start = selection.start < 0 ? text.length : selection.start;
+    final end = selection.end < 0 ? text.length : selection.end;
+    final newText = text.replaceRange(start, end, emoji.emoji);
+    ctrl.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.emoji.length),
+    );
+  }
+
+  void _onBackspace() {
+    final ctrl = _textController;
+    final text = ctrl.text;
+    if (text.isEmpty) return;
+    final selection = ctrl.selection;
+    if (selection.start <= 0 || selection.start != selection.end) {
+      // Use default delete behavior for ranges.
+      return;
+    }
+    // Delete one user-perceived character (handles surrogate pairs).
+    final runes = text.runes.toList();
+    int byteIdx = 0;
+    int runeIdx = 0;
+    while (runeIdx < runes.length) {
+      final char = String.fromCharCode(runes[runeIdx]);
+      if (byteIdx + char.length >= selection.start) break;
+      byteIdx += char.length;
+      runeIdx++;
+    }
+    if (runeIdx >= runes.length) return;
+    final removed = String.fromCharCode(runes[runeIdx]);
+    final newText = text.replaceRange(byteIdx, byteIdx + removed.length, '');
+    ctrl.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: byteIdx),
+    );
+  }
+
+  void _send() {
+    if (_textController.text.trim().isEmpty) return;
+    widget.onSend(_textController.text);
+    _textController.clear();
+  }
 
   @override
   void didUpdateWidget(_ChatView oldWidget) {
@@ -1459,6 +1518,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
@@ -1604,23 +1664,48 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           ),
         ),
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           decoration: BoxDecoration(
             color: isDark ? Colors.white.withValues(alpha: 0.02) : Colors.white,
             border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
           ),
           child: Row(
             children: [
+              // Left-side emoji toggle.
+              IconButton(
+                onPressed: _toggleEmojiPanel,
+                splashRadius: 22,
+                tooltip: _emojiPanelOpen ? 'Show keyboard' : 'Insert emoji',
+                icon: Icon(
+                  _emojiPanelOpen
+                      ? Icons.keyboard_alt_outlined
+                      : Icons.emoji_emotions_outlined,
+                  color: _emojiPanelOpen
+                      ? MizdahTheme.primaryBlue
+                      : (isDark ? Colors.white70 : Colors.black54),
+                  size: 24,
+                ),
+              ),
               Expanded(
                 child: TextField(
                   controller: _textController,
+                  focusNode: _inputFocus,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  onTap: () {
+                    if (_emojiPanelOpen) {
+                      setState(() => _emojiPanelOpen = false);
+                    }
+                  },
                   style: TextStyle(color: isDark ? Colors.white : Colors.black87),
                   decoration: InputDecoration(
                     hintText: 'Send a message...',
                     hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.6)),
                     filled: true,
-                    fillColor: isDark ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF0F2f5),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    fillColor: isDark
+                        ? Colors.white.withValues(alpha: 0.05)
+                        : const Color(0xFFF0F2F5),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
                       borderSide: BorderSide.none,
@@ -1628,17 +1713,12 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               GestureDetector(
-                onTap: () {
-                  if (_textController.text.isNotEmpty) {
-                    widget.onSend(_textController.text);
-                    _textController.clear();
-                  }
-                },
+                onTap: _send,
                 child: Container(
-                  height: 48,
-                  width: 48,
+                  height: 44,
+                  width: 44,
                   decoration: BoxDecoration(
                     color: MizdahTheme.primaryBlue,
                     shape: BoxShape.circle,
@@ -1654,6 +1734,54 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                 ),
               ),
             ],
+          ),
+        ),
+
+        // Slide-up emoji picker panel. Shown only when toggled so it
+        // doesn't steal screen real estate by default.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          child: SizedBox(
+            height: _emojiPanelOpen ? 300 : 0,
+            child: _emojiPanelOpen
+                ? EmojiPicker(
+                    textEditingController: _textController,
+                    onEmojiSelected: _onEmojiSelected,
+                    onBackspacePressed: _onBackspace,
+                    config: Config(
+                      height: 300,
+                      checkPlatformCompatibility: true,
+                      emojiViewConfig: EmojiViewConfig(
+                        backgroundColor: isDark
+                            ? const Color(0xFF1A1A1A)
+                            : const Color(0xFFF7F8FA),
+                        columns: 8,
+                        emojiSizeMax: 26,
+                      ),
+                      categoryViewConfig: CategoryViewConfig(
+                        backgroundColor: isDark
+                            ? const Color(0xFF1A1A1A)
+                            : const Color(0xFFF7F8FA),
+                        iconColor: isDark ? Colors.white38 : Colors.black38,
+                        iconColorSelected: MizdahTheme.primaryBlue,
+                        indicatorColor: MizdahTheme.primaryBlue,
+                      ),
+                      bottomActionBarConfig: BottomActionBarConfig(
+                        backgroundColor: isDark
+                            ? const Color(0xFF1A1A1A)
+                            : const Color(0xFFF7F8FA),
+                        buttonColor: MizdahTheme.primaryBlue,
+                        buttonIconColor: Colors.white,
+                      ),
+                      searchViewConfig: SearchViewConfig(
+                        backgroundColor: isDark
+                            ? const Color(0xFF1A1A1A)
+                            : const Color(0xFFF7F8FA),
+                      ),
+                    ),
+                  )
+                : null,
           ),
         ),
       ],

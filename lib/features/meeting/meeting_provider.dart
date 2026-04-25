@@ -590,11 +590,16 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.on('host-left', onMeetingEnded);
 
     _chatSocket?.on('chat-receive', _handleNewMessage);
+    _chatSocket?.on('chat-message', _handleNewMessage);
+    _chatSocket?.on('new-message', _handleNewMessage);
   }
 
   void _handleNewMessage(data) {
     if (data == null || !mounted || _disposed) return;
     final Map<String, dynamic> msg = Map<String, dynamic>.from(data);
+    // Skip our own messages — we already added them optimistically.
+    final senderId = (msg['senderId'] ?? msg['userId'])?.toString();
+    if (senderId != null && senderId == state.userId) return;
     final formattedMsg = {
       'text': msg['content'] ?? msg['text'] ?? '',
       'sender': msg['senderName'] ?? msg['sender'] ?? 'Unknown',
@@ -944,22 +949,47 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   bool sendMessage(String text, String senderName) {
-    if (!state.hostAllowsChat && !state.isHost) {
-      return false;
-    }
-    if (state.meetingId != null && state.userId != null) {
-      _chatSocket?.emit('chat-send', {
-        'meetingId': state.meetingId,
-        'userId': state.userId,
-        'content': text,
-        'senderName': senderName,
-      });
-      final localMsg = {
-        'text': text,
-        'sender': 'You',
-        'time': DateTime.now().toIso8601String(),
-      };
-      state = state.copyWith(chatMessages: [...state.chatMessages, localMsg]);
+    if (!state.hostAllowsChat && !state.isHost) return false;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    final mid = state.meetingId;
+    final uid = state.userId;
+    if (mid == null || uid == null) return false;
+
+    final isoNow = DateTime.now().toIso8601String();
+
+    // 1. Socket — real-time delivery to other clients in the room.
+    final socketPayload = {
+      'meetingId': mid,
+      'userId': uid,
+      'senderId': uid,
+      'content': trimmed,
+      'senderName': senderName,
+      'createdAt': isoNow,
+    };
+    _socket?.emit('chat-send', socketPayload);
+    _socket?.emit('chat-message', socketPayload);
+
+    // 2. REST — persistence so the message survives reconnects and
+    // shows up in chat history later.
+    _chatRepository.sendMessage(
+      meetingId: mid,
+      senderId: uid,
+      senderName: senderName,
+      content: trimmed,
+    ).catchError((e) {
+      _log('chat REST send failed: $e');
+      // Cast Map<String, dynamic> in case of error
+      return <String, dynamic>{};
+    });
+
+    // 3. Optimistic local echo so the sender sees their message
+    // instantly without waiting for the round-trip.
+    if (mounted && !_disposed) {
+      state = state.copyWith(chatMessages: [
+        ...state.chatMessages,
+        {'text': trimmed, 'sender': 'You', 'time': isoNow},
+      ]);
     }
     return true;
   }
