@@ -14,7 +14,7 @@ import '../../../core/widgets/mizdah_text_field.dart';
 import '../../../data/repositories/mizdah_repository.dart';
 import '../../../core/utils/meeting_utils.dart';
 import '../../home/presentation/home_screen.dart';
-import '../meeting_provider.dart';
+import '../../../core/services/local_media_service.dart';
 
 class PreJoinScreen extends ConsumerStatefulWidget {
   final String? meetingId;
@@ -91,10 +91,12 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
   }
 
   Future<void> _setupMedia() async {
-    // Always start the camera preview, including instant-meeting flow
-    // (widget.meetingId == null). Without this the preview area renders
-    // an empty black box because the renderer never gets a srcObject.
-    ref.read(meetingProvider(widget.meetingId ?? '').notifier).prepareLocalPreview();
+    // Open the camera once via the singleton. The same renderer is
+    // displayed by both this screen and the in-meeting screen, so
+    // navigation never reinitialises the texture.
+    await LocalMediaService.instance
+        .initialize(video: _isCameraOn, audio: _isMicOn);
+    if (mounted) setState(() {});
   }
 
   Future<void> _handleJoin() async {
@@ -120,18 +122,10 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
       }
 
       if (!mounted) return;
-      // Hand the already-running camera over to the in-meeting
-      // provider via a static stage. We can't write into the new
-      // provider directly — `ref.read(...notifier)` doesn't establish
-      // a watcher, so its autoDispose can fire while we await and the
-      // assignment then throws "Bad state: ... after dispose was called".
-      final previewKey = widget.meetingId ?? '';
-      final previewNotifier =
-          ref.read(meetingProvider(previewKey).notifier);
-      final liveStream = previewNotifier.releaseLocalStream();
-      if (liveStream != null) {
-        MeetingNotifier.stageLocalStream(liveStream);
-      }
+      // The camera lives in LocalMediaService — nothing to hand off.
+      // Just make sure no stray shutdown is pending while the meeting
+      // room is taking over.
+      LocalMediaService.instance.cancelShutdown();
 
       context.pushReplacement(
         Uri(
@@ -196,22 +190,18 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
                   child: Column(
                     children: [
                       _CameraPreview(
-                        renderer: ref.watch(meetingProvider(widget.meetingId ?? '')).localRenderer,
+                        renderer: LocalMediaService.instance.renderer,
                         isCameraOn: _isCameraOn,
                         isMicOn: _isMicOn,
                         hasPermissions: _hasPermissions,
                         isLoading: _isPermissionLoading,
                         onMicToggle: () {
                           setState(() => _isMicOn = !_isMicOn);
-                          if (widget.meetingId != null) {
-                            ref.read(meetingProvider(widget.meetingId!).notifier).toggleMic();
-                          }
+                          LocalMediaService.instance.toggleAudio();
                         },
                         onCameraToggle: () {
                           setState(() => _isCameraOn = !_isCameraOn);
-                          if (widget.meetingId != null) {
-                            ref.read(meetingProvider(widget.meetingId!).notifier).toggleCamera();
-                          }
+                          LocalMediaService.instance.toggleVideo();
                         },
                       ),
 
@@ -347,10 +337,12 @@ class _CameraPreview extends StatelessWidget {
                   ),
                 )
               else
-                RTCVideoView(
-                  renderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  mirror: true,
+                RepaintBoundary(
+                  child: RTCVideoView(
+                    renderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    mirror: true,
+                  ),
                 ),
               
               // Media Controls (Bottom Right Overlay)

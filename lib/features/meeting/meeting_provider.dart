@@ -9,6 +9,7 @@ import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
 import '../../core/services/screen_share_service.dart';
 import '../../core/services/network_resilience_service.dart';
+import '../../core/services/local_media_service.dart';
 import '../../data/repositories/meeting_repository.dart';
 
 // Tag for filtering WebRTC/signaling logs in production builds.
@@ -125,7 +126,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   io.Socket? _socket;
   io.Socket? _chatSocket;
   io.Socket? _mediaSocket;
-  MediaStream? _localStream;
   SFUService? _sfuService;
   NetworkResilienceService? _networkResilienceService;
   Timer? _waitingListTimer;
@@ -133,82 +133,47 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   bool _disposed = false;
   String? _userName;
 
+  /// Shortcut to the singleton's stream. We never own a MediaStream
+  /// at this layer — the service does.
+  MediaStream? get _localStream => LocalMediaService.instance.stream;
+
   // Per-peer state: pc, pending-ice queue, and renderer cache.
   final Map<String, RTCPeerConnection> _peerConnections = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
   final Map<String, MediaStream?> _remoteStreams = {};
 
-  // ----- Persistent local-camera cache ------------------------------
-  //
-  // The pre-join screen and the in-meeting screen each instantiate
-  // their own MeetingNotifier (different family keys), so without a
-  // shared cache the camera has to close and reopen across navigation
-  // — that's the 3-4 second black PIP the user reported on Start Now.
-  //
-  // Hold the live MediaStream in a static field so any new notifier
-  // can reuse it. When a notifier leaves the meeting we schedule a
-  // delayed shutdown rather than killing the camera immediately,
-  // giving the next notifier a window to claim the stream. The
-  // shutdown is cancelled the moment another notifier acquires.
-  static MediaStream? _persistentLocalStream;
-  static Timer? _persistentStreamStopTimer;
-  static const Duration _persistentStreamGrace = Duration(seconds: 5);
-
+  /// Static stage entry point retained so existing pre-join callers
+  /// don't break — now just pre-warms the singleton.
   static void stageLocalStream(MediaStream stream) {
-    _persistentStreamStopTimer?.cancel();
-    _persistentStreamStopTimer = null;
-    _persistentLocalStream = stream;
+    LocalMediaService.instance.cancelShutdown();
   }
 
-  static void _scheduleStreamShutdown() {
-    _persistentStreamStopTimer?.cancel();
-    _persistentStreamStopTimer = Timer(_persistentStreamGrace, () {
-      try {
-        _persistentLocalStream?.getTracks().forEach((t) => t.stop());
-        _persistentLocalStream?.dispose();
-      } catch (_) {}
-      _persistentLocalStream = null;
-    });
-  }
-
-  // Completes once the local RTCVideoRenderer is initialised. Anything
-  // that touches `state.localRenderer.srcObject` MUST await this — the
-  // first Start Now click was racing the constructor's async init and
-  // throwing "Call initialize before setting the stream".
-  late final Future<void> _rendererReady;
-
-  MeetingNotifier() : super(MeetingState(localRenderer: RTCVideoRenderer())) {
-    _rendererReady = _initRenderer();
-  }
+  // The local renderer is owned by LocalMediaService — same instance
+  // across every MeetingNotifier ever created, so the texture is
+  // never re-initialised when navigating between pre-join and the
+  // meeting room.
+  MeetingNotifier()
+      : super(MeetingState(localRenderer: LocalMediaService.instance.renderer));
 
   io.Socket? get socket => _socket;
 
-  Future<void> _initRenderer() async {
-    await state.localRenderer.initialize();
-  }
-
   Future<void> prepareLocalPreview() async {
-    if (_localStream == null) {
-      await _setupMedia(video: true, audio: true);
+    await LocalMediaService.instance.initialize(video: true, audio: true);
+    if (mounted && !_disposed) {
+      state = state.copyWith(isCameraOn: true, isMicOn: true);
     }
   }
 
-  /// Detach the active local stream WITHOUT stopping it. The stream
-  /// is held in the persistent cache so the next notifier (the in-
-  /// meeting one after pre-join) can reuse it.
-  MediaStream? releaseLocalStream() {
-    final s = _localStream;
-    _localStream = null;
-    state.localRenderer.srcObject = null;
-    return s;
-  }
+  /// Compatibility shim — the singleton now owns the stream so
+  /// nothing actually moves. Returns the live stream so the caller
+  /// can keep its existing `if (stream != null)` guards.
+  MediaStream? releaseLocalStream() => LocalMediaService.instance.stream;
 
-  /// Legacy hand-off path. The persistent cache is now consulted
-  /// inside `_setupMedia`, so the notifier just routes through that.
+  /// Compatibility shim — the singleton already holds the stream by
+  /// the time anyone might call this. Kept so external callers don't
+  /// break; ensures the camera shutdown timer is cancelled.
   Future<void> adoptLocalStream(MediaStream stream) async {
-    _persistentStreamStopTimer?.cancel();
-    _persistentLocalStream = stream;
-    await _setupMedia(video: true, audio: true);
+    LocalMediaService.instance.cancelShutdown();
   }
 
   /// Top-level join sequence. Order matters: media MUST be ready before
@@ -822,69 +787,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   Future<void> _setupMedia({bool video = true, bool audio = true}) async {
     try {
-      // Cancel any pending shutdown — we're claiming the stream.
-      _persistentStreamStopTimer?.cancel();
-      _persistentStreamStopTimer = null;
-
-      MediaStream? stream = _persistentLocalStream;
-      final reuse = stream != null &&
-          stream.getTracks().any((t) => t.kind == 'video') == video &&
-          stream.getTracks().any((t) => t.kind == 'audio') == audio;
-      if (reuse) {
-        _log('🎥 Reusing persistent local stream '
-            '(${stream.getTracks().length} tracks, no camera reopen)');
-      } else {
-        if (stream != null) {
-          // Mismatched constraints — dispose and reopen.
-          try {
-            for (final t in stream.getTracks()) {
-              t.stop();
-            }
-            await stream.dispose();
-          } catch (_) {}
-          _persistentLocalStream = null;
-        }
-        final constraints = {
-          'audio': audio,
-          'video': video
-              ? {
-                  'facingMode': 'user',
-                  'width': {'ideal': 1280},
-                  'height': {'ideal': 720},
-                }
-              : false,
-        };
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        _persistentLocalStream = stream;
-        _log('🎥 getUserMedia OK — tracks=${stream.getTracks().map((t) => t.kind).join(",")}');
-      }
-
-      _localStream = stream;
-      // Make sure the requested tracks are enabled (the persistent
-      // stream may have been left with disabled tracks by a previous
-      // mute toggle).
-      for (final t in stream.getAudioTracks()) {
-        t.enabled = audio;
-      }
-      for (final t in stream.getVideoTracks()) {
-        t.enabled = video;
-      }
-
-      await _rendererReady;
-      state.localRenderer.srcObject = stream;
-
+      await LocalMediaService.instance.initialize(video: video, audio: audio);
       if (mounted && !_disposed) {
         state = state.copyWith(isCameraOn: video, isMicOn: audio);
       }
-
       // If PCs already exist (rare race), add the new tracks.
-      for (final pc in _peerConnections.values) {
-        for (final track in stream.getTracks()) {
-          await pc.addTrack(track, stream);
+      final stream = LocalMediaService.instance.stream;
+      if (stream != null) {
+        for (final pc in _peerConnections.values) {
+          for (final track in stream.getTracks()) {
+            await pc.addTrack(track, stream);
+          }
         }
       }
     } catch (e) {
-      _log('❌ getUserMedia failed: $e');
+      _log('❌ _setupMedia failed: $e');
     }
   }
 
@@ -909,20 +826,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   void toggleMic() {
-    if (_localStream == null) return;
-    final tracks = _localStream!.getAudioTracks();
-    if (tracks.isEmpty) return;
-    tracks.first.enabled = !tracks.first.enabled;
-    state = state.copyWith(isMicOn: tracks.first.enabled);
+    final newState = LocalMediaService.instance.toggleAudio();
+    state = state.copyWith(isMicOn: newState);
     _broadcastMediaState();
   }
 
   void toggleCamera() {
-    if (_localStream == null) return;
-    final tracks = _localStream!.getVideoTracks();
-    if (tracks.isEmpty) return;
-    tracks.first.enabled = !tracks.first.enabled;
-    state = state.copyWith(isCameraOn: tracks.first.enabled);
+    final newState = LocalMediaService.instance.toggleVideo();
+    state = state.copyWith(isCameraOn: newState);
     _broadcastMediaState();
   }
 
@@ -955,9 +866,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   void switchCamera() async {
-    if (_localStream == null) return;
-    final track = _localStream!.getVideoTracks().first;
-    await Helper.switchCamera(track);
+    await LocalMediaService.instance.switchCamera();
   }
 
   void toggleSpeakerphone() {
@@ -1061,12 +970,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       r.srcObject = null;
       r.dispose();
     }
-    // Detach but DON'T stop the camera here. _scheduleStreamShutdown
-    // gives the next notifier (e.g. user creates another instant
-    // meeting right after hanging up) a 5-second window to reuse the
-    // running camera. If nothing claims it the timer kills it.
-    _localStream = null;
-    _scheduleStreamShutdown();
+    // Don't touch the local camera here — the LocalMediaService owns
+    // it. Schedule a delayed shutdown so the next screen (re-create
+    // an instant meeting, return to home) gets a free camera reuse.
+    LocalMediaService.instance.scheduleShutdown();
     _networkResilienceService?.dispose();
     _sfuService?.dispose();
     _hasJoinedRoom = false;
@@ -1159,7 +1066,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _disposed = true;
     _waitingListTimer?.cancel();
     leaveMeeting();
-    state.localRenderer.dispose();
+    // DON'T dispose state.localRenderer — it's the singleton's. Doing
+    // so here would tear down the texture used by every other screen
+    // and the *next* MeetingNotifier instance.
     super.dispose();
   }
 }

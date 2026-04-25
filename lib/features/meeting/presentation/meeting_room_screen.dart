@@ -450,8 +450,12 @@ class _RemoteParticipantTile extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (hasVideo)
-              RTCVideoView(renderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+              RepaintBoundary(
+                child: RTCVideoView(
+                  renderer,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
+              )
             else
               _AvatarPlaceholder(name: data.name, size: 72),
             Positioned(
@@ -675,9 +679,15 @@ class _SelfViewCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: isCameraOn 
-          ? RTCVideoView(renderer, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
-          : const _AvatarPlaceholder(name: 'You', size: 56),
+        child: isCameraOn
+            ? RepaintBoundary(
+                child: RTCVideoView(
+                  renderer,
+                  mirror: true,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
+              )
+            : const _AvatarPlaceholder(name: 'You', size: 56),
       ),
     );
   }
