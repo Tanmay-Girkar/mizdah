@@ -565,29 +565,57 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _socket?.on(ev, onReaction);
     }
 
-    // Peers announce mic/camera/screen-share state changes via this
-    // event. We mirror it onto the matching `participants` entry so
-    // the grid can swap between live video and an avatar tile when
-    // a remote turns their camera off (otherwise the renderer keeps
-    // showing the last frame, which the user reported as "stuck").
+    // The backend uses a single `media-toggle-remote` event for ALL
+    // room broadcasts. The `type` field discriminates:
+    //   MEDIA_TOGGLE -> mic/camera/screen-share state
+    //   CHAT         -> chat message  ({content, name, timestamp})
+    //   REACTION     -> floating emoji ({emoji, name})
+    // The web client also goes through this channel — that's why my
+    // earlier `chat-send` / `reaction` emits never reached anyone.
     _socket?.on('media-toggle-remote', (data) {
       if (!mounted || _disposed || data is! Map) return;
       final from = data['from']?.toString();
       if (from == null) return;
-      final updated = state.participants.map((p) {
-        if (p is Map && p['socketId'] == from) {
-          final m = Map<String, dynamic>.from(p);
-          if (data.containsKey('audioEnabled')) m['audioEnabled'] = data['audioEnabled'];
-          if (data.containsKey('videoEnabled')) m['videoEnabled'] = data['videoEnabled'];
-          if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
-          if (data.containsKey('name')) m['name'] = data['name'] ?? m['name'];
-          return m;
-        }
-        return p;
-      }).toList();
-      try {
-        state = state.copyWith(participants: updated);
-      } catch (_) {}
+      if (from == _socket?.id) return; // self echo
+      final type = data['type']?.toString().toUpperCase() ?? 'MEDIA_TOGGLE';
+
+      switch (type) {
+        case 'CHAT':
+          // Synthesise the shape _handleNewMessage expects.
+          _handleNewMessage({
+            'content': data['content'] ?? data['text'] ?? data['message'],
+            'senderName': data['name'] ?? data['senderName'],
+            'senderId': data['senderId'] ?? data['userId'] ?? from,
+            'createdAt': data['timestamp']?.toString() ??
+                data['createdAt']?.toString() ??
+                DateTime.now().toIso8601String(),
+          });
+          break;
+
+        case 'REACTION':
+        case 'EMOJI':
+          final emoji = (data['emoji'] ?? data['content'])?.toString();
+          final name = (data['name'] ?? data['senderName'] ?? 'Someone').toString();
+          if (emoji != null && emoji.isNotEmpty) _addReaction(emoji, name);
+          break;
+
+        case 'MEDIA_TOGGLE':
+        default:
+          final updated = state.participants.map((p) {
+            if (p is Map && p['socketId'] == from) {
+              final m = Map<String, dynamic>.from(p);
+              if (data.containsKey('audioEnabled')) m['audioEnabled'] = data['audioEnabled'];
+              if (data.containsKey('videoEnabled')) m['videoEnabled'] = data['videoEnabled'];
+              if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
+              if (data.containsKey('name')) m['name'] = data['name'] ?? m['name'];
+              return m;
+            }
+            return p;
+          }).toList();
+          try {
+            state = state.copyWith(participants: updated);
+          } catch (_) {}
+      }
     });
 
     _socket?.on('switch-to-sfu', (_) {
@@ -1001,12 +1029,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     final isoNow = DateTime.now().toIso8601String();
 
-    // 1. Socket — real-time delivery to other clients in the room.
+    // 1. Socket — the backend relays chat through `media-toggle`
+    //    (server adds `from` and re-broadcasts as `media-toggle-remote`
+    //    with the same `type: CHAT` payload). Belt-and-suspenders we
+    //    also emit on the legacy chat-* names in case the server has
+    //    a parallel handler.
     final socketPayload = {
       'meetingId': mid,
       'roomId': mid,
       'userId': uid,
       'senderId': uid,
+      'type': 'CHAT',
       'content': trimmed,
       'message': trimmed,
       'text': trimmed,
@@ -1014,7 +1047,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       'name': senderName,
       'createdAt': isoNow,
       'time': isoNow,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
     };
+    _socket?.emit('media-toggle', socketPayload);
+    _socket?.emit('media-toggle-remote', socketPayload);
     for (final ev in const [
       'chat-send',
       'chat-message',
@@ -1070,13 +1106,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _log('🖥️  starting screen share');
 
       // Android 14+ refuses MediaProjection unless a foreground
-      // service of TYPE_MEDIA_PROJECTION is already running. Start
-      // ours first; on iOS / web this is a no-op.
+      // service of TYPE_MEDIA_PROJECTION is ALREADY running by the
+      // time the projection is created. Start ours and wait a moment
+      // for the OS to register it before the share intent fires.
+      // (Requires a fresh `flutter clean && flutter run` so the
+      // native MediaProjectionFgService is in the APK.)
       if (Platform.isAndroid) {
         try {
           await _screenShareFg.invokeMethod('start');
+          await Future.delayed(const Duration(milliseconds: 600));
         } catch (e) {
-          _log('foreground-service start failed: $e');
+          _log('foreground-service start failed (need fresh build?): $e');
         }
       }
 
@@ -1182,6 +1222,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   /// Send a one-shot emoji reaction to the room. Shows immediately
   /// for the sender and broadcasts to other clients via socket.
+  /// Same channel as chat — `media-toggle` with `type: REACTION`.
   void sendReaction(String emoji) {
     if (state.meetingId == null) return;
     final payload = {
@@ -1189,19 +1230,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       'roomId': state.meetingId,
       'senderId': state.userId,
       'userId': state.userId,
+      'type': 'REACTION',
       'emoji': emoji,
+      'content': emoji,
       'name': _userName ?? 'You',
       'senderName': _userName ?? 'You',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
     };
     _log('🎉 emit reaction $emoji');
-    // Server might handle any of these names — emit all so we don't
-    // depend on a specific signaling implementation.
-    for (final ev in const [
-      'reaction',
-      'reaction-remote',
-      'send-reaction',
-      'emoji',
-    ]) {
+    _socket?.emit('media-toggle', payload);
+    _socket?.emit('media-toggle-remote', payload);
+    for (final ev in const ['reaction', 'reaction-remote', 'send-reaction', 'emoji']) {
       _socket?.emit(ev, payload);
     }
     _addReaction(emoji, _userName ?? 'You');

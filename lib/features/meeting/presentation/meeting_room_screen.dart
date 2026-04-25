@@ -203,6 +203,18 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   ),
                 ),
 
+              // "You are presenting" banner — Google-Meet style, only
+              // when the local user has screen share active.
+              if (meetingState.isScreenSharing)
+                Positioned(
+                  top: 80,
+                  left: 16,
+                  right: 16,
+                  child: _PresentingBanner(
+                    onStop: () => meetingNotifier.toggleScreenShare(),
+                  ),
+                ),
+
               // Incoming-message toast (sender + preview).
               Positioned(
                 left: 16,
@@ -2325,6 +2337,74 @@ class _JoinRequestBanner extends StatelessWidget {
             label: 'Admit',
             isFullWidth: false,
             onTap: onAdmit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Presenting banner — appears when local user is sharing their screen
+// ---------------------------------------------------------------------------
+
+class _PresentingBanner extends StatelessWidget {
+  final VoidCallback onStop;
+  const _PresentingBanner({required this.onStop});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A73E8).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.present_to_all_rounded,
+                color: Colors.white, size: 16),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'You are presenting',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onStop,
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF1A73E8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              minimumSize: Size.zero,
+            ),
+            child: const Text(
+              'Stop',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
