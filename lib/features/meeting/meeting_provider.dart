@@ -137,8 +137,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
   final Map<String, MediaStream?> _remoteStreams = {};
 
+  // Completes once the local RTCVideoRenderer is initialised. Anything
+  // that touches `state.localRenderer.srcObject` MUST await this — the
+  // first Start Now click was racing the constructor's async init and
+  // throwing "Call initialize before setting the stream".
+  late final Future<void> _rendererReady;
+
   MeetingNotifier() : super(MeetingState(localRenderer: RTCVideoRenderer())) {
-    _initRenderer();
+    _rendererReady = _initRenderer();
   }
 
   io.Socket? get socket => _socket;
@@ -167,10 +173,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// Adopt a live MediaStream produced by another notifier (typically
   /// the pre-join preview). Skips any further getUserMedia call.
   Future<void> adoptLocalStream(MediaStream stream) async {
+    await _rendererReady;
     _localStream = stream;
-    if (!state.localRenderer.textureId.toString().isNotEmpty) {
-      await state.localRenderer.initialize();
-    }
     state.localRenderer.srcObject = stream;
     if (mounted && !_disposed) {
       state = state.copyWith(isCameraOn: true, isMicOn: true);
@@ -720,6 +724,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       final stream = await navigator.mediaDevices.getUserMedia(constraints);
       _localStream = stream;
+      await _rendererReady;
       state.localRenderer.srcObject = stream;
       _log('🎥 getUserMedia OK — tracks=${stream.getTracks().map((t) => t.kind).join(",")}');
 
