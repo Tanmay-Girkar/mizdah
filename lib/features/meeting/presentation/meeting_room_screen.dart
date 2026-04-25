@@ -1,5 +1,6 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
+import '../../settings/meeting_layout_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -480,25 +481,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   }
 }
 
-class _VideoGrid extends StatelessWidget {
+class _VideoGrid extends ConsumerWidget {
   final MeetingState meetingState;
   const _VideoGrid({required this.meetingState});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // Build one tile per known participant. If we have a live renderer
     // for that participant's socketId we show their video, otherwise an
-    // avatar tile with their name. This way the grid reflects the
-    // participant list immediately, even while WebRTC is still
-    // negotiating individual peer connections.
+    // avatar tile with their name.
     final tiles = <_ParticipantTileData>[];
     for (final p in meetingState.participants) {
       if (p is! Map) continue;
       final pUserId = (p['userId'] ?? p['user_id'])?.toString();
-      // Never render ourselves in the grid — the self-view is the PIP.
-      // Without this filter the brief window between the REST
-      // _loadParticipants response and the socket join-confirmation
-      // shows our own avatar tile, which the user saw as a flicker.
       if (pUserId != null && pUserId == meetingState.userId) continue;
       final socketId = (p['socketId'] ?? p['userId'])?.toString();
       if (socketId != null && socketId == meetingState.userId) continue;
@@ -513,29 +508,193 @@ class _VideoGrid extends StatelessWidget {
         audioEnabled: audioEnabled,
       ));
     }
-    // Cover renderers that arrived for a peer not yet in the list.
     for (final entry in meetingState.remoteRenderers.entries) {
       final already = tiles.any((t) => t.renderer == entry.value);
       if (!already) {
         tiles.add(_ParticipantTileData(name: 'Participant', renderer: entry.value));
       }
     }
-    final count = tiles.isNotEmpty ? tiles.length : meetingState.mockParticipantCount;
+    if (tiles.isEmpty && meetingState.mockParticipantCount > 0) {
+      return GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+          childAspectRatio: 0.75,
+        ),
+        itemCount: meetingState.mockParticipantCount,
+        itemBuilder: (context, index) => _MockParticipantTile(index: index),
+      );
+    }
 
+    final layout = ref.watch(meetingLayoutProvider);
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      transitionBuilder: (child, anim) =>
+          FadeTransition(opacity: anim, child: child),
+      child: KeyedSubtree(
+        key: ValueKey(layout),
+        child: switch (layout) {
+          MeetingLayout.spotlight      => _SpotlightStripGrid(tiles: tiles),
+          MeetingLayout.equalGrid      => _EqualGridGrid(tiles: tiles),
+          MeetingLayout.speakerSidebar => _SpeakerSidebarGrid(tiles: tiles),
+          MeetingLayout.premiumCards   => _PremiumCardsGrid(tiles: tiles),
+        },
+      ),
+    );
+  }
+}
+
+class _EqualGridGrid extends StatelessWidget {
+  final List<_ParticipantTileData> tiles;
+  const _EqualGridGrid({required this.tiles});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = tiles.length;
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),
       physics: const BouncingScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: count <= 1 ? 1 : 2,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: count <= 1 ? 0.6 : 0.75,
+        crossAxisCount: n <= 1 ? 1 : 2,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: n <= 1 ? 0.6 : 0.8,
       ),
-      itemCount: count,
-      itemBuilder: (context, index) {
-        if (tiles.isEmpty) return _MockParticipantTile(index: index);
-        return _RemoteParticipantTile(data: tiles[index]);
-      },
+      itemCount: n,
+      itemBuilder: (_, i) => _RemoteParticipantTile(data: tiles[i]),
+    );
+  }
+}
+
+class _SpotlightStripGrid extends StatelessWidget {
+  final List<_ParticipantTileData> tiles;
+  const _SpotlightStripGrid({required this.tiles});
+
+  @override
+  Widget build(BuildContext context) {
+    final speaker = tiles.first;
+    final others = tiles.skip(1).toList();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 80, 12, 120),
+      child: Column(
+        children: [
+          Expanded(child: _RemoteParticipantTile(data: speaker)),
+          if (others.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 80,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: others.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) => SizedBox(
+                  width: 110,
+                  child: _RemoteParticipantTile(data: others[i]),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SpeakerSidebarGrid extends StatelessWidget {
+  final List<_ParticipantTileData> tiles;
+  const _SpeakerSidebarGrid({required this.tiles});
+
+  @override
+  Widget build(BuildContext context) {
+    final speaker = tiles.first;
+    final others = tiles.skip(1).toList();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 80, 12, 120),
+      child: Row(
+        children: [
+          Expanded(child: _RemoteParticipantTile(data: speaker)),
+          if (others.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 110,
+              child: ListView.separated(
+                itemCount: others.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) => AspectRatio(
+                  aspectRatio: 0.75,
+                  child: _RemoteParticipantTile(data: others[i]),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PremiumCardsGrid extends StatelessWidget {
+  final List<_ParticipantTileData> tiles;
+  const _PremiumCardsGrid({required this.tiles});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = tiles.length;
+    final cols = n <= 2 ? 1 : 2;
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 80, 16, 120),
+      physics: const BouncingScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        crossAxisSpacing: 14,
+        mainAxisSpacing: 14,
+        childAspectRatio: cols == 1 ? 0.7 : 0.85,
+      ),
+      itemCount: n,
+      itemBuilder: (_, i) => _PremiumParticipantTile(data: tiles[i]),
+    );
+  }
+}
+
+/// Premium-style tile — gradient background, soft shadow, glowing
+/// border around the active speaker. Wraps the same content as the
+/// regular tile so the avatar/video crossfade still applies.
+class _PremiumParticipantTile extends StatelessWidget {
+  final _ParticipantTileData data;
+  const _PremiumParticipantTile({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF2A2D33), Color(0xFF1F232B)],
+            ),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.06),
+            ),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: _RemoteParticipantTile(data: data),
+        ),
+      ),
     );
   }
 }
@@ -978,6 +1137,11 @@ class _MeetingTopBar extends StatelessWidget {
             ),
           ],
           const Spacer(),
+          // Layout switcher — opens a small popup menu listing the
+          // 4 layouts. Selecting one persists via meetingLayoutProvider
+          // so the choice is remembered for next time too.
+          const _LayoutSwitcherButton(),
+          const SizedBox(width: 8),
           _TopBarIconButton(
             icon: isSpeakerphoneOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
             onTap: onToggleSpeakerphone,
@@ -2634,6 +2798,68 @@ class _FloatingReactionState extends State<_FloatingReaction>
           ),
         );
       },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Layout switcher in the top bar
+// ---------------------------------------------------------------------------
+
+class _LayoutSwitcherButton extends ConsumerWidget {
+  const _LayoutSwitcherButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final current = ref.watch(meetingLayoutProvider);
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      radius: 100,
+      opacity: isDark ? 0.1 : 0.05,
+      child: PopupMenuButton<MeetingLayout>(
+        icon: Icon(
+          current.icon,
+          color: isDark ? Colors.white : Colors.black87,
+          size: 20,
+        ),
+        tooltip: 'Change layout',
+        position: PopupMenuPosition.under,
+        color: isDark ? const Color(0xFF1A1F26) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        onSelected: (layout) =>
+            ref.read(meetingLayoutProvider.notifier).set(layout),
+        itemBuilder: (context) => [
+          for (final l in MeetingLayout.values)
+            PopupMenuItem<MeetingLayout>(
+              value: l,
+              child: Row(
+                children: [
+                  Icon(
+                    l.icon,
+                    color: l == current
+                        ? const Color(0xFF1A73E8)
+                        : (isDark ? Colors.white70 : Colors.black54),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    l.label,
+                    style: TextStyle(
+                      color: l == current
+                          ? const Color(0xFF1A73E8)
+                          : (isDark ? Colors.white : Colors.black87),
+                      fontWeight:
+                          l == current ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

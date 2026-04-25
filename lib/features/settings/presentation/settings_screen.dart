@@ -5,6 +5,7 @@ import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../auth/auth_provider.dart';
 import '../../../data/repositories/settings_repository.dart';
+import '../meeting_layout_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -93,8 +94,136 @@ class _GeneralSettings extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 32),
+        Text(
+          'Meeting layout',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: isDark ? Colors.white : Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Default layout for the in-call video grid. Can be changed during a call too.',
+          style: TextStyle(
+            fontSize: 12,
+            color: isDark ? Colors.white54 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _MeetingLayoutPicker(isDark: isDark),
+        const SizedBox(height: 32),
         _SupportSection(),
       ],
+    );
+  }
+}
+
+class _MeetingLayoutPicker extends ConsumerWidget {
+  final bool isDark;
+  const _MeetingLayoutPicker({required this.isDark});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final current = ref.watch(meetingLayoutProvider);
+    final notifier = ref.read(meetingLayoutProvider.notifier);
+    final divider =
+        Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12);
+    return GlassCard(
+      child: Column(
+        children: [
+          for (var i = 0; i < MeetingLayout.values.length; i++) ...[
+            _LayoutTile(
+              layout: MeetingLayout.values[i],
+              selected: current == MeetingLayout.values[i],
+              isDark: isDark,
+              onTap: () => notifier.set(MeetingLayout.values[i]),
+            ),
+            if (i != MeetingLayout.values.length - 1) divider,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LayoutTile extends StatelessWidget {
+  final MeetingLayout layout;
+  final bool selected;
+  final bool isDark;
+  final VoidCallback onTap;
+  const _LayoutTile({
+    required this.layout,
+    required this.selected,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: (selected
+                        ? const Color(0xFF1A73E8)
+                        : Colors.white)
+                    .withValues(alpha: selected ? 0.18 : (isDark ? 0.06 : 0.0)),
+                border: Border.all(
+                  color: isDark ? Colors.white12 : Colors.black12,
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                layout.icon,
+                color: selected
+                    ? const Color(0xFF1A73E8)
+                    : (isDark ? Colors.white70 : Colors.black54),
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    layout.label,
+                    style: TextStyle(
+                      color: isDark ? Colors.white : Colors.black87,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    layout.description,
+                    style: TextStyle(
+                      color: isDark ? Colors.white54 : Colors.black54,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              selected
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              color: selected
+                  ? const Color(0xFF1A73E8)
+                  : (isDark ? Colors.white24 : Colors.black26),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
