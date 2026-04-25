@@ -457,6 +457,11 @@ class MizdahAppBar extends StatelessWidget {
           ),
         ),
         IconButton(
+          icon: const Icon(Icons.dashboard_customize_outlined),
+          tooltip: 'Meeting layout designs',
+          onPressed: () => context.push('/meeting-designs'),
+        ),
+        IconButton(
           icon: const Icon(Icons.notifications_outlined),
           onPressed: () => Scaffold.of(context).openEndDrawer(),
         ),
