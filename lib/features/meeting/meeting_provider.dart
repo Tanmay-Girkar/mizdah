@@ -542,28 +542,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       await _handleIceCandidate(from, candidate);
     });
 
-    // Floating-emoji reactions. Server may broadcast under any of
-    // these names depending on its implementation — listen on all.
+    // Mizdah-specific reaction relay (we can't go through the
+    // generic media-toggle channel because web crashes on unknown
+    // types — see sendReaction). Other Flutter clients listen on
+    // this name; web's bare-event ignore-list silently drops it.
     void onReaction(dynamic data) {
       if (!mounted || _disposed || data is! Map) return;
       final senderId = (data['senderId'] ?? data['userId'])?.toString();
-      // Skip our own reaction echoing back from the server.
       if (senderId != null && senderId == state.userId) return;
       final emoji = data['emoji']?.toString();
       final name = data['name']?.toString() ?? data['senderName']?.toString() ?? 'Someone';
       if (emoji == null) return;
       _addReaction(emoji, name);
     }
-    for (final ev in const [
-      'reaction-remote',
-      'reaction',
-      'reaction-broadcast',
-      'send-reaction',
-      'emoji',
-      'emoji-remote',
-    ]) {
-      _socket?.on(ev, onReaction);
-    }
+    _socket?.on('mizdah-reaction', onReaction);
+    _socket?.on('mizdah-reaction-remote', onReaction);
 
     // The backend uses a single `media-toggle-remote` event for ALL
     // room broadcasts. The `type` field discriminates:
@@ -1235,24 +1228,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final name = _userName ?? 'You';
     final routingId = state.meetingCode ?? state.meetingId;
 
-    // SINGLE clean emit. The previous shotgun approach (CHAT-shaped
-    // payload + 5 legacy event names) crashed the web client because
-    // its chat receiver hit an unhandled exception on the synthetic
-    // payload. One semantic emit only — if the server doesn't route
-    // it the reaction stays local, but at least we never break web.
+    // CRITICAL: do NOT emit on `media-toggle` for reactions. The web
+    // client's media-toggle-remote handler hits an unhandled
+    // exception on any `type` it doesn't recognise (only knows
+    // MEDIA_TOGGLE / CHAT) and the whole web session crashes — the
+    // peer connection drops and we get a user-left event.
+    //
+    // Until the web/server is updated to handle reactions, send them
+    // on a Mizdah-specific event name that web has no listener for
+    // (silently ignored, no crash). Other Flutter clients can pick
+    // it up through the same name.
     final payload = <String, dynamic>{
       'id': '$ts-${state.userId ?? ''}',
       'meetingId': routingId,
-      'type': 'REACTION',
       'emoji': emoji,
-      'content': emoji,
       'name': name,
-      'senderName': name,
       'senderId': state.userId,
       'timestamp': ts,
     };
-    _log('🎉 emit reaction $emoji');
-    _socket?.emit('media-toggle', payload);
+    _log('🎉 emit reaction $emoji (mizdah-reaction only — media-toggle would crash web)');
+    _socket?.emit('mizdah-reaction', payload);
 
     _addReaction(emoji, name);
   }
