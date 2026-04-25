@@ -218,6 +218,11 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final Map<String, RTCPeerConnection> _peerConnections = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
   final Map<String, MediaStream?> _remoteStreams = {};
+  // SocketIds of peers who stopped sharing — their renderer is
+  // currently detached to avoid surfacing the cached screen frame.
+  // Re-attached on the NEXT media-toggle from them with
+  // videoEnabled=true (proves new frames are coming).
+  final Set<String> _stoppedSharingPeers = {};
 
   /// Static stage entry point retained so existing pre-join callers
   /// don't break — now just pre-warms the singleton.
@@ -676,21 +681,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             state = state.copyWith(participants: updated);
           } catch (_) {}
 
-          // Flush the frozen screen frame from the renderer's
-          // texture: detach + re-attach the same stream. If the
-          // remote starts pushing camera frames the renderer picks
-          // them up; if not, srcObject having no fresh frames keeps
-          // the avatar showing (videoEnabled is already false).
+          // Detach the renderer so the cached screen frame is
+          // gone and the grid shows the avatar. The renderer will
+          // be re-attached on the NEXT media-toggle from this peer
+          // that confirms videoEnabled=true — by that point we
+          // know fresh frames are flowing (camera or otherwise).
           if (stoppedSharing) {
             final r = state.remoteRenderers[from];
-            final s = r?.srcObject;
-            if (r != null) {
-              r.srcObject = null;
-              Future.delayed(const Duration(milliseconds: 80), () {
-                if (!mounted || _disposed) return;
-                r.srcObject = s;
-              });
-            }
+            if (r != null) r.srcObject = null;
+            _stoppedSharingPeers.add(from);
+          } else if (_stoppedSharingPeers.contains(from) &&
+              data['videoEnabled'] == true) {
+            // Peer's video came back — reattach the stream so the
+            // tile starts rendering camera frames again.
+            final r = state.remoteRenderers[from];
+            final s = _remoteStreams[from];
+            if (r != null && s != null) r.srcObject = s;
+            _stoppedSharingPeers.remove(from);
           }
       }
     });
