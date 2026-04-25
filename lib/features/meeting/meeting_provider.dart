@@ -542,21 +542,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       await _handleIceCandidate(from, candidate);
     });
 
-    // Mizdah-specific reaction relay (we can't go through the
-    // generic media-toggle channel because web crashes on unknown
-    // types — see sendReaction). Other Flutter clients listen on
-    // this name; web's bare-event ignore-list silently drops it.
+    // Standard reaction relay (Google-Meet style). Backend should
+    // relay `send-reaction` (client→server) → `receive-reaction`
+    // (server→other clients in room). Listening on a couple of
+    // common variants so we don't depend on one exact name.
     void onReaction(dynamic data) {
       if (!mounted || _disposed || data is! Map) return;
-      final senderId = (data['senderId'] ?? data['userId'])?.toString();
+      final senderId = (data['userId'] ?? data['senderId'])?.toString();
       if (senderId != null && senderId == state.userId) return;
       final emoji = data['emoji']?.toString();
       final name = data['name']?.toString() ?? data['senderName']?.toString() ?? 'Someone';
       if (emoji == null) return;
+      _log('🎉 inbound reaction $emoji from $name');
       _addReaction(emoji, name);
     }
-    _socket?.on('mizdah-reaction', onReaction);
-    _socket?.on('mizdah-reaction-remote', onReaction);
+    _socket?.on('receive-reaction', onReaction);
+    _socket?.on('reaction-received', onReaction);
+    _socket?.on('reaction', onReaction);
 
     // The backend uses a single `media-toggle-remote` event for ALL
     // room broadcasts. The `type` field discriminates:
@@ -640,22 +642,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _chatSocket?.on('new-message', _handleNewMessage);
   }
 
-  /// True if `text` looks like a single emoji (or two — flag/zwj
-  /// sequences). Ignores ASCII letters, digits and whitespace; only
-  /// counts non-ASCII visible codepoints.
-  bool _looksLikeBareEmoji(String text) {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty || trimmed.length > 16) return false;
-    var hasLetter = false;
-    var nonAscii = 0;
-    for (final r in trimmed.runes) {
-      if (r >= 0x30 && r <= 0x39) hasLetter = true; // digit
-      if ((r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A)) hasLetter = true;
-      if (r > 0x7F) nonAscii++;
-    }
-    return !hasLetter && nonAscii > 0 && nonAscii <= 8;
-  }
-
   void _handleNewMessage(data) {
     if (data == null || !mounted || _disposed) return;
     final Map<String, dynamic> msg = Map<String, dynamic>.from(data);
@@ -664,16 +650,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (senderId != null && senderId == state.userId) return;
     final text = (msg['content'] ?? msg['text'] ?? '').toString();
     final sender = (msg['senderName'] ?? msg['sender'] ?? 'Unknown').toString();
-
-    // Heuristic: a CHAT message whose content is JUST a small emoji
-    // (no letters/digits/whitespace, ≤8 codepoints) was almost
-    // certainly a reaction sent through the chat fallback (see
-    // sendReaction). Surface it as a floating reaction instead of
-    // polluting the chat panel.
-    if (text.isNotEmpty && _looksLikeBareEmoji(text)) {
-      _addReaction(text, sender);
-      return;
-    }
     _log('💬 appending chat: "$text" from $sender (total ${state.chatMessages.length + 1})');
     final formattedMsg = {
       'text': text,
@@ -1247,42 +1223,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final name = _userName ?? 'You';
     final routingId = state.meetingCode ?? state.meetingId;
     final uid = state.userId;
-    final id = '$ts-${uid ?? ''}';
 
     // 1) Optimistic local floating reaction.
     _addReaction(emoji, name);
 
-    // 2) Mizdah-private channel for other Flutter clients. Web has
-    //    no listener so socket.io silently ignores → no crash. If
-    //    the server adds a relay later it will land as a floating
-    //    reaction on every Flutter peer.
-    _socket?.emit('mizdah-reaction', {
-      'id': id,
+    // 2) Standard reaction protocol — dedicated event names so the
+    //    emoji never lands in any client's chat handler. Backend has
+    //    to relay `send-reaction` -> `receive-reaction` for cross-
+    //    side floating reactions to work.
+    final payload = {
       'meetingId': routingId,
+      'userId': uid,
       'emoji': emoji,
       'name': name,
-      'senderId': uid,
       'timestamp': ts,
-    });
-
-    // 3) For web visibility, piggy-back on the chat channel — same
-    //    shape the server already relays without crashing
-    //    (`media-toggle` / type:CHAT). Web user sees the emoji as a
-    //    chat message; not the ideal floating animation, but the
-    //    emoji DOES reach them. NO custom flags on this payload —
-    //    we found earlier that any unrecognised field can crash web.
-    _socket?.emit('media-toggle', {
-      'id': id,
-      'meetingId': routingId,
-      'type': 'CHAT',
-      'content': emoji,
-      'name': name,
-      'senderName': name,
-      'senderId': uid,
-      'timestamp': ts,
-    });
-
-    _log('🎉 emit reaction $emoji  (mizdah-reaction + chat-fallback)');
+    };
+    _log('🎉 emit send-reaction $emoji');
+    _socket?.emit('send-reaction', payload);
   }
 
   void _addReaction(String emoji, String name) {
