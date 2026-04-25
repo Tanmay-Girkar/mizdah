@@ -581,7 +581,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       switch (type) {
         case 'CHAT':
-          // Synthesise the shape _handleNewMessage expects.
+          _log('💬 inbound CHAT from $from: "${data['content']}" '
+              '(name=${data['name']})');
           _handleNewMessage({
             'content': data['content'] ?? data['text'] ?? data['message'],
             'senderName': data['name'] ?? data['senderName'],
@@ -589,6 +590,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             'createdAt': data['timestamp']?.toString() ??
                 data['createdAt']?.toString() ??
                 DateTime.now().toIso8601String(),
+            'isReaction': data['isReaction'],
           });
           break;
 
@@ -596,6 +598,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         case 'EMOJI':
           final emoji = (data['emoji'] ?? data['content'])?.toString();
           final name = (data['name'] ?? data['senderName'] ?? 'Someone').toString();
+          _log('🎉 inbound REACTION $emoji from $name');
           if (emoji != null && emoji.isNotEmpty) _addReaction(emoji, name);
           break;
 
@@ -659,6 +662,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _addReaction(text, sender);
       return;
     }
+    _log('💬 appending chat: "$text" from $sender (total ${state.chatMessages.length + 1})');
     final formattedMsg = {
       'text': text,
       'sender': sender,
@@ -1036,37 +1040,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     final isoNow = DateTime.now().toIso8601String();
 
-    // 1. Socket — the backend relays chat through `media-toggle`
-    //    (server adds `from` and re-broadcasts as `media-toggle-remote`
-    //    with the same `type: CHAT` payload). Belt-and-suspenders we
-    //    also emit on the legacy chat-* names in case the server has
-    //    a parallel handler.
+    // 1. Socket — single emit, exact shape the web client uses for
+    //    chat (id / type:CHAT / content / name / timestamp). Web's
+    //    handler hit an unhandled exception when we previously
+    //    blasted the same payload on five different event names;
+    //    keeping it to one channel and one shape so we never crash a
+    //    peer. Server keys room routing on the meeting CODE
+    //    (`tjegvvofop`-style), not the UUID.
+    final routingId = state.meetingCode ?? mid;
     final socketPayload = {
-      'meetingId': mid,
-      'roomId': mid,
-      'userId': uid,
-      'senderId': uid,
+      'id': '${DateTime.now().millisecondsSinceEpoch}-$uid',
+      'meetingId': routingId,
       'type': 'CHAT',
       'content': trimmed,
-      'message': trimmed,
-      'text': trimmed,
-      'senderName': senderName,
       'name': senderName,
-      'createdAt': isoNow,
-      'time': isoNow,
+      'senderName': senderName,
+      'senderId': uid,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     };
     _socket?.emit('media-toggle', socketPayload);
-    _socket?.emit('media-toggle-remote', socketPayload);
-    for (final ev in const [
-      'chat-send',
-      'chat-message',
-      'send-message',
-      'new-message',
-      'message',
-    ]) {
-      _socket?.emit(ev, socketPayload);
-    }
 
     // 2. REST — persistence so the message survives reconnects and
     // shows up in chat history later.
@@ -1239,57 +1231,28 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// a real chat message because `isReaction: true` is set.
   void sendReaction(String emoji) {
     if (state.meetingId == null) return;
-    final mid = state.meetingId;
-    final uid = state.userId;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final id = '$ts-${(ts % 100000).toString().padLeft(5, '0')}';
     final name = _userName ?? 'You';
+    final routingId = state.meetingCode ?? state.meetingId;
 
-    final base = <String, dynamic>{
-      'id': id,
-      'meetingId': mid,
-      'roomId': mid,
-      'senderId': uid,
-      'userId': uid,
+    // SINGLE clean emit. The previous shotgun approach (CHAT-shaped
+    // payload + 5 legacy event names) crashed the web client because
+    // its chat receiver hit an unhandled exception on the synthetic
+    // payload. One semantic emit only — if the server doesn't route
+    // it the reaction stays local, but at least we never break web.
+    final payload = <String, dynamic>{
+      'id': '$ts-${state.userId ?? ''}',
+      'meetingId': routingId,
+      'type': 'REACTION',
+      'emoji': emoji,
+      'content': emoji,
       'name': name,
       'senderName': name,
+      'senderId': state.userId,
       'timestamp': ts,
-      'createdAt': DateTime.now().toIso8601String(),
     };
-
     _log('🎉 emit reaction $emoji');
-
-    // 1) Reaction-shaped payloads on the generic relay channel.
-    for (final t in const ['REACTION', 'EMOJI', 'REACT']) {
-      final p = {...base, 'type': t, 'emoji': emoji, 'content': emoji};
-      _socket?.emit('media-toggle', p);
-      _socket?.emit('media-toggle-remote', p);
-    }
-
-    // 2) Bare event-name fallbacks (some servers route on these).
-    for (final ev in const [
-      'reaction',
-      'reaction-remote',
-      'send-reaction',
-      'emoji',
-      'emoji-remote',
-    ]) {
-      _socket?.emit(ev, {...base, 'emoji': emoji, 'content': emoji});
-    }
-
-    // 3) CHAT-shaped fallback. Confirmed working channel — even if
-    //    the web app has no reaction receiver, the emoji will at
-    //    least appear in their chat. `isReaction: true` lets other
-    //    Flutter clients render it as a floating emoji instead of a
-    //    chat bubble.
-    _socket?.emit('media-toggle', {
-      ...base,
-      'type': 'CHAT',
-      'content': emoji,
-      'message': emoji,
-      'text': emoji,
-      'isReaction': true,
-    });
+    _socket?.emit('media-toggle', payload);
 
     _addReaction(emoji, name);
   }
