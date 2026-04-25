@@ -609,11 +609,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
         case 'MEDIA_TOGGLE':
         default:
+          // Detect the share-stop transition so we can flush the
+          // frozen last screen frame from the remote renderer. The
+          // web client typically doesn't replaceTrack(camera) when
+          // stopping share, so the renderer's texture would
+          // otherwise stay locked on the last screen frame.
+          var wasSharing = false;
+          for (final p in state.participants) {
+            if (p is Map && p['socketId'] == from && p['isSharing'] == true) {
+              wasSharing = true;
+              break;
+            }
+          }
+          final nowSharing = data['isSharing'] == true;
+          final stoppedSharing = wasSharing && !nowSharing;
+
           final updated = state.participants.map((p) {
             if (p is Map && p['socketId'] == from) {
               final m = Map<String, dynamic>.from(p);
               if (data.containsKey('audioEnabled')) m['audioEnabled'] = data['audioEnabled'];
-              if (data.containsKey('videoEnabled')) m['videoEnabled'] = data['videoEnabled'];
+              if (stoppedSharing) {
+                // Don't trust videoEnabled in the share-stop message
+                // — force avatar until the peer re-broadcasts their
+                // real camera state. Stops the frozen screen frame
+                // from sitting in the tile forever.
+                m['videoEnabled'] = false;
+              } else if (data.containsKey('videoEnabled')) {
+                m['videoEnabled'] = data['videoEnabled'];
+              }
               if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
               if (data.containsKey('name')) m['name'] = data['name'] ?? m['name'];
               return m;
@@ -623,6 +646,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           try {
             state = state.copyWith(participants: updated);
           } catch (_) {}
+
+          // Flush the frozen screen frame from the renderer's
+          // texture: detach + re-attach the same stream. If the
+          // remote starts pushing camera frames the renderer picks
+          // them up; if not, srcObject having no fresh frames keeps
+          // the avatar showing (videoEnabled is already false).
+          if (stoppedSharing) {
+            final r = state.remoteRenderers[from];
+            final s = r?.srcObject;
+            if (r != null) {
+              r.srcObject = null;
+              Future.delayed(const Duration(milliseconds: 80), () {
+                if (!mounted || _disposed) return;
+                r.srcObject = s;
+              });
+            }
+          }
       }
     });
 
