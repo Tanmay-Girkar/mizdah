@@ -377,11 +377,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
       if (status != 'JOINED' && status != 'ADMITTED') return;
 
-      final participants = (data['participants'] as List<dynamic>?) ?? const [];
+      final rawParticipants = (data['participants'] as List<dynamic>?) ?? const [];
       final waitingParticipants = (data['waitingParticipants'] as List<dynamic>?) ?? const [];
       final isHostConfirmed = data['isHost'] == true;
 
-      _log('Existing participants: ${participants.length}, host=$isHostConfirmed');
+      // Strip ourselves from the roster before it ever reaches the
+      // grid. The backend's join-confirmation payload includes the
+      // current user as a participant — we render ourselves through
+      // the self-PIP, never as a grid tile, so storing self here was
+      // briefly producing the "akbar" avatar tile the user reported.
+      final mySocketId = _socket?.id;
+      final participants = rawParticipants.where((p) {
+        if (p is! Map) return true;
+        if (mySocketId != null && p['socketId'] == mySocketId) return false;
+        if (p['userId'] == userId || p['user_id'] == userId) return false;
+        return true;
+      }).toList();
+
+      _log('join-confirmation: ${rawParticipants.length} participants raw, '
+          '${participants.length} after self-filter, host=$isHostConfirmed');
 
       state = state.copyWith(
         participants: participants,

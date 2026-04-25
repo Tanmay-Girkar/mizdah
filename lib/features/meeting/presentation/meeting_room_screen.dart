@@ -248,9 +248,11 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     for (final p in s.participants) {
       if (p is! Map) continue;
       final pid = (p['userId'] ?? p['user_id'])?.toString();
-      if (pid != null && pid != s.userId) return true;
-      final sid = (p['socketId'])?.toString();
-      if (sid != null && sid != s.userId) return true;
+      // Skip self by user-id. We don't compare socketId to userId
+      // (those are different namespaces, the comparison is always
+      // false and would mark every entry as "other").
+      if (pid != null && pid == s.userId) continue;
+      return true;
     }
     return false;
   }
