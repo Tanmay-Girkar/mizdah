@@ -640,6 +640,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _chatSocket?.on('new-message', _handleNewMessage);
   }
 
+  /// True if `text` looks like a single emoji (or two — flag/zwj
+  /// sequences). Ignores ASCII letters, digits and whitespace; only
+  /// counts non-ASCII visible codepoints.
+  bool _looksLikeBareEmoji(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || trimmed.length > 16) return false;
+    var hasLetter = false;
+    var nonAscii = 0;
+    for (final r in trimmed.runes) {
+      if (r >= 0x30 && r <= 0x39) hasLetter = true; // digit
+      if ((r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A)) hasLetter = true;
+      if (r > 0x7F) nonAscii++;
+    }
+    return !hasLetter && nonAscii > 0 && nonAscii <= 8;
+  }
+
   void _handleNewMessage(data) {
     if (data == null || !mounted || _disposed) return;
     final Map<String, dynamic> msg = Map<String, dynamic>.from(data);
@@ -648,10 +664,13 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (senderId != null && senderId == state.userId) return;
     final text = (msg['content'] ?? msg['text'] ?? '').toString();
     final sender = (msg['senderName'] ?? msg['sender'] ?? 'Unknown').toString();
-    // CHAT-shaped reaction fallback (see sendReaction). Treat single
-    // emoji content tagged isReaction as a floating reaction, NOT a
-    // chat message.
-    if (msg['isReaction'] == true && text.isNotEmpty) {
+
+    // Heuristic: a CHAT message whose content is JUST a small emoji
+    // (no letters/digits/whitespace, ≤8 codepoints) was almost
+    // certainly a reaction sent through the chat fallback (see
+    // sendReaction). Surface it as a floating reaction instead of
+    // polluting the chat panel.
+    if (text.isNotEmpty && _looksLikeBareEmoji(text)) {
       _addReaction(text, sender);
       return;
     }
@@ -1227,29 +1246,43 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final ts = DateTime.now().millisecondsSinceEpoch;
     final name = _userName ?? 'You';
     final routingId = state.meetingCode ?? state.meetingId;
+    final uid = state.userId;
+    final id = '$ts-${uid ?? ''}';
 
-    // CRITICAL: do NOT emit on `media-toggle` for reactions. The web
-    // client's media-toggle-remote handler hits an unhandled
-    // exception on any `type` it doesn't recognise (only knows
-    // MEDIA_TOGGLE / CHAT) and the whole web session crashes — the
-    // peer connection drops and we get a user-left event.
-    //
-    // Until the web/server is updated to handle reactions, send them
-    // on a Mizdah-specific event name that web has no listener for
-    // (silently ignored, no crash). Other Flutter clients can pick
-    // it up through the same name.
-    final payload = <String, dynamic>{
-      'id': '$ts-${state.userId ?? ''}',
+    // 1) Optimistic local floating reaction.
+    _addReaction(emoji, name);
+
+    // 2) Mizdah-private channel for other Flutter clients. Web has
+    //    no listener so socket.io silently ignores → no crash. If
+    //    the server adds a relay later it will land as a floating
+    //    reaction on every Flutter peer.
+    _socket?.emit('mizdah-reaction', {
+      'id': id,
       'meetingId': routingId,
       'emoji': emoji,
       'name': name,
-      'senderId': state.userId,
+      'senderId': uid,
       'timestamp': ts,
-    };
-    _log('🎉 emit reaction $emoji (mizdah-reaction only — media-toggle would crash web)');
-    _socket?.emit('mizdah-reaction', payload);
+    });
 
-    _addReaction(emoji, name);
+    // 3) For web visibility, piggy-back on the chat channel — same
+    //    shape the server already relays without crashing
+    //    (`media-toggle` / type:CHAT). Web user sees the emoji as a
+    //    chat message; not the ideal floating animation, but the
+    //    emoji DOES reach them. NO custom flags on this payload —
+    //    we found earlier that any unrecognised field can crash web.
+    _socket?.emit('media-toggle', {
+      'id': id,
+      'meetingId': routingId,
+      'type': 'CHAT',
+      'content': emoji,
+      'name': name,
+      'senderName': name,
+      'senderId': uid,
+      'timestamp': ts,
+    });
+
+    _log('🎉 emit reaction $emoji  (mizdah-reaction + chat-fallback)');
   }
 
   void _addReaction(String emoji, String name) {
