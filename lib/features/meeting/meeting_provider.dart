@@ -131,6 +131,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   Timer? _waitingListTimer;
   bool _hasJoinedRoom = false;
   bool _disposed = false;
+  String? _userName;
 
   // Per-peer state: pc, pending-ice queue, and renderer cache.
   final Map<String, RTCPeerConnection> _peerConnections = {};
@@ -198,6 +199,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true}) async {
     _log('joinMeeting → meetingId=$meetingId userId=$userId name=$name video=$video audio=$audio');
+    _userName = name;
 
     final cleanCode = meetingId.toLowerCase().trim();
 
@@ -602,10 +604,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     // Attach local tracks BEFORE creating offer/answer.
     if (_localStream != null) {
-      for (final track in _localStream!.getTracks()) {
-        await pc.addTrack(track, _localStream!);
+      final tracks = _localStream!.getTracks();
+      for (final track in tracks) {
+        try {
+          // Some flutter_webrtc builds need the track explicitly enabled
+          // before addTrack — otherwise the resulting RTPSender ends up
+          // with direction=recvonly and the remote never gets media.
+          track.enabled = true;
+          final sender = await pc.addTrack(track, _localStream!);
+          _log('  + addTrack ${track.kind} id=${track.id} '
+              'enabled=${track.enabled} sender=${sender.senderId}');
+        } catch (e) {
+          _log('  ❌ addTrack ${track.kind} failed: $e');
+        }
       }
-      _log('Added ${_localStream!.getTracks().length} local tracks to PC[$remoteSocketId]');
+      _log('Added ${tracks.length} local tracks to PC[$remoteSocketId]');
     } else {
       _log('⚠️ No local stream when creating PC[$remoteSocketId] — remote will see no media');
     }
@@ -668,7 +681,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           'offerToReceiveVideo': 1,
         });
         await pc.setLocalDescription(offer);
-        _log('📤 emit offer → $remoteSocketId');
+        // Surface the m-lines so we can confirm the offer carries the
+        // expected `m=video` / `m=audio` sections — if either is
+        // missing the remote side will never get our media.
+        final mLines = (offer.sdp ?? '')
+            .split('\n')
+            .where((l) => l.startsWith('m='))
+            .join(' | ');
+        _log('📤 emit offer → $remoteSocketId  m=[$mLines]');
         _socket?.emit('offer', {
           'to': remoteSocketId,
           'offer': offer.toMap(),
@@ -860,23 +880,31 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   /// Tell the rest of the room what our mic / camera / screen share
-  /// state is, in the same `media-toggle-remote` shape the web client
-  /// emits. Without this the mute / camera-off icons on other clients
-  /// are stuck on whatever default they assumed at connect time.
+  /// state is. Important: the event we EMIT is `media-toggle` (the
+  /// server adds `from` and re-broadcasts to other clients as
+  /// `media-toggle-remote`). The previous version emitted
+  /// `media-toggle-remote` directly — the server did NOT relay it,
+  /// so peers' UIs never updated and the mute icon stayed stuck.
   void _broadcastMediaState() {
     final cameraTrackId = _localStream?.getVideoTracks().isNotEmpty == true
         ? _localStream!.getVideoTracks().first.id
         : null;
-    _socket?.emit('media-toggle-remote', {
+    final payload = {
       'meetingId': state.meetingId,
       'type': 'MEDIA_TOGGLE',
-      'name': null, // backend fills name
+      'name': _userName,
       'audioEnabled': state.isMicOn,
       'videoEnabled': state.isCameraOn,
       'isSharing': state.isScreenSharing,
       'isHandRaised': false,
       'cameraVideoTrackId': cameraTrackId,
-    });
+    };
+    _log('📤 emit media-toggle audio=${state.isMicOn} video=${state.isCameraOn}');
+    _socket?.emit('media-toggle', payload);
+    // Belt-and-suspenders: some signaling implementations expose only
+    // the -remote name. Sending both is harmless to a server that
+    // expects just one.
+    _socket?.emit('media-toggle-remote', payload);
   }
 
   void switchCamera() async {
