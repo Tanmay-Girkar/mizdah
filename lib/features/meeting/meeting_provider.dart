@@ -535,14 +535,38 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
     _log('🆕 createPeerConnection for $remoteSocketId (offerer=$isOfferer)');
 
+    // STUN alone can't punch holes between two peers behind symmetric
+    // NATs (typical on mobile carrier networks). Without a TURN relay
+    // ICE ends up in `failed`, peer connections form but no media
+    // flows — exactly the "everyone shows as avatar, no video" the user
+    // reported. openrelay.metered.ca is a free public TURN suitable
+    // for development; replace with a private TURN before production.
     final config = {
       'iceServers': [
         {'urls': 'stun:stun.l.google.com:19302'},
         {'urls': 'stun:stun1.l.google.com:19302'},
         {'urls': 'stun:stun2.l.google.com:19302'},
         {'urls': 'stun:global.stun.twilio.com:3478'},
+        {
+          'urls': 'turn:openrelay.metered.ca:80',
+          'username': 'openrelayproject',
+          'credential': 'openrelayproject',
+        },
+        {
+          'urls': 'turn:openrelay.metered.ca:443',
+          'username': 'openrelayproject',
+          'credential': 'openrelayproject',
+        },
+        {
+          'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
+          'username': 'openrelayproject',
+          'credential': 'openrelayproject',
+        },
       ],
       'sdpSemantics': 'unified-plan',
+      'iceTransportPolicy': 'all',
+      'bundlePolicy': 'max-bundle',
+      'rtcpMuxPolicy': 'require',
     };
 
     final pc = await createPeerConnection(config);
@@ -567,14 +591,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       });
     };
 
-    pc.onIceConnectionState = (state) {
-      _log('ICE[$remoteSocketId] = $state');
+    pc.onIceConnectionState = (iceState) {
+      _log('ICE[$remoteSocketId] = $iceState');
+      if (iceState == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        _log('🔥 ICE failed — restarting');
+        _restartIce(remoteSocketId);
+      }
     };
 
-    pc.onConnectionState = (state) {
-      _log('PC[$remoteSocketId] = $state');
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        _log('🔥 PC failed for $remoteSocketId — consider TURN server');
+    pc.onConnectionState = (pcState) {
+      _log('PC[$remoteSocketId] = $pcState');
+      if (pcState == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        _log('🔥 PC failed for $remoteSocketId — restarting ICE');
+        _restartIce(remoteSocketId);
       }
     };
 
@@ -871,8 +900,29 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
   }
 
+  Future<void> _restartIce(String remoteSocketId) async {
+    final pc = _peerConnections[remoteSocketId];
+    if (pc == null) return;
+    try {
+      final offer = await pc.createOffer({'iceRestart': true});
+      await pc.setLocalDescription(offer);
+      _socket?.emit('offer', {
+        'to': remoteSocketId,
+        'offer': offer.toMap(),
+      });
+      _log('🔄 ICE restart offer sent → $remoteSocketId');
+    } catch (e) {
+      _log('❌ ICE restart failed: $e');
+    }
+  }
+
   void leaveMeeting() {
-    _log('leaveMeeting');
+    // Show 1 frame of stack so we can tell whether a stray timer / a
+    // route pop / an explicit hangup tore down the meeting. The user
+    // saw the meeting "freeze after a few minutes" with no obvious
+    // reason for the disconnect.
+    final caller = StackTrace.current.toString().split('\n').skip(1).take(2).join(' | ');
+    _log('leaveMeeting ← $caller');
     _waitingListTimer?.cancel();
     _socket?.disconnect();
     _chatSocket?.disconnect();
