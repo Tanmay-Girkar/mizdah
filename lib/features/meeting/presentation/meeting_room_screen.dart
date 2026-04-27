@@ -250,30 +250,35 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
                   ),
                 ),
 
-              // Incoming-message toast (sender + preview).
+              // Incoming-message toast — anchored to the TOP-RIGHT
+              // corner so it doesn't sit on top of the controls and
+              // is visible without overlapping the self-PIP. Slides
+              // in from above and fades.
               Positioned(
-                left: 16,
-                right: 16,
-                bottom: 200,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  switchInCurve: Curves.easeOut,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, anim) => SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0, 0.3),
-                      end: Offset.zero,
-                    ).animate(anim),
-                    child: FadeTransition(opacity: anim, child: child),
+                top: 70,
+                right: 12,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 320),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    switchInCurve: Curves.easeOut,
+                    switchOutCurve: Curves.easeIn,
+                    transitionBuilder: (child, anim) => SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0.4, -0.15),
+                        end: Offset.zero,
+                      ).animate(anim),
+                      child: FadeTransition(opacity: anim, child: child),
+                    ),
+                    child: meetingState.incomingChatToast == null
+                        ? const SizedBox.shrink(key: ValueKey('chat-toast-empty'))
+                        : _ChatToast(
+                            key: ValueKey(meetingState.incomingChatToast!['at']),
+                            sender: (meetingState.incomingChatToast!['sender'] ?? '').toString(),
+                            text: (meetingState.incomingChatToast!['text'] ?? '').toString(),
+                            onTap: () => setState(() => _activePanel = 'chat'),
+                          ),
                   ),
-                  child: meetingState.incomingChatToast == null
-                      ? const SizedBox.shrink(key: ValueKey('chat-toast-empty'))
-                      : _ChatToast(
-                          key: ValueKey(meetingState.incomingChatToast!['at']),
-                          sender: (meetingState.incomingChatToast!['sender'] ?? '').toString(),
-                          text: (meetingState.incomingChatToast!['text'] ?? '').toString(),
-                          onTap: () => setState(() => _activePanel = 'chat'),
-                        ),
                 ),
               ),
 
