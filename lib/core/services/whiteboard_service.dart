@@ -7,6 +7,13 @@ class DrawAction {
   final String color;
   final double strokeWidth;
   final String type; // 'start', 'move', 'end'
+  /// Brush kind. Cross-side optional — older payloads or backends
+  /// that strip unknown keys default to 'pencil' on the receiver,
+  /// which is a graceful degrade for blur strokes.
+  ///
+  /// Eraser doesn't need this field at all — it's just sent as a
+  /// fat white stroke that paints over existing ink.
+  final String tool;
 
   DrawAction({
     required this.x,
@@ -14,6 +21,7 @@ class DrawAction {
     required this.color,
     required this.strokeWidth,
     required this.type,
+    this.tool = 'pencil',
   });
 
   Map<String, dynamic> toJson() => {
@@ -22,6 +30,7 @@ class DrawAction {
     'color': color,
     'width': strokeWidth,
     'type': type,
+    'tool': tool,
   };
 
   factory DrawAction.fromJson(Map<String, dynamic> json) {
@@ -31,6 +40,7 @@ class DrawAction {
       color: json['color'] ?? '#000000',
       strokeWidth: json['width'] is int ? (json['width'] as int).toDouble() : json['width'] ?? 2.0,
       type: json['type'] ?? 'move',
+      tool: (json['tool'] as String?) ?? 'pencil',
     );
   }
 }
