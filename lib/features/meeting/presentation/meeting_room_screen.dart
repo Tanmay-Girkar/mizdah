@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../settings/meeting_layout_provider.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
+import '../pip_controller.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,13 +38,16 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
   ConsumerState<MeetingRoomScreen> createState() => _MeetingRoomScreenState();
 }
 
-class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
+class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
+    with WidgetsBindingObserver {
   bool _isRaisingHand = false;
   bool _isRecording = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    PipController.instance.wire();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authState = ref.read(authProvider);
       final user = authState.user;
@@ -60,7 +64,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Backgrounding the app while in a meeting -> auto-enter PiP so
+    // the call keeps going in a corner instead of the camera turning
+    // off. Best-effort; falls back silently if PiP unsupported.
+    if (state == AppLifecycleState.inactive) {
+      PipController.instance.enter();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Note: Provider might handle this, but explicit leave is safer
     ref.read(meetingProvider(widget.meetingId).notifier).leaveMeeting();
     super.dispose();
@@ -70,6 +86,14 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final meetingState = ref.watch(meetingProvider(widget.meetingId));
     final meetingNotifier = ref.watch(meetingProvider(widget.meetingId).notifier);
+    final isInPip = ref.watch(pipModeProvider);
+
+    // Compact PiP layout — single big tile (active speaker / first
+    // remote) or our self-PIP if no peers, with no chrome. The OS
+    // picks our window down to ~9:16 so anything else clutters.
+    if (isInPip) {
+      return _PipLayout(meetingState: meetingState);
+    }
 
     // When the host hangs up the backend broadcasts end-meeting-for-all
     // to every participant; the notifier flips phase -> ended. Watch
@@ -1405,6 +1429,14 @@ class _MeetingTopBar extends StatelessWidget {
           // 4 layouts. Selecting one persists via meetingLayoutProvider
           // so the choice is remembered for next time too.
           const _LayoutSwitcherButton(),
+          const SizedBox(width: 8),
+          // Picture-in-Picture toggle — minimises the meeting into
+          // a corner window so the user can keep the call live while
+          // doing something else.
+          _TopBarIconButton(
+            icon: Icons.picture_in_picture_alt_rounded,
+            onTap: () => PipController.instance.enter(),
+          ),
           const SizedBox(width: 8),
           _TopBarIconButton(
             icon: isSpeakerphoneOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
@@ -3197,6 +3229,101 @@ class _LayoutSwitcherButton extends ConsumerWidget {
                     ),
                   ),
                 ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Compact Picture-in-Picture layout — single big tile, no chrome
+// ---------------------------------------------------------------------------
+
+class _PipLayout extends StatelessWidget {
+  final MeetingState meetingState;
+  const _PipLayout({required this.meetingState});
+
+  @override
+  Widget build(BuildContext context) {
+    // Pick the first remote renderer if any; fall back to self.
+    RTCVideoRenderer? renderer;
+    var mirror = false;
+    String? name;
+
+    final firstRemote = meetingState.remoteRenderers.entries.isNotEmpty
+        ? meetingState.remoteRenderers.entries.first
+        : null;
+    if (firstRemote != null) {
+      renderer = firstRemote.value;
+      // Look up the participant name for the bottom badge.
+      for (final p in meetingState.participants) {
+        if (p is Map && p['socketId'] == firstRemote.key) {
+          name = (p['name'] ?? p['displayName'])?.toString();
+          break;
+        }
+      }
+    } else {
+      renderer = meetingState.localRenderer;
+      mirror = true;
+      name = 'You';
+    }
+
+    final hasVideo =
+        renderer.srcObject?.getVideoTracks().isNotEmpty ?? false;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (hasVideo)
+            RepaintBoundary(
+              child: RTCVideoView(
+                renderer,
+                mirror: mirror,
+                objectFit:
+                    RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              ),
+            )
+          else
+            Container(
+              color: const Color(0xFF1F232B),
+              alignment: Alignment.center,
+              child: Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: MizdahTheme.primaryBlue.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.videocam_off_rounded,
+                  color: Colors.white70,
+                  size: 26,
+                ),
+              ),
+            ),
+          if (name != null)
+            Positioned(
+              left: 6,
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
         ],

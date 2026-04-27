@@ -681,19 +681,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             state = state.copyWith(participants: updated);
           } catch (_) {}
 
-          // Detach the renderer so the cached screen frame is
-          // gone and the grid shows the avatar. The renderer will
-          // be re-attached on the NEXT media-toggle from this peer
-          // that confirms videoEnabled=true — by that point we
-          // know fresh frames are flowing (camera or otherwise).
+          // Reset the renderer when sharing stops so we don't keep
+          // showing the cached screen frame. Two cases:
+          //
+          //   videoEnabled:true  → peer kept their camera on, so we
+          //                        flush the texture (null + reattach
+          //                        with the same stream) and the
+          //                        camera frames paint instantly.
+          //   videoEnabled:false → no camera coming, leave the
+          //                        renderer detached so the tile
+          //                        falls through to the avatar.
+          //                        Reattach later if the peer's next
+          //                        media-toggle says videoEnabled:true.
           if (stoppedSharing) {
             final r = state.remoteRenderers[from];
-            if (r != null) r.srcObject = null;
-            _stoppedSharingPeers.add(from);
+            final s = _remoteStreams[from];
+            if (r != null) {
+              r.srcObject = null;
+              if (data['videoEnabled'] == true && s != null) {
+                Future.delayed(const Duration(milliseconds: 60), () {
+                  if (!mounted || _disposed) return;
+                  r.srcObject = s;
+                });
+              } else {
+                _stoppedSharingPeers.add(from);
+              }
+            }
           } else if (_stoppedSharingPeers.contains(from) &&
               data['videoEnabled'] == true) {
-            // Peer's video came back — reattach the stream so the
-            // tile starts rendering camera frames again.
             final r = state.remoteRenderers[from];
             final s = _remoteStreams[from];
             if (r != null && s != null) r.srcObject = s;
