@@ -200,6 +200,8 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                 child: _MeetingTopBar(
                   meetingId: widget.meetingId,
                   isRecording: meetingState.isRecording,
+                  isSpeakerphoneOn: meetingState.isSpeakerphoneOn,
+                  onToggleSpeakerphone: meetingNotifier.toggleSpeakerphone,
                   onSwitchCamera: meetingNotifier.switchCamera,
                 ),
               ),
@@ -1719,11 +1721,15 @@ class _AvatarPlaceholder extends StatelessWidget {
 class _MeetingTopBar extends StatelessWidget {
   final String meetingId;
   final bool isRecording;
+  final bool isSpeakerphoneOn;
+  final VoidCallback onToggleSpeakerphone;
   final VoidCallback onSwitchCamera;
 
   const _MeetingTopBar({
     required this.meetingId,
     required this.isRecording,
+    required this.isSpeakerphoneOn,
+    required this.onToggleSpeakerphone,
     required this.onSwitchCamera,
   });
 
@@ -1799,6 +1805,13 @@ class _MeetingTopBar extends StatelessWidget {
           _TopBarIconButton(
             icon: Icons.picture_in_picture_alt_rounded,
             onTap: () => PipController.instance.enter(),
+          ),
+          const SizedBox(width: 8),
+          _TopBarIconButton(
+            icon: isSpeakerphoneOn
+                ? Icons.volume_up_rounded
+                : Icons.volume_off_rounded,
+            onTap: onToggleSpeakerphone,
           ),
           const SizedBox(width: 8),
           _TopBarIconButton(
@@ -1998,7 +2011,8 @@ class _MoreOptionsSheet extends StatelessWidget {
 
               const SizedBox(height: 8),
 
-              // Mid Row: Share, CC, Volume
+              // Mid Row: Share, CC (volume removed per request — the
+              // top bar handles audio routing now).
               Row(
                 children: [
                   Expanded(
@@ -2016,19 +2030,6 @@ class _MoreOptionsSheet extends StatelessWidget {
                       label: '',
                       onTap: onToggleCaptions,
                       isActive: isCaptionsEnabled,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _SheetButton(
-                      icon: Icons.volume_up_outlined,
-                      label: '',
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Volume adjusted')),
-                        );
-                      },
-                      isActive: true,
                     ),
                   ),
                 ],
