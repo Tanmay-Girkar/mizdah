@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../settings/meeting_layout_provider.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
+import 'widgets/adjust_view_sheet.dart';
 import '../pip_controller.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
@@ -630,17 +631,52 @@ class _VideoGrid extends ConsumerWidget {
     }
 
     final layout = ref.watch(meetingLayoutProvider);
+    final maxTiles = ref.watch(maxTilesProvider);
+    final hideNoVideo = ref.watch(hideTilesWithoutVideoProvider);
+
+    // Hide tiles without video — leave the local presenting
+    // placeholder (it doesn't have a renderer but IS valid).
+    var filtered = tiles;
+    if (hideNoVideo) {
+      filtered = tiles.where((t) {
+        if (t.isPresentingPlaceholder) return true;
+        if (!t.videoEnabled) return false;
+        final hasVideoTrack =
+            t.renderer?.srcObject?.getVideoTracks().isNotEmpty ?? false;
+        return hasVideoTrack;
+      }).toList();
+    }
+
+    // Cap to max tiles — overflow is dropped (Google Meet shows a
+    // "+N" chip on web; we just truncate for now).
+    if (filtered.length > maxTiles) {
+      filtered = filtered.take(maxTiles).toList();
+    }
+
+    // Resolve `auto` to a concrete layout based on participant count.
+    var resolved = layout;
+    if (resolved == MeetingLayout.auto) {
+      if (filtered.length <= 1) {
+        resolved = MeetingLayout.spotlight;
+      } else if (filtered.length <= 4) {
+        resolved = MeetingLayout.equalGrid;
+      } else {
+        resolved = MeetingLayout.spotlight;
+      }
+    }
+
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
       transitionBuilder: (child, anim) =>
           FadeTransition(opacity: anim, child: child),
       child: KeyedSubtree(
-        key: ValueKey(layout),
-        child: switch (layout) {
-          MeetingLayout.spotlight      => _SpotlightStripGrid(tiles: tiles),
-          MeetingLayout.equalGrid      => _EqualGridGrid(tiles: tiles),
-          MeetingLayout.speakerSidebar => _SpeakerSidebarGrid(tiles: tiles),
-          MeetingLayout.premiumCards   => _PremiumCardsGrid(tiles: tiles),
+        key: ValueKey(resolved),
+        child: switch (resolved) {
+          MeetingLayout.spotlight      => _SpotlightStripGrid(tiles: filtered),
+          MeetingLayout.equalGrid      => _EqualGridGrid(tiles: filtered),
+          MeetingLayout.speakerSidebar => _SpeakerSidebarGrid(tiles: filtered),
+          MeetingLayout.premiumCards   => _PremiumCardsGrid(tiles: filtered),
+          MeetingLayout.auto           => _EqualGridGrid(tiles: filtered),
         },
       ),
     );
@@ -3190,48 +3226,14 @@ class _LayoutSwitcherButton extends ConsumerWidget {
       padding: EdgeInsets.zero,
       radius: 100,
       opacity: isDark ? 0.1 : 0.05,
-      child: PopupMenuButton<MeetingLayout>(
+      child: IconButton(
         icon: Icon(
           current.icon,
           color: isDark ? Colors.white : Colors.black87,
           size: 20,
         ),
-        tooltip: 'Change layout',
-        position: PopupMenuPosition.under,
-        color: isDark ? const Color(0xFF1A1F26) : Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        onSelected: (layout) =>
-            ref.read(meetingLayoutProvider.notifier).set(layout),
-        itemBuilder: (context) => [
-          for (final l in MeetingLayout.values)
-            PopupMenuItem<MeetingLayout>(
-              value: l,
-              child: Row(
-                children: [
-                  Icon(
-                    l.icon,
-                    color: l == current
-                        ? const Color(0xFF1A73E8)
-                        : (isDark ? Colors.white70 : Colors.black54),
-                    size: 18,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    l.label,
-                    style: TextStyle(
-                      color: l == current
-                          ? const Color(0xFF1A73E8)
-                          : (isDark ? Colors.white : Colors.black87),
-                      fontWeight:
-                          l == current ? FontWeight.w700 : FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
+        tooltip: 'Adjust view',
+        onPressed: () => AdjustViewSheet.show(context),
       ),
     );
   }
