@@ -88,6 +88,13 @@ class MeetingState {
   /// control of anyone.
   final String? controlOfPeerSocketId;
 
+  /// Latest audio activity level per participant, normalised 0..1.
+  /// Keyed by socketId for remotes; the local user is keyed under
+  /// `'local'`. Drives the voice-wave indicator on each tile —
+  /// stays at 0 while the speaker is silent and ramps up while
+  /// they're talking.
+  final Map<String, double> audioLevels;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -119,6 +126,7 @@ class MeetingState {
     this.incomingControlRequest,
     this.controllingPeerSocketId,
     this.controlOfPeerSocketId,
+    this.audioLevels = const {},
   });
 
   MeetingState copyWith({
@@ -156,6 +164,7 @@ class MeetingState {
     bool clearControllingPeer = false,
     String? controlOfPeerSocketId,
     bool clearControlOfPeer = false,
+    Map<String, double>? audioLevels,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -198,6 +207,7 @@ class MeetingState {
       controlOfPeerSocketId: clearControlOfPeer
           ? null
           : (controlOfPeerSocketId ?? this.controlOfPeerSocketId),
+      audioLevels: audioLevels ?? this.audioLevels,
     );
   }
 }
@@ -213,6 +223,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   SFUService? _sfuService;
   NetworkResilienceService? _networkResilienceService;
   Timer? _waitingListTimer;
+  /// Polls each peer connection's `getStats()` every ~250ms and
+  /// publishes the normalised audio level into `state.audioLevels`
+  /// so the per-tile voice-wave widget can animate.
+  Timer? _audioLevelTimer;
   bool _hasJoinedRoom = false;
   bool _disposed = false;
   String? _userName;
@@ -345,6 +359,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _log('❌ Local media setup failed — aborting join');
       return;
     }
+
+    // Kick off the audio-level poll. Drives the per-tile voice-wave
+    // indicator. Cheap (~1ms per tick) but cancelled in leaveMeeting.
+    _startAudioLevelPolling();
 
     // 4. Open the signaling socket.
     //
@@ -1023,6 +1041,84 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     await sender.setParameters(params);
   }
 
+  /// Polls every peer connection's `getStats()` for `audioLevel`
+  /// (normalised 0..1) and folds the result into `state.audioLevels`.
+  /// Local mic is keyed under `'local'` (read from outbound /
+  /// media-source stats); remotes under their socketId (inbound-rtp).
+  ///
+  /// 250ms cadence keeps CPU minimal while still feeling reactive
+  /// (a normal sentence has ~3-5 syllables a second). Reports we
+  /// don't recognise are silently ignored.
+  void _startAudioLevelPolling() {
+    _audioLevelTimer?.cancel();
+    _audioLevelTimer = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) => _pollAudioLevels(),
+    );
+  }
+
+  Future<void> _pollAudioLevels() async {
+    if (_disposed || !mounted) return;
+    if (_peerConnections.isEmpty) return;
+
+    final next = <String, double>{};
+    // Track the last good values so a tile that briefly returns no
+    // stats doesn't flicker to silent — we decay slowly instead.
+    final prev = state.audioLevels;
+
+    for (final entry in _peerConnections.entries) {
+      final socketId = entry.key;
+      final pc = entry.value;
+      try {
+        final reports = await pc.getStats();
+        double? remoteLevel;
+        double? localLevel;
+        for (final r in reports) {
+          final v = r.values;
+          final kind = (v['kind'] ?? v['mediaType'])?.toString();
+          if (kind != 'audio') continue;
+          final lvl = v['audioLevel'];
+          if (lvl is! num) continue;
+          if (r.type == 'inbound-rtp') {
+            remoteLevel = (remoteLevel ?? 0).clamp(0.0, 1.0).toDouble();
+            if (lvl.toDouble() > remoteLevel) remoteLevel = lvl.toDouble();
+          } else if (r.type == 'media-source' || r.type == 'outbound-rtp') {
+            localLevel = (localLevel ?? 0).clamp(0.0, 1.0).toDouble();
+            if (lvl.toDouble() > localLevel) localLevel = lvl.toDouble();
+          }
+        }
+        if (remoteLevel != null) {
+          next[socketId] = remoteLevel;
+        } else if (prev.containsKey(socketId)) {
+          // Decay toward zero so the wave fades out instead of
+          // popping off when stats momentarily skip a frame.
+          next[socketId] = (prev[socketId]! * 0.6).clamp(0.0, 1.0);
+        }
+        if (localLevel != null) {
+          // The local level is the same regardless of which PC we
+          // read it from, so the last write wins — fine.
+          next['local'] = localLevel;
+        }
+      } catch (_) {
+        // getStats can throw on PC teardown — drop the tick.
+      }
+    }
+
+    if (!mounted || _disposed) return;
+    // Only push state if something actually changed beyond a tiny
+    // jitter. Avoids re-rendering every tile every 250ms.
+    bool changed = next.length != prev.length;
+    if (!changed) {
+      for (final k in next.keys) {
+        if (((next[k] ?? 0) - (prev[k] ?? 0)).abs() > 0.01) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) state = state.copyWith(audioLevels: next);
+  }
+
   Future<void> _attachRemoteStream(String remoteSocketId, MediaStream stream) async {
     final existingStream = _remoteStreams[remoteSocketId];
     if (existingStream?.id == stream.id && state.remoteRenderers.containsKey(remoteSocketId)) {
@@ -1614,6 +1710,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final caller = StackTrace.current.toString().split('\n').skip(1).take(2).join(' | ');
     _log('leaveMeeting ← $caller');
     _waitingListTimer?.cancel();
+    _audioLevelTimer?.cancel();
     _socket?.disconnect();
     _chatSocket?.disconnect();
     _mediaSocket?.disconnect();

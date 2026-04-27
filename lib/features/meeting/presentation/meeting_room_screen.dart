@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import '../../settings/meeting_layout_provider.dart';
@@ -199,8 +200,6 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                 child: _MeetingTopBar(
                   meetingId: widget.meetingId,
                   isRecording: meetingState.isRecording,
-                  isSpeakerphoneOn: meetingState.isSpeakerphoneOn,
-                  onToggleSpeakerphone: meetingNotifier.toggleSpeakerphone,
                   onSwitchCamera: meetingNotifier.switchCamera,
                 ),
               ),
@@ -227,6 +226,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                     isCameraOn: meetingState.isCameraOn,
                     renderer: meetingState.localRenderer,
                     isHandRaised: meetingState.isHandRaised,
+                    audioLevel: meetingState.audioLevels['local'] ?? 0.0,
                   ),
                 ),
               ),
@@ -1001,6 +1001,20 @@ class _RemoteParticipantTile extends ConsumerWidget {
                       child: const Icon(Icons.mic_off,
                           color: Colors.white, size: 12),
                     ),
+                  ] else if (data.socketId != null &&
+                      data.meetingId != null) ...[
+                    const SizedBox(width: 6),
+                    // Voice-wave indicator. Watches just the level
+                    // for THIS participant so other tiles don't
+                    // re-render when the speaker changes.
+                    Consumer(builder: (_, ref, __) {
+                      final lvl = ref.watch(
+                        meetingProvider(data.meetingId!)
+                            .select((s) =>
+                                s.audioLevels[data.socketId] ?? 0.0),
+                      );
+                      return _AudioWave(level: lvl);
+                    }),
                   ],
                 ],
               ),
@@ -1380,12 +1394,16 @@ class _SelfViewCard extends StatelessWidget {
   final bool isCameraOn;
   final RTCVideoRenderer renderer;
   final bool isHandRaised;
+  /// 0..1 local mic activity level. Drives the corner voice-wave
+  /// indicator; 0 keeps the wave dim/idle.
+  final double audioLevel;
 
   const _SelfViewCard({
     required this.isMicOn,
     required this.isCameraOn,
     required this.renderer,
     this.isHandRaised = false,
+    this.audioLevel = 0.0,
   });
 
   @override
@@ -1430,8 +1448,107 @@ class _SelfViewCard extends StatelessWidget {
                 top: 6,
                 child: _HandRaisedBadge(compact: true),
               ),
+            // Voice-wave indicator in the bottom-right of the PIP.
+            // Always rendered while the mic is on — the bars stay
+            // dim until the user starts talking.
+            if (isMicOn)
+              Positioned(
+                right: 6,
+                bottom: 6,
+                child: _AudioWave(level: audioLevel),
+              ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Animated 5-bar voice activity indicator. Driven by the
+/// per-participant `audioLevels` map on MeetingState (0..1).
+///
+/// Each bar oscillates with a slightly different phase offset so
+/// the group reads as "wave-like" rather than "all bars in sync".
+/// When the level is below `silenceThreshold` we render compact
+/// dim bars — the pill stays in the corner so layout doesn't shift
+/// when someone starts/stops talking.
+class _AudioWave extends StatefulWidget {
+  /// 0..1 normalised audio level. 0 = silent, 1 = loud.
+  final double level;
+  const _AudioWave({required this.level});
+
+  /// Bar tint when the speaker is talking — Meet blue. Hard-coded
+  /// for now; can lift to a constructor param later if a tile ever
+  /// needs to override (e.g. host speaker in red).
+  static const Color _color = Color(0xFF8AB4F8);
+
+  static const _bars = 5;
+  static const _silenceThreshold = 0.04;
+
+  @override
+  State<_AudioWave> createState() => _AudioWaveState();
+}
+
+class _AudioWaveState extends State<_AudioWave>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isSilent = widget.level < _AudioWave._silenceThreshold;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (_, __) {
+          final t = _ctrl.value * 2 * 3.1415926;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(_AudioWave._bars, (i) {
+              // Each bar gets a phase offset so the wave isn't a
+              // straight pulse. Math.sin range -1..1 -> 0..1.
+              final phase = i * 0.7;
+              final wave = (1 + (0.5 + 0.5 * (math.sin(t + phase)))) / 2;
+              final h = isSilent
+                  ? 4.0
+                  // Map 0..1 level + per-bar wave into 4..16 px.
+                  : 4.0 + (widget.level * 12) * wave;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 60),
+                  width: 3,
+                  height: h.clamp(3.0, 18.0),
+                  decoration: BoxDecoration(
+                    color: isSilent
+                        ? Colors.white.withValues(alpha: 0.45)
+                        : _AudioWave._color,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              );
+            }),
+          );
+        },
       ),
     );
   }
@@ -1602,15 +1719,11 @@ class _AvatarPlaceholder extends StatelessWidget {
 class _MeetingTopBar extends StatelessWidget {
   final String meetingId;
   final bool isRecording;
-  final bool isSpeakerphoneOn;
-  final VoidCallback onToggleSpeakerphone;
   final VoidCallback onSwitchCamera;
 
   const _MeetingTopBar({
-    required this.meetingId, 
+    required this.meetingId,
     required this.isRecording,
-    required this.isSpeakerphoneOn,
-    required this.onToggleSpeakerphone,
     required this.onSwitchCamera,
   });
 
@@ -1686,11 +1799,6 @@ class _MeetingTopBar extends StatelessWidget {
           _TopBarIconButton(
             icon: Icons.picture_in_picture_alt_rounded,
             onTap: () => PipController.instance.enter(),
-          ),
-          const SizedBox(width: 8),
-          _TopBarIconButton(
-            icon: isSpeakerphoneOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-            onTap: onToggleSpeakerphone,
           ),
           const SizedBox(width: 8),
           _TopBarIconButton(

@@ -177,10 +177,16 @@ class CaptionNotifier extends StateNotifier<CaptionState> {
     newCaptions[key] = CaptionLine(text: text, name: localName ?? 'You');
     state = state.copyWith(activeCaptions: newCaptions);
 
-    // Broadcast to peers. Server schema mirrors what we listen for in
-    // `caption-received` (text + socketId + name + isFinal).
+    // Cross-side broadcast. The backend uses a single
+    // `media-toggle-remote` event for ALL room broadcasts — chat,
+    // reactions, mic/camera state — and discriminates by `type`.
+    // We piggyback captions on that proven channel so peers see
+    // them reliably (the dedicated `caption-send` is a no-op on
+    // backends that don't relay it).
     try {
-      socket.emit('caption-send', {
+      socket.emit('media-toggle-remote', {
+        'type': 'CAPTION',
+        'from': key,
         'socketId': key,
         'name': localName ?? 'You',
         'text': text,
@@ -191,28 +197,46 @@ class CaptionNotifier extends StateNotifier<CaptionState> {
     if (isFinal) _scheduleClear(key);
   }
 
+  void _ingestIncoming(Map data, {String? fromOverride}) {
+    if (!state.isEnabled) return;
+    try {
+      final socketId = (fromOverride ??
+              data['socketId']?.toString() ??
+              data['from']?.toString()) ??
+          'unknown';
+      final text = data['text']?.toString() ?? '';
+      final name = data['name']?.toString();
+      final isFinal = data['isFinal'] == true;
+      if (text.trim().isEmpty) return;
+      // Don't echo our own caption back over the wire.
+      if (socketId == (localSocketId ?? 'local')) return;
+
+      final newCaptions =
+          Map<String, CaptionLine>.from(state.activeCaptions);
+      newCaptions[socketId] = CaptionLine(text: text, name: name);
+      state = state.copyWith(activeCaptions: newCaptions);
+
+      if (isFinal) _scheduleClear(socketId);
+    } catch (_) {
+      // Malformed payload — drop silently.
+    }
+  }
+
   void _initListeners() {
+    // Legacy dedicated channel — kept in case a backend exposes it.
     socket.on('caption-received', (data) {
-      // Always render incoming captions when CC is on locally —
-      // even if the local user hasn't been transcribed yet, they
-      // should see what peers are saying.
-      if (!state.isEnabled) return;
-      try {
-        final socketId = data['socketId']?.toString() ?? 'unknown';
-        final text = data['text']?.toString() ?? '';
-        final name = data['name']?.toString();
-        final isFinal = data['isFinal'] == true;
-        if (text.trim().isEmpty) return;
+      if (data is Map) _ingestIncoming(data);
+    });
 
-        final newCaptions =
-            Map<String, CaptionLine>.from(state.activeCaptions);
-        newCaptions[socketId] = CaptionLine(text: text, name: name);
-        state = state.copyWith(activeCaptions: newCaptions);
-
-        if (isFinal) _scheduleClear(socketId);
-      } catch (_) {
-        // Malformed payload — drop silently.
-      }
+    // Proven channel — the same one chat/reactions/media-state
+    // travel on. The MeetingNotifier also listens here for its
+    // own types; socket_io allows multiple handlers per event.
+    socket.on('media-toggle-remote', (data) {
+      if (data is! Map) return;
+      final type = data['type']?.toString().toUpperCase() ?? '';
+      if (type != 'CAPTION') return;
+      final from = data['from']?.toString();
+      _ingestIncoming(data, fromOverride: from);
     });
   }
 
@@ -237,6 +261,11 @@ class CaptionNotifier extends StateNotifier<CaptionState> {
       _speech.cancel();
     } catch (_) {}
     socket.off('caption-received');
+    // Note: not removing all media-toggle-remote handlers — the
+    // MeetingNotifier owns its own handler on the same event and
+    // we'd kill that too. The CaptionNotifier is per-meeting and
+    // disposed alongside the meeting socket, so its handler dies
+    // with the socket either way.
     super.dispose();
   }
 }
