@@ -41,7 +41,6 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
 
 class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
     with WidgetsBindingObserver {
-  bool _isRaisingHand = false;
   bool _isRecording = false;
 
   @override
@@ -213,6 +212,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                   isMicOn: meetingState.isMicOn,
                   isCameraOn: meetingState.isCameraOn,
                   renderer: meetingState.localRenderer,
+                  isHandRaised: meetingState.isHandRaised,
                 ),
               ),
               // Bottom Controls
@@ -415,9 +415,16 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => _MoreOptionsSheet(
-        isRaisingHand: _isRaisingHand,
+        // Mirror the live notifier state so the icon highlight
+        // reflects what other peers are seeing right now.
+        isRaisingHand:
+            ref.read(meetingProvider(widget.meetingId)).isHandRaised,
         onRaiseHandToggle: () {
-          setState(() => _isRaisingHand = !_isRaisingHand);
+          // Real broadcast: notifier flips local state and emits
+          // media-toggle so peers' grid tiles get the badge.
+          ref
+              .read(meetingProvider(widget.meetingId).notifier)
+              .toggleHandRaised();
           Navigator.pop(context);
         },
         onOpenChat: () {
@@ -585,6 +592,7 @@ class _VideoGrid extends ConsumerWidget {
       final videoEnabled = p['videoEnabled'] != false;
       final audioEnabled = p['audioEnabled'] != false;
       final isPresenting = p['isSharing'] == true;
+      final isHandRaised = p['isHandRaised'] == true;
       tiles.add(_ParticipantTileData(
         name: name,
         renderer: renderer,
@@ -593,6 +601,7 @@ class _VideoGrid extends ConsumerWidget {
         isPresenting: isPresenting,
         socketId: socketId,
         meetingId: meetingState.meetingCode ?? meetingState.meetingId,
+        isHandRaised: isHandRaised,
       ));
     }
     for (final entry in meetingState.remoteRenderers.entries) {
@@ -856,6 +865,9 @@ class _ParticipantTileData {
   /// Routing key for the meetingProvider so the tile can fire
   /// notifier methods (e.g. requestRemoteControl).
   final String? meetingId;
+  /// True when the peer has the raise-hand indicator on. Surfaced
+  /// as a badge in the tile corner.
+  final bool isHandRaised;
   const _ParticipantTileData({
     required this.name,
     this.renderer,
@@ -865,6 +877,7 @@ class _ParticipantTileData {
     this.isPresenting = false,
     this.socketId,
     this.meetingId,
+    this.isHandRaised = false,
   });
 }
 
@@ -977,6 +990,15 @@ class _RemoteParticipantTile extends ConsumerWidget {
                 ],
               ),
             ),
+            // Top-left raise-hand badge — yellow circle with the
+            // hand emoji, only when this peer has raised their
+            // hand (broadcast via media-toggle.isHandRaised).
+            if (data.isHandRaised)
+              const Positioned(
+                left: 8,
+                top: 8,
+                child: _HandRaisedBadge(),
+              ),
             // Top-right Request-control / Stop-controlling pill —
             // only visible while the participant is presenting.
             if (canRequestControl)
@@ -1227,11 +1249,13 @@ class _SelfViewCard extends StatelessWidget {
   final bool isMicOn;
   final bool isCameraOn;
   final RTCVideoRenderer renderer;
+  final bool isHandRaised;
 
   const _SelfViewCard({
     required this.isMicOn,
     required this.isCameraOn,
     required this.renderer,
+    this.isHandRaised = false,
   });
 
   @override
@@ -1246,23 +1270,37 @@ class _SelfViewCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          transitionBuilder: (child, animation) =>
-              FadeTransition(opacity: animation, child: child),
-          child: isCameraOn
-              ? RepaintBoundary(
-                  key: const ValueKey('self-video'),
-                  child: RTCVideoView(
-                    renderer,
-                    mirror: true,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
-                )
-              : const KeyedSubtree(
-                  key: ValueKey('self-avatar'),
-                  child: _AvatarPlaceholder(name: 'You', size: 56),
-                ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              transitionBuilder: (child, animation) =>
+                  FadeTransition(opacity: animation, child: child),
+              child: isCameraOn
+                  ? RepaintBoundary(
+                      key: const ValueKey('self-video'),
+                      child: RTCVideoView(
+                        renderer,
+                        mirror: true,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
+                    )
+                  : const KeyedSubtree(
+                      key: ValueKey('self-avatar'),
+                      child: _AvatarPlaceholder(name: 'You', size: 56),
+                    ),
+            ),
+            // Mirror the same hand-raised pill we show on remote tiles
+            // so the local user gets visual confirmation their hand is up.
+            if (isHandRaised)
+              const Positioned(
+                left: 6,
+                top: 6,
+                child: _HandRaisedBadge(compact: true),
+              ),
+          ],
         ),
       ),
     );
@@ -1274,6 +1312,52 @@ class _SelfViewCard extends StatelessWidget {
 /// screen renderer here — displaying a live screen-capture stream
 /// inside the same screen creates infinite recursive nesting (the
 /// camera captures the display capturing the display capturing…).
+/// Small pill that shows in the corner of a participant's tile
+/// when their `isHandRaised` flag from media-toggle is true.
+class _HandRaisedBadge extends StatelessWidget {
+  /// Compact form drops the "Raised" label so the pill fits inside
+  /// the tiny self-view PIP (120×180).
+  final bool compact;
+  const _HandRaisedBadge({this.compact = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: compact
+          ? const EdgeInsets.all(5)
+          : const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFBBC04), // Google Meet yellow
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: compact
+          ? const Text('✋', style: TextStyle(fontSize: 12))
+          : const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('✋', style: TextStyle(fontSize: 12)),
+                SizedBox(width: 4),
+                Text(
+                  'Raised',
+                  style: TextStyle(
+                    color: Color(0xFF202124),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
 class _PresentingPlaceholder extends StatelessWidget {
   const _PresentingPlaceholder();
 

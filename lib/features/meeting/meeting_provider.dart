@@ -61,6 +61,10 @@ class MeetingState {
   final bool hostAllowsCam;
   final bool hostAllowsChat;
 
+  /// Local user has the "raise hand" indicator on. Broadcast to
+  /// peers via media-toggle so their grid tile shows the badge.
+  final bool isHandRaised;
+
   final int mockParticipantCount;
   final String? meetingId;
   final String? meetingCode;
@@ -107,6 +111,7 @@ class MeetingState {
     this.hostAllowsMic = true,
     this.hostAllowsCam = true,
     this.hostAllowsChat = true,
+    this.isHandRaised = false,
     this.phase = MeetingPhase.idle,
     this.reactions = const [],
     this.incomingChatToast,
@@ -138,6 +143,7 @@ class MeetingState {
     bool? hostAllowsCam,
     bool? hostAllowsChat,
     bool? isHost,
+    bool? isHandRaised,
     MeetingPhase? phase,
     List<ReactionEvent>? reactions,
     Map<String, dynamic>? incomingChatToast,
@@ -174,6 +180,7 @@ class MeetingState {
       hostAllowsMic: hostAllowsMic ?? this.hostAllowsMic,
       hostAllowsCam: hostAllowsCam ?? this.hostAllowsCam,
       hostAllowsChat: hostAllowsChat ?? this.hostAllowsChat,
+      isHandRaised: isHandRaised ?? this.isHandRaised,
       phase: phase ?? this.phase,
       reactions: reactions ?? this.reactions,
       incomingChatToast: clearChatToast
@@ -672,6 +679,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
                 m['videoEnabled'] = data['videoEnabled'];
               }
               if (data.containsKey('isSharing')) m['isSharing'] = data['isSharing'];
+              if (data.containsKey('isHandRaised')) {
+                m['isHandRaised'] = data['isHandRaised'];
+              }
               if (data.containsKey('name')) m['name'] = data['name'] ?? m['name'];
               return m;
             }
@@ -1121,6 +1131,15 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _broadcastMediaState();
   }
 
+  /// Toggle the local user's "raise hand" indicator. Broadcasts to
+  /// all peers via the media-toggle channel so their grid tile
+  /// surfaces the hand badge in real time.
+  void toggleHandRaised() {
+    final next = !state.isHandRaised;
+    state = state.copyWith(isHandRaised: next);
+    _broadcastMediaState();
+  }
+
   /// Tell the rest of the room what our mic / camera / screen share
   /// state is. Important: the event we EMIT is `media-toggle` (the
   /// server adds `from` and re-broadcasts to other clients as
@@ -1144,7 +1163,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       'audioEnabled': state.isMicOn,
       'videoEnabled': hasOutboundVideo,
       'isSharing': state.isScreenSharing,
-      'isHandRaised': false,
+      'isHandRaised': state.isHandRaised,
       'cameraVideoTrackId': cameraTrackId,
     };
     _log('📤 emit media-toggle audio=${state.isMicOn} video=${state.isCameraOn}');
