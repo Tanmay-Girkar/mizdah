@@ -91,7 +91,18 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
     // Compact PiP layout — single big tile (active speaker / first
     // remote) or our self-PIP if no peers, with no chrome. The OS
     // picks our window down to ~9:16 so anything else clutters.
-    if (isInPip) {
+    //
+    // Two triggers, either is sufficient:
+    //  (a) `pipModeProvider` — fired by the native channel when the
+    //      OS transitions in/out of PiP. Authoritative but races
+    //      against the first PiP frame on some devices.
+    //  (b) MediaQuery shortest-side ≤ 320 — PiP windows are always
+    //      tiny; this catches the case where the channel callback
+    //      arrives a frame late and the OS would otherwise render
+    //      our regular meeting screen squished into the PiP window.
+    final size = MediaQuery.of(context).size;
+    final isCompact = size.shortestSide <= 320;
+    if (isInPip || isCompact) {
       return _PipLayout(meetingState: meetingState);
     }
 
@@ -3333,19 +3344,35 @@ class _PipLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Pick the first remote renderer if any; fall back to self.
+    // Prefer the first remote whose video is actually flowing. Fall
+    // back to any remote (so we still show their name + avatar even
+    // with their camera off), then to self as a last resort. Without
+    // this preference the OS PiP window would show a "camera off"
+    // placeholder for the first map entry whenever the remote we
+    // actually want is later in the iteration order.
     RTCVideoRenderer? renderer;
     var mirror = false;
     String? name;
+    String? socketId;
 
-    final firstRemote = meetingState.remoteRenderers.entries.isNotEmpty
+    MapEntry<String, RTCVideoRenderer>? pickedRemote;
+    for (final entry in meetingState.remoteRenderers.entries) {
+      final hasFlowingVideo =
+          entry.value.srcObject?.getVideoTracks().isNotEmpty ?? false;
+      if (hasFlowingVideo) {
+        pickedRemote = entry;
+        break;
+      }
+    }
+    pickedRemote ??= meetingState.remoteRenderers.entries.isNotEmpty
         ? meetingState.remoteRenderers.entries.first
         : null;
-    if (firstRemote != null) {
-      renderer = firstRemote.value;
-      // Look up the participant name for the bottom badge.
+
+    if (pickedRemote != null) {
+      renderer = pickedRemote.value;
+      socketId = pickedRemote.key;
       for (final p in meetingState.participants) {
-        if (p is Map && p['socketId'] == firstRemote.key) {
+        if (p is Map && p['socketId'] == socketId) {
           name = (p['name'] ?? p['displayName'])?.toString();
           break;
         }

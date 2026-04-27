@@ -886,6 +886,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           final sender = await pc.addTrack(track, _localStream!);
           _log('  + addTrack ${track.kind} id=${track.id} '
               'enabled=${track.enabled} sender=${sender.senderId}');
+
+          // Bump encoder bitrate for video senders. WebRTC's default
+          // start-bitrate is ~300 kbps which produces visibly blurry
+          // 720p — this lets the encoder ramp up to 1.5 Mbps when
+          // bandwidth allows, and prefer maintain-resolution so it
+          // sacrifices framerate before sharpness when constrained.
+          if (track.kind == 'video') {
+            try {
+              await _tuneVideoSender(sender);
+            } catch (e) {
+              _log('  ⚠️ tuneVideoSender failed: $e');
+            }
+          }
         } catch (e) {
           _log('  ❌ addTrack ${track.kind} failed: $e');
         }
@@ -971,6 +984,31 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     return pc;
+  }
+
+  /// Bumps a video sender's encoder ceiling so peers see a sharp
+  /// stream instead of a blurry low-bitrate fallback. Called once
+  /// per peer right after addTrack().
+  ///
+  /// flutter_webrtc exposes `getParameters` / `setParameters` on
+  /// `RTCRtpSender`. We mutate the first encoding's `maxBitrate`
+  /// (1.5 Mbps) and `minBitrate` (300 kbps), and request that the
+  /// encoder degrade framerate before resolution under congestion
+  /// — sharpness matters more than smoothness for a face-on call.
+  Future<void> _tuneVideoSender(RTCRtpSender sender) async {
+    final params = sender.parameters;
+    final encodings = params.encodings;
+    if (encodings == null || encodings.isEmpty) {
+      // No encoding slot exposed by this build — bail silently.
+      return;
+    }
+    for (final enc in encodings) {
+      enc.maxBitrate = 1500 * 1000; // 1.5 Mbps
+      enc.minBitrate = 300 * 1000;  // 300 kbps
+      enc.maxFramerate = 30;
+    }
+    params.degradationPreference = RTCDegradationPreference.MAINTAIN_RESOLUTION;
+    await sender.setParameters(params);
   }
 
   Future<void> _attachRemoteStream(String remoteSocketId, MediaStream stream) async {
