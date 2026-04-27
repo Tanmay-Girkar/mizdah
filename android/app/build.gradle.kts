@@ -8,7 +8,10 @@ plugins {
 android {
     namespace = "com.mizdah.mizdah"
     compileSdk = 36
-    ndkVersion = "27.0.12077973"
+    // Bumped to satisfy speech_to_text 7.x which requires NDK 28.x.
+    // NDKs are backward-compatible, so existing native deps
+    // (flutter_webrtc, mediasoup_client_flutter) keep working.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
