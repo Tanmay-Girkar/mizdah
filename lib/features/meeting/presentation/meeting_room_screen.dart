@@ -213,17 +213,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                 child: CaptionsView(meetingId: widget.meetingId),
               ),
 
-              // PIP for Self — always visible above the controls so the
-              // host can see themselves whether alone OR with remote
-              // participants in the grid (matches Google Meet behaviour).
-              Positioned(
-                bottom: 100,
-                right: 16,
-                child: _SelfViewCard(
-                  isMicOn: meetingState.isMicOn,
-                  isCameraOn: meetingState.isCameraOn,
-                  renderer: meetingState.localRenderer,
-                  isHandRaised: meetingState.isHandRaised,
+              // PIP for Self — draggable, snaps to the nearest of the
+              // four corners on release (matches Google Meet on
+              // Android). Always visible above the controls so the
+              // host can see themselves whether alone or with remote
+              // participants in the grid. `Positioned.fill` gives the
+              // LayoutBuilder inside bounded constraints so it can
+              // measure the safe area for the snap targets.
+              Positioned.fill(
+                child: _DraggableSelfView(
+                  child: _SelfViewCard(
+                    isMicOn: meetingState.isMicOn,
+                    isCameraOn: meetingState.isCameraOn,
+                    renderer: meetingState.localRenderer,
+                    isHandRaised: meetingState.isHandRaised,
+                  ),
                 ),
               ),
               // Bottom Controls
@@ -1255,6 +1259,121 @@ class _SolitaryHeroView extends StatelessWidget {
     );
   }
 }
+
+/// Wraps the self-view PIP in a corner-snapping draggable container.
+///
+/// Free-drag while the finger is down; on release we animate to the
+/// nearest of the four corners so the tile never ends up covering the
+/// top-bar buttons or the bottom-control dock. The tile measures its
+/// own size from `_kPipSize` (must match `_SelfViewCard`) so we don't
+/// need a LayoutBuilder around the card.
+class _DraggableSelfView extends StatefulWidget {
+  final Widget child;
+  const _DraggableSelfView({required this.child});
+
+  @override
+  State<_DraggableSelfView> createState() => _DraggableSelfViewState();
+}
+
+class _DraggableSelfViewState extends State<_DraggableSelfView> {
+  // Must match the dimensions in _SelfViewCard.
+  static const double _w = 120;
+  static const double _h = 180;
+  // Vertical exclusion zones — keep the tile clear of the top bar
+  // (chip + icon row) and bottom control dock.
+  static const double _topInset = 90;
+  static const double _bottomInset = 110;
+  static const double _sideInset = 12;
+
+  /// Current top-left of the tile in the parent stack's coordinates.
+  /// `null` until first layout — we then default to the bottom-right
+  /// corner so the initial position matches the previous behaviour.
+  Offset? _pos;
+  bool _dragging = false;
+
+  Offset _cornerFor(_Corner c, Size area) {
+    final maxX = area.width - _w - _sideInset;
+    final minX = _sideInset;
+    final maxY = area.height - _h - _bottomInset;
+    final minY = _topInset;
+    switch (c) {
+      case _Corner.topLeft:
+        return Offset(minX, minY);
+      case _Corner.topRight:
+        return Offset(maxX, minY);
+      case _Corner.bottomLeft:
+        return Offset(minX, maxY);
+      case _Corner.bottomRight:
+        return Offset(maxX, maxY);
+    }
+  }
+
+  _Corner _nearestCorner(Offset center, Size area) {
+    final isLeft = center.dx < area.width / 2;
+    final isTop = center.dy < area.height / 2;
+    if (isTop && isLeft) return _Corner.topLeft;
+    if (isTop && !isLeft) return _Corner.topRight;
+    if (!isTop && isLeft) return _Corner.bottomLeft;
+    return _Corner.bottomRight;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final area = Size(constraints.maxWidth, constraints.maxHeight);
+        final pos = _pos ?? _cornerFor(_Corner.bottomRight, area);
+        return Stack(
+          // Inner stack fills the LayoutBuilder so the AnimatedPositioned
+          // child stays within hit-test bounds. Outside the tile the
+          // Stack is a transparent passthrough — taps fall through to
+          // the widgets behind (top bar, controls, video grid).
+          fit: StackFit.expand,
+          clipBehavior: Clip.none,
+          children: [
+            // Spacer so the Stack has a child filling its area without
+            // blocking hits; IgnorePointer keeps it from absorbing taps.
+            const IgnorePointer(child: SizedBox.expand()),
+            AnimatedPositioned(
+              duration: _dragging
+                  ? Duration.zero
+                  : const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              left: pos.dx,
+              top: pos.dy,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (_) => setState(() => _dragging = true),
+                onPanUpdate: (d) {
+                  final next = Offset(
+                    (pos.dx + d.delta.dx)
+                        .clamp(0.0, area.width - _w),
+                    (pos.dy + d.delta.dy)
+                        .clamp(0.0, area.height - _h),
+                  );
+                  setState(() => _pos = next);
+                },
+                onPanEnd: (_) {
+                  // Snap to the corner closest to the tile's centre.
+                  final center =
+                      Offset(pos.dx + _w / 2, pos.dy + _h / 2);
+                  final corner = _nearestCorner(center, area);
+                  setState(() {
+                    _dragging = false;
+                    _pos = _cornerFor(corner, area);
+                  });
+                },
+                child: widget.child,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+enum _Corner { topLeft, topRight, bottomLeft, bottomRight }
 
 class _SelfViewCard extends StatelessWidget {
   final bool isMicOn;

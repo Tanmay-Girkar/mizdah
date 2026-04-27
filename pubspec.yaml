@@ -59,6 +59,10 @@ dependencies:
   googleapis_auth: ^2.3.0
   http: ^1.6.0
   emoji_picker_flutter: ^4.3.0
+  # On-device speech-to-text for live captions. Uses Android's
+  # SpeechRecognizer / iOS's Speech framework; no extra perms beyond
+  # RECORD_AUDIO which we already request for the mic.
+  speech_to_text: ^7.0.0
 
 dev_dependencies:
   flutter_test:

@@ -12,9 +12,35 @@ final captionServiceProvider = StateNotifierProvider.autoDispose.family<CaptionN
   // watch ensures this provider is disposed when meetingProvider is disposed
   final notifier = ref.watch(meetingProvider(meetingId).notifier);
   final socket = notifier.socket;
-  
+
   // Use a fallback socket if meetingProvider isn't ready
-  return CaptionNotifier(socket: socket ?? socket_io.io(ApiConfig.signalingUrl, socket_io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build()));
+  final captionNotifier = CaptionNotifier(
+    socket: socket ??
+        socket_io.io(
+          ApiConfig.signalingUrl,
+          socket_io.OptionBuilder()
+              .setTransports(['websocket'])
+              .disableAutoConnect()
+              .build(),
+        ),
+  );
+
+  // Hand the caption notifier our local identity so emitted captions
+  // are tagged with the right socketId + display name. We also
+  // re-push these whenever the meeting state mutates (e.g. the user
+  // hasn't joined yet at provider-creation time).
+  void pushIdentity() {
+    final s = ref.read(meetingProvider(meetingId));
+    captionNotifier.setLocalIdentity(
+      socketId: notifier.socket?.id,
+      name: s.userId == null ? 'You' : (notifier.userName ?? 'You'),
+    );
+  }
+
+  pushIdentity();
+  ref.listen(meetingProvider(meetingId), (_, __) => pushIdentity());
+
+  return captionNotifier;
 });
 
 final whiteboardServiceProvider = StateNotifierProvider.autoDispose.family<WhiteboardNotifier, WhiteboardState, String>((ref, meetingId) {

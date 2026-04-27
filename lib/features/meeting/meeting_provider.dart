@@ -217,6 +217,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   bool _disposed = false;
   String? _userName;
 
+  /// Public read-only view of the local participant's display name.
+  /// Read by the caption service to attribute outgoing transcripts.
+  String? get userName => _userName;
+
   /// Shortcut to the singleton's stream. We never own a MediaStream
   /// at this layer — the service does.
   MediaStream? get _localStream => LocalMediaService.instance.stream;
@@ -328,6 +332,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     } else {
       _log('Local stream already exists (${_localStream!.getTracks().length} tracks)');
     }
+
+    // Apply default audio routing once we have a stream — the OS
+    // doesn't auto-pick speakerphone for VoIP calls, so without
+    // this the first joiner hears the remote through the earpiece
+    // until they tap the volume icon.
+    try {
+      await Helper.setSpeakerphoneOn(state.isSpeakerphoneOn);
+    } catch (_) {}
 
     if (_localStream == null) {
       _log('❌ Local media setup failed — aborting join');
@@ -1216,8 +1228,23 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     await LocalMediaService.instance.switchCamera();
   }
 
-  void toggleSpeakerphone() {
-    state = state.copyWith(isSpeakerphoneOn: !state.isSpeakerphoneOn);
+  void toggleSpeakerphone() async {
+    final next = !state.isSpeakerphoneOn;
+    // Optimistic UI flip — flutter_webrtc's audio routing call is
+    // best-effort (returns void, no success channel) so we update
+    // state first and apply the route after.
+    state = state.copyWith(isSpeakerphoneOn: next);
+    try {
+      // Routes the call audio to the loud speaker when true, or back
+      // to the earpiece (or paired Bluetooth) when false. Without
+      // this call the icon flipped but audio kept coming out of the
+      // earpiece — that's why the user reported the volume button
+      // doing nothing.
+      await Helper.setSpeakerphoneOn(next);
+      _log('🔊 speakerphone -> $next');
+    } catch (e) {
+      _log('⚠️ setSpeakerphoneOn($next) failed: $e');
+    }
   }
 
   bool sendMessage(String text, String senderName) {
