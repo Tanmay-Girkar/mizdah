@@ -414,6 +414,65 @@ curl -i -X POST https://mizdah-backend.ogoul.cloud/api/recording/start/jhmyqrnea
 
 ---
 
+## 11. Emoji reactions — protocol clarification
+
+The mobile and web clients were not seeing each other's emoji
+reactions. Root cause was a contract mismatch — the web client
+sends reactions through `broadcast-data` (the catch-all bucket
+for everything that isn't CHAT / MEDIA_TOGGLE / SYNC_STATE /
+RECORDING_PERMISSION_UPDATE), and listens on
+`broadcast-data-remote`. Mobile was emitting `send-reaction` and
+listening on `receive-reaction` / `reaction-received` / `reaction`.
+
+The mobile client (this PR) now ALSO uses the web's contract.
+
+### Wire format
+
+**Client → server (sender):**
+```json
+socket.emit("broadcast-data", {
+  "meetingId": "<code>",
+  "type": "REACTION",
+  "reaction": {
+    "id":        "<sender-socket-id>-<timestamp>",
+    "emoji":     "🎉",
+    "timestamp": 1714738800123
+  },
+  "name":   "<displayName>",
+  "userId": "<userId>"
+})
+```
+
+**Server → other clients (receiver):**
+```json
+socket.on("broadcast-data-remote", { from, type, reaction, ... })
+```
+
+### Required backend behaviour
+
+If the server already implements the generic `broadcast-data` →
+`broadcast-data-remote` relay (the web client depends on it for
+non-chat events), reactions work with no further change. Verify:
+
+- `broadcast-data` from any peer is fanned out to every OTHER
+  socket in the same room as `broadcast-data-remote`
+- Server adds the sender's `socket.id` as `from` on the relayed
+  payload
+- Server does NOT echo back to the sender (mobile filters its
+  own echoes by socket.id but the web client does not, so an
+  echo would cause duplicate floating reactions there)
+
+If the relay is missing, please add it. It's the same pattern as
+`media-toggle` → `media-toggle-remote` so should be a small
+copy-paste in the signaling handler.
+
+The legacy `send-reaction` → `receive-reaction` relay used by
+older Flutter builds is no longer required for cross-platform.
+You can drop it at your convenience — mobile will fall back to
+the broadcast-data path.
+
+---
+
 ## Frontend changes shipping in this PR
 
 The mobile client (commit pending) makes the following changes

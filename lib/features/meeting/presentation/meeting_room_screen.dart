@@ -1001,7 +1001,11 @@ class _RemoteParticipantTile extends ConsumerWidget {
     }
     final iAmControlling = alreadyControllingId == data.socketId;
 
-    return ClipRRect(
+    // Speaking glow: a soft animated outline around the tile that
+    // pulses in sync with this peer's audio level. Mirrors the
+    // visual treatment Google Meet / WhatsApp use to surface the
+    // current speaker without eating tile real-estate.
+    final tileBody = ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Container(
         color: const Color(0xFF3C4043),
@@ -1102,6 +1106,18 @@ class _RemoteParticipantTile extends ConsumerWidget {
           ],
         ),
       ),
+    );
+
+    // Wrap in the speaking glow only when we have a socketId+meetingId
+    // to look up the level from. Local presenting placeholders and
+    // mock tiles have neither, so they get the bare body unchanged.
+    if (data.socketId == null || data.meetingId == null) {
+      return tileBody;
+    }
+    return _SpeakingGlow(
+      meetingId: data.meetingId!,
+      socketId: data.socketId!,
+      child: tileBody,
     );
   }
 }
@@ -1725,6 +1741,102 @@ class _SelfViewCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Wraps a participant tile in a soft outer glow that pulses with
+/// their audio level. Mirrors Google Meet / WhatsApp visuals where
+/// the current speaker's tile has a breathing colored ring.
+///
+/// We watch ONLY `audioLevels[socketId]` via `select` so other
+/// tiles don't rebuild when this peer's level changes — keeps the
+/// grid cheap even with many participants.
+class _SpeakingGlow extends ConsumerStatefulWidget {
+  final String meetingId;
+  final String socketId;
+  final Widget child;
+  const _SpeakingGlow({
+    required this.meetingId,
+    required this.socketId,
+    required this.child,
+  });
+
+  @override
+  ConsumerState<_SpeakingGlow> createState() => _SpeakingGlowState();
+}
+
+class _SpeakingGlowState extends ConsumerState<_SpeakingGlow>
+    with SingleTickerProviderStateMixin {
+  /// Continuous 0..1 oscillator drives the breathing of the glow
+  /// (so it looks alive even when the underlying level is steady).
+  late final AnimationController _ctrl;
+
+  /// Threshold below which we consider the participant silent —
+  /// keeps the glow off during background noise.
+  static const double _silenceThreshold = 0.05;
+
+  /// Primary glow colour. Meet-blue chosen to match the existing
+  /// audio-bar tint and be legible on every video background.
+  static const Color _color = Color(0xFF8AB4F8);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Cheap watch: rebuilds only when THIS participant's level
+    // changes. The combined check (peer is the loudest in the room)
+    // is intentionally not done here — Meet shows a glow on every
+    // currently-speaking tile, not just the loudest one.
+    final level = ref.watch(
+      meetingProvider(widget.meetingId)
+          .select((s) => s.audioLevels[widget.socketId] ?? 0.0),
+    );
+    final speaking = level > _silenceThreshold;
+
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        // Breathe between 0.7 and 1.0 of the level-mapped strength
+        // so even at constant audio the glow feels alive.
+        final breath = 0.7 + 0.3 * _ctrl.value;
+        final strength = speaking ? (level.clamp(0.0, 1.0) * breath) : 0.0;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: strength > 0
+                ? [
+                    BoxShadow(
+                      color: _color.withValues(alpha: 0.55 * strength),
+                      blurRadius: 18 + 18 * strength,
+                      spreadRadius: 1 + 4 * strength,
+                    ),
+                  ]
+                : const [],
+            border: Border.all(
+              color:
+                  _color.withValues(alpha: speaking ? (0.4 + 0.5 * strength) : 0),
+              width: speaking ? 2 : 0,
+            ),
+          ),
+          child: widget.child,
+        );
+      },
     );
   }
 }

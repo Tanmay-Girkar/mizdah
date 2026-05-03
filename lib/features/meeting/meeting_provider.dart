@@ -661,6 +661,31 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.on('reaction-received', onReaction);
     _socket?.on('reaction', onReaction);
 
+    // Web-compatible inbound reaction path. The web client emits
+    // REACTIONS via `broadcast-data` (everything not CHAT /
+    // MEDIA_TOGGLE / SYNC_STATE / RECORDING_PERMISSION_UPDATE goes
+    // through this channel) and the server relays as
+    // `broadcast-data-remote`. Without this listener mobile never
+    // sees reactions sent from the web. Confirmed against the
+    // deployed web bundle on 2026-05-03 — see
+    // docs/MORE_OPTIONS_BACKEND.md for the protocol details.
+    _socket?.on('broadcast-data-remote', (data) {
+      if (!mounted || _disposed || data is! Map) return;
+      final type = data['type']?.toString().toUpperCase();
+      if (type != 'REACTION') return;
+      final from = (data['from'] ?? data['userId'])?.toString();
+      // Skip our own echo if the server happens to round-trip it.
+      if (from != null && from == _socket?.id) return;
+      final reaction =
+          data['reaction'] is Map ? data['reaction'] as Map : null;
+      final emoji = (reaction?['emoji'] ?? data['emoji'])?.toString();
+      final name =
+          (data['name'] ?? data['senderName'] ?? 'Someone').toString();
+      if (emoji == null || emoji.isEmpty) return;
+      _log('🎉 inbound broadcast-data REACTION $emoji from $name');
+      _addReaction(emoji, name);
+    });
+
     // The backend uses a single `media-toggle-remote` event for ALL
     // room broadcasts. The `type` field discriminates:
     //   MEDIA_TOGGLE -> mic/camera/screen-share state
@@ -1611,38 +1636,73 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   /// Send a one-shot emoji reaction to the room. Shows immediately
-  /// for the sender and broadcasts to other clients via socket.
+  /// for the sender and broadcasts to every other client.
   ///
-  /// The reaction payload is sent with the same envelope shape that
-  /// the web client uses for chat (which we've confirmed the server
-  /// relays). We try several `type` values + bare event names + a
-  /// CHAT-shaped fallback so the emoji still surfaces on the other
-  /// end even if the web app doesn't have a dedicated reaction
-  /// receiver. The receiving Flutter client can tell a reaction from
-  /// a real chat message because `isReaction: true` is set.
+  /// Wire format (verified against the deployed web client's bundle
+  /// on 2026-05-03):
+  ///
+  ///   client → server:
+  ///       socket.emit('broadcast-data', {
+  ///         meetingId,
+  ///         type: 'REACTION',
+  ///         reaction: { id, emoji, timestamp },
+  ///       })
+  ///
+  ///   server → other clients:
+  ///       socket.on('broadcast-data-remote', ({ from, ...t }) => …)
+  ///
+  /// The web client routes anything that ISN'T `CHAT` /
+  /// `MEDIA_TOGGLE` / `SYNC_STATE` / `RECORDING_PERMISSION_UPDATE`
+  /// through `broadcast-data` (vs. the chat path which uses
+  /// `media-toggle`). REACTIONs are in that "everything else"
+  /// bucket. Without using this exact event pair, mobile→web and
+  /// web→mobile reactions never round-trip — verified empirically.
+  ///
+  /// The legacy `send-reaction` emit is kept as a belt-and-suspenders
+  /// fallback for older Flutter peers that still listen on the old
+  /// names. Server-side relay of `send-reaction → receive-reaction`
+  /// is welcome but no longer required for the cross-platform path.
   void sendReaction(String emoji) {
     if (state.meetingId == null) return;
     final ts = DateTime.now().millisecondsSinceEpoch;
     final name = _userName ?? 'You';
     final routingId = state.meetingCode ?? state.meetingId;
     final uid = state.userId;
+    final reactionId =
+        '${_socket?.id ?? 'self'}-$ts'; // matches web's UUID semantically
 
     // 1) Optimistic local floating reaction.
     _addReaction(emoji, name);
 
-    // 2) Standard reaction protocol — dedicated event names so the
-    //    emoji never lands in any client's chat handler. Backend has
-    //    to relay `send-reaction` -> `receive-reaction` for cross-
-    //    side floating reactions to work.
-    final payload = {
+    // 2) The web-compatible path. This is the one that actually makes
+    //    cross-platform reactions visible.
+    final webPayload = {
+      'meetingId': routingId,
+      'type': 'REACTION',
+      'reaction': {
+        'id': reactionId,
+        'emoji': emoji,
+        'timestamp': ts,
+      },
+      // Some servers relay the full payload as-is and let the
+      // receiver pull `from` off the socket.id; sending name +
+      // userId here costs nothing and helps if they don't.
+      'name': name,
+      'userId': uid,
+    };
+    _log('🎉 emit broadcast-data REACTION $emoji');
+    _socket?.emit('broadcast-data', webPayload);
+
+    // 3) Legacy mobile-only path — keep emitting so two old Flutter
+    //    builds in the same room (without the web upgrade above)
+    //    still see each other's reactions.
+    _socket?.emit('send-reaction', {
       'meetingId': routingId,
       'userId': uid,
       'emoji': emoji,
       'name': name,
       'timestamp': ts,
-    };
-    _log('🎉 emit send-reaction $emoji');
-    _socket?.emit('send-reaction', payload);
+    });
   }
 
   void _addReaction(String emoji, String name) {
