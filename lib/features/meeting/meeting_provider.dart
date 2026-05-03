@@ -95,6 +95,13 @@ class MeetingState {
   /// they're talking.
   final Map<String, double> audioLevels;
 
+  /// "On the go" mode — Google Meet's compact UI for use while
+  /// moving (e.g. driving). Hides the video grid, shows oversized
+  /// mic / cam / hangup buttons, and de-emphasises chat. Local
+  /// preference only — no socket emission. Toggled from the More
+  /// options sheet.
+  final bool isOnTheGoMode;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -127,6 +134,7 @@ class MeetingState {
     this.controllingPeerSocketId,
     this.controlOfPeerSocketId,
     this.audioLevels = const {},
+    this.isOnTheGoMode = false,
   });
 
   MeetingState copyWith({
@@ -165,6 +173,7 @@ class MeetingState {
     String? controlOfPeerSocketId,
     bool clearControlOfPeer = false,
     Map<String, double>? audioLevels,
+    bool? isOnTheGoMode,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -208,6 +217,7 @@ class MeetingState {
           ? null
           : (controlOfPeerSocketId ?? this.controlOfPeerSocketId),
       audioLevels: audioLevels ?? this.audioLevels,
+      isOnTheGoMode: isOnTheGoMode ?? this.isOnTheGoMode,
     );
   }
 }
@@ -1297,6 +1307,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _broadcastMediaState();
   }
 
+  /// Flip the local "On the go" compact UI mode. Local-only — no
+  /// socket emission, no other client cares. The meeting room
+  /// renders a different layout when this is true (oversized mic /
+  /// cam / hangup, no video grid). Useful while driving or moving.
+  void toggleOnTheGoMode() {
+    state = state.copyWith(isOnTheGoMode: !state.isOnTheGoMode);
+  }
+
   /// Tell the rest of the room what our mic / camera / screen share
   /// state is. Important: the event we EMIT is `media-toggle` (the
   /// server adds `from` and re-broadcasts to other clients as
@@ -1463,9 +1481,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           ? localStream.getVideoTracks().first
           : null;
 
-      // Hot-swap the video sender on every peer connection. The
-      // receiving side's renderer keeps the same SSRC — frames just
-      // start coming from the screen instead of the camera.
+      // SFU mode (always on now): publish the screen track as a
+      // SEPARATE producer with `appData.isScreen: true`. The web
+      // client and other mobile peers consume that producer into
+      // a dedicated presentation tile rather than swapping the
+      // camera tile. This is the path that actually reaches other
+      // participants — the legacy peer-connection sender swap
+      // below is a no-op when there are no peer connections.
+      if (state.isSfuMode && _sfuService != null) {
+        try {
+          await _sfuService!.produceScreen(screenTrack, stream);
+          _log('🖥️  SFU screen producer started');
+        } catch (e) {
+          _log('❌ SFU produceScreen failed: $e');
+        }
+      }
+
+      // Legacy P2P fallback: hot-swap the video sender on every peer
+      // connection. The receiving side's renderer keeps the same
+      // SSRC — frames just start coming from the screen instead of
+      // the camera. No-op in SFU mode (no peer connections).
       var swapped = 0;
       for (final pc in _peerConnections.values) {
         final senders = await pc.getSenders();
@@ -1476,7 +1511,9 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           }
         }
       }
-      _log('🖥️  replaced video sender on $swapped peer(s)');
+      if (swapped > 0) {
+        _log('🖥️  replaced video sender on $swapped P2P peer(s)');
+      }
 
       // The OS lets the user revoke screen capture from the system UI;
       // when that happens the track ends and we should stop cleanly.
@@ -1523,6 +1560,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       try {
         await _screenShareFg.invokeMethod('stop');
       } catch (_) {}
+    }
+    // Close the SFU screen producer first so peers stop seeing the
+    // screen the moment we tap stop, rather than waiting for the
+    // local stream cleanup below.
+    if (_sfuService != null) {
+      try {
+        await _sfuService!.stopScreen();
+        _log('🖥️  SFU screen producer stopped');
+      } catch (e) {
+        _log('❌ SFU stopScreen error (non-fatal): $e');
+      }
     }
     try {
       _screenStream?.getTracks().forEach((t) => t.stop());

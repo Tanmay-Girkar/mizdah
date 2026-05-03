@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/auth_provider.dart';
+import '../../../data/repositories/settings_repository.dart';
 
 class ReportScreen extends ConsumerStatefulWidget {
   const ReportScreen({super.key});
@@ -13,6 +15,7 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
   final TextEditingController _namesController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   bool _includeVideo = true;
+  bool _submitting = false;
 
   final List<String> _abuseTypes = [
     'Spam or unwanted content',
@@ -30,6 +33,58 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
     _namesController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  /// Submit the report. Routes through `SettingsRepository.sendFeedback`
+  /// which posts to `/api/meeting/feedback` with the abuse details
+  /// rolled into the feedback payload. The dedicated
+  /// `/api/abuse/report` endpoint described in
+  /// docs/MORE_OPTIONS_BACKEND.md is not yet live; this code will
+  /// switch over once it is — the FE will keep working in the
+  /// meantime through the feedback path.
+  Future<void> _submit() async {
+    setState(() => _submitting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final accent = Theme.of(context).primaryColor;
+
+    final repo = ref.read(settingsRepositoryProvider);
+    final user = ref.read(authProvider).user;
+    final description =
+        'Type: ${_selectedType ?? 'unspecified'}\n'
+        'Reported names: ${_namesController.text}\n'
+        'Include video clip: $_includeVideo\n\n'
+        '${_descriptionController.text}';
+
+    try {
+      await repo.sendFeedback(
+        category: 'Report abuse',
+        description: description,
+        userEmail: user?.email ?? 'anonymous',
+      );
+      if (!mounted) return;
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(
+          content: const Text('Report submitted. Thank you.'),
+          backgroundColor: accent,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      // Surface the real error so the user (and the backend dev
+      // if logs are shared) sees that the endpoint is broken,
+      // instead of pretending success like the previous code did.
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not submit report: $e'),
+          backgroundColor: const Color(0xFFB71C1C),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 
   @override
@@ -59,26 +114,30 @@ class _ReportScreenState extends ConsumerState<ReportScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: _selectedType == null || _namesController.text.isEmpty || _descriptionController.text.isEmpty
+            onPressed: _submitting ||
+                    _selectedType == null ||
+                    _namesController.text.isEmpty ||
+                    _descriptionController.text.isEmpty
                 ? null
-                : () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Text('Report submitted successfully'),
-                        backgroundColor: accentColor,
-                      ),
-                    );
-                  },
-            child: Text(
-              'Submit',
-              style: TextStyle(
-                color: (_selectedType == null || _namesController.text.isEmpty || _descriptionController.text.isEmpty)
-                    ? labelColor
-                    : accentColor,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+                : _submit,
+            child: _submitting
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: accentColor),
+                  )
+                : Text(
+                    'Submit',
+                    style: TextStyle(
+                      color: (_selectedType == null ||
+                              _namesController.text.isEmpty ||
+                              _descriptionController.text.isEmpty)
+                          ? labelColor
+                          : accentColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
           ),
         ],
       ),

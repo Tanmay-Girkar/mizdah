@@ -178,17 +178,30 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                       if (current != null) current,
                     ],
                   ),
-                  child: (meetingState.remoteRenderers.isNotEmpty ||
-                          _hasOtherParticipants(meetingState) ||
-                          meetingState.mockParticipantCount > 0)
+                  // Branch order matters: on-the-go takes precedence
+                  // over the grid/solitary split since the user has
+                  // explicitly opted into the audio-first compact UI.
+                  // Tapping "Exit on-the-go" in More options drops
+                  // back into the regular grid.
+                  child: meetingState.isOnTheGoMode
                       ? KeyedSubtree(
-                          key: const ValueKey('grid'),
-                          child: _VideoGrid(meetingState: meetingState),
+                          key: const ValueKey('on-the-go'),
+                          child:
+                              _OnTheGoView(meetingId: widget.meetingId),
                         )
-                      : KeyedSubtree(
-                          key: const ValueKey('solitary'),
-                          child: _SolitaryHeroView(meetingId: widget.meetingId),
-                        ),
+                      : (meetingState.remoteRenderers.isNotEmpty ||
+                              _hasOtherParticipants(meetingState) ||
+                              meetingState.mockParticipantCount > 0)
+                          ? KeyedSubtree(
+                              key: const ValueKey('grid'),
+                              child:
+                                  _VideoGrid(meetingState: meetingState),
+                            )
+                          : KeyedSubtree(
+                              key: const ValueKey('solitary'),
+                              child: _SolitaryHeroView(
+                                  meetingId: widget.meetingId),
+                            ),
                 ),
               ),
 
@@ -487,8 +500,16 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
           Navigator.pop(context);
           ref.read(captionServiceProvider(widget.meetingId).notifier).toggleCaptions();
         },
+        onToggleOnTheGo: () {
+          Navigator.pop(context);
+          ref
+              .read(meetingProvider(widget.meetingId).notifier)
+              .toggleOnTheGoMode();
+        },
         isScreenSharing: ref.watch(meetingProvider(widget.meetingId)).isScreenSharing,
         isCaptionsEnabled: ref.watch(captionServiceProvider(widget.meetingId)).isEnabled,
+        isOnTheGoMode:
+            ref.watch(meetingProvider(widget.meetingId)).isOnTheGoMode,
       ),
     );
   }
@@ -1209,6 +1230,227 @@ class _MockParticipantTile extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Compact, audio-first body shown when "On the go" is enabled.
+/// No video grid — just the meeting name, a speaking indicator,
+/// and oversized mic / camera / hangup buttons. Modeled after
+/// Google Meet's driving mode.
+///
+/// Camera is auto-disabled on entry (no point feeding the producer
+/// when the user can't watch the screen) but the toggle is still
+/// available so they can re-enable it briefly. Mic stays on.
+class _OnTheGoView extends ConsumerStatefulWidget {
+  final String meetingId;
+  const _OnTheGoView({required this.meetingId});
+
+  @override
+  ConsumerState<_OnTheGoView> createState() => _OnTheGoViewState();
+}
+
+class _OnTheGoViewState extends ConsumerState<_OnTheGoView> {
+  bool _autoDisabledCam = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-disable camera on entry. Restored on exit only if WE
+    // disabled it (don't unmute a user who already had cam off).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final state = ref.read(meetingProvider(widget.meetingId));
+      if (state.isCameraOn) {
+        ref
+            .read(meetingProvider(widget.meetingId).notifier)
+            .toggleCamera();
+        _autoDisabledCam = true;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_autoDisabledCam) {
+      // Best-effort restore. Provider may already be gone if the
+      // user hung up rather than exited the mode.
+      try {
+        final notifier =
+            ref.read(meetingProvider(widget.meetingId).notifier);
+        final state = ref.read(meetingProvider(widget.meetingId));
+        if (!state.isCameraOn) notifier.toggleCamera();
+      } catch (_) {}
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(meetingProvider(widget.meetingId));
+    final notifier =
+        ref.read(meetingProvider(widget.meetingId).notifier);
+    final remoteCount = state.participants.length;
+    final speaking = state.audioLevels.values.any((v) => v > 0.15);
+    final speakerName = _firstSpeakingName(state) ?? 'No one is speaking';
+
+    return Container(
+      color: const Color(0xFF0B1120),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Column(
+            children: [
+              // Header
+              Row(
+                children: [
+                  const Icon(Icons.directions_walk,
+                      color: Colors.white70, size: 20),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'On the go',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: notifier.toggleOnTheGoMode,
+                    child: const Text('Exit',
+                        style: TextStyle(color: Colors.white70)),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              // Speaking indicator
+              Container(
+                width: 220,
+                height: 220,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: MizdahTheme.primaryBlue
+                      .withValues(alpha: speaking ? 0.28 : 0.14),
+                  border: Border.all(
+                    color: MizdahTheme.primaryBlue.withValues(
+                        alpha: speaking ? 0.9 : 0.4),
+                    width: speaking ? 4 : 2,
+                  ),
+                ),
+                child: Icon(
+                  speaking
+                      ? Icons.graphic_eq_rounded
+                      : Icons.headset_mic_outlined,
+                  color: Colors.white,
+                  size: 80,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text(
+                speakerName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '$remoteCount other ${remoteCount == 1 ? 'participant' : 'participants'} • '
+                'audio-only mode',
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 13,
+                ),
+              ),
+              const Spacer(),
+              // Oversized controls
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _BigCircleButton(
+                    icon: state.isMicOn
+                        ? Icons.mic_rounded
+                        : Icons.mic_off_rounded,
+                    color: state.isMicOn
+                        ? Colors.white12
+                        : const Color(0xFFB71C1C),
+                    onTap: notifier.toggleMic,
+                  ),
+                  _BigCircleButton(
+                    icon: state.isSpeakerphoneOn
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_down_rounded,
+                    color: Colors.white12,
+                    onTap: notifier.toggleSpeakerphone,
+                  ),
+                  _BigCircleButton(
+                    icon: Icons.call_end_rounded,
+                    color: const Color(0xFFB71C1C),
+                    onTap: () {
+                      notifier.leaveMeeting();
+                      context.go('/');
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _firstSpeakingName(MeetingState s) {
+    final levels = s.audioLevels;
+    if (levels.isEmpty) return null;
+    final loudest = levels.entries
+        .where((e) => e.value > 0.15)
+        .toList(growable: false)
+      ..sort((a, b) => b.value.compareTo(a.value));
+    if (loudest.isEmpty) return null;
+    final id = loudest.first.key;
+    if (id == 'local') return 'You';
+    for (final p in s.participants) {
+      if (p is Map && p['socketId']?.toString() == id) {
+        return (p['name'] ?? 'Speaking').toString();
+      }
+    }
+    return 'Someone is speaking';
+  }
+}
+
+class _BigCircleButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _BigCircleButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkResponse(
+      onTap: onTap,
+      radius: 48,
+      child: Container(
+        width: 76,
+        height: 76,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: Colors.white, size: 32),
       ),
     );
   }
@@ -1970,8 +2212,10 @@ class _MoreOptionsSheet extends StatelessWidget {
   final VoidCallback onOpenWhiteboard;
   final VoidCallback onToggleScreenShare;
   final VoidCallback onToggleCaptions;
+  final VoidCallback onToggleOnTheGo;
   final bool isScreenSharing;
   final bool isCaptionsEnabled;
+  final bool isOnTheGoMode;
 
   const _MoreOptionsSheet({
     required this.isRaisingHand,
@@ -1982,8 +2226,10 @@ class _MoreOptionsSheet extends StatelessWidget {
     required this.onOpenWhiteboard,
     required this.onToggleScreenShare,
     required this.onToggleCaptions,
+    required this.onToggleOnTheGo,
     required this.isScreenSharing,
     required this.isCaptionsEnabled,
+    required this.isOnTheGoMode,
   });
 
   @override
@@ -2058,17 +2304,13 @@ class _MoreOptionsSheet extends StatelessWidget {
 
               const SizedBox(height: 8),
 
-              // On the go
+              // On the go — compact, audio-first UI for driving etc.
               _SheetButton(
                 icon: Icons.directions_walk,
-                label: 'On the go',
+                label: isOnTheGoMode ? 'Exit on-the-go' : 'On the go',
                 isWideRow: true,
-                onTap: () {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('On the go mode activated')),
-                  );
-                },
+                isActive: isOnTheGoMode,
+                onTap: onToggleOnTheGo,
               ),
 
               const SizedBox(height: 8),
