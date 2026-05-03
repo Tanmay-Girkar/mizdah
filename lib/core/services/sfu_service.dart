@@ -5,7 +5,31 @@ import 'dart:convert';
 // directly. Don't be tempted to add `package:flutter_webrtc/...` — the
 // analyzer flags it as an unnecessary import.
 import 'package:mediasoup_client_flutter/mediasoup_client_flutter.dart';
+// `RTCIceServer` and `RTCIceCredentialType` live in an internal handler
+// header that mediasoup_client_flutter does NOT re-export from the
+// barrel file. Import the source file directly so we can hand iceServers
+// to the transport — without them mobile gathers only host candidates
+// and the WebRTC transports drop to `failed` once the NAT mapping
+// expires. (The package is local-pathed in pubspec, so reaching into
+// its src/ is safe — but the linter still warns. Suppressed below.)
+// ignore: implementation_imports
+import 'package:mediasoup_client_flutter/src/handlers/handler_interface.dart'
+    show RTCIceServer, RTCIceCredentialType;
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
+
+/// ICE servers handed to the WebRTC transports. Mirrors the deployed
+/// web client's default (Google's public STUN). Mobile previously
+/// sent only host candidates so transports survived a few seconds in
+/// LAN/cell scenarios then dropped to `failed` once the NAT mapping
+/// expired — see commit history. If we ever need TURN for users
+/// behind symmetric NAT, add another entry with credentials here.
+final List<RTCIceServer> _kIceServers = <RTCIceServer>[
+  RTCIceServer(
+    urls: const ['stun:stun.l.google.com:19302'],
+    username: '',
+    credentialType: RTCIceCredentialType.password,
+  ),
+];
 
 /// Wraps the mediasoup-client lifecycle against this app's specific
 /// backend protocol on the `/media` namespace (path `/media-fresh`).
@@ -123,8 +147,19 @@ class SFUService {
     if (sendAck == null || sendAck['error'] != null) {
       throw Exception('createTransport(send) failed: ${sendAck?['error']}');
     }
-    _sendTransport = _device!.createSendTransportFromMap(
-      Map<String, dynamic>.from(sendAck['params'] as Map),
+    final sendParams = Map<String, dynamic>.from(sendAck['params'] as Map);
+    _sendTransport = _device!.createSendTransport(
+      id: sendParams['id'],
+      iceParameters: IceParameters.fromMap(sendParams['iceParameters']),
+      iceCandidates: List<IceCandidate>.from(
+        (sendParams['iceCandidates'] as List)
+            .map((c) => IceCandidate.fromMap(c)),
+      ),
+      dtlsParameters: DtlsParameters.fromMap(sendParams['dtlsParameters']),
+      sctpParameters: sendParams['sctpParameters'] != null
+          ? SctpParameters.fromMap(sendParams['sctpParameters'])
+          : null,
+      iceServers: _kIceServers,
       producerCallback: _handleProducerCreated,
     );
     _wireSendTransport(_sendTransport!);
@@ -137,8 +172,19 @@ class SFUService {
     if (recvAck == null || recvAck['error'] != null) {
       throw Exception('createTransport(recv) failed: ${recvAck?['error']}');
     }
-    _recvTransport = _device!.createRecvTransportFromMap(
-      Map<String, dynamic>.from(recvAck['params'] as Map),
+    final recvParams = Map<String, dynamic>.from(recvAck['params'] as Map);
+    _recvTransport = _device!.createRecvTransport(
+      id: recvParams['id'],
+      iceParameters: IceParameters.fromMap(recvParams['iceParameters']),
+      iceCandidates: List<IceCandidate>.from(
+        (recvParams['iceCandidates'] as List)
+            .map((c) => IceCandidate.fromMap(c)),
+      ),
+      dtlsParameters: DtlsParameters.fromMap(recvParams['dtlsParameters']),
+      sctpParameters: recvParams['sctpParameters'] != null
+          ? SctpParameters.fromMap(recvParams['sctpParameters'])
+          : null,
+      iceServers: _kIceServers,
       consumerCallback: (Consumer consumer, [Function? accept]) {
         final completer = _pendingConsumers.remove(consumer.id);
         completer?.complete(consumer);
