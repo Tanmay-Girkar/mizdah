@@ -2025,6 +2025,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _log('[SFU] 🎬 remote track ← $remoteSocketId kind=${track.kind} '
         'isScreen=${appData['isScreen']}');
 
+    final isNewStream = !_remoteStreams.containsKey(remoteSocketId);
     var stream = _remoteStreams[remoteSocketId];
     stream ??= await createLocalMediaStream('sfu-remote-$remoteSocketId');
     try {
@@ -2032,7 +2033,36 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     } catch (e) {
       _log('[SFU] addTrack to remote stream failed (already added?): $e');
     }
-    await _attachRemoteStream(remoteSocketId, stream);
+
+    if (isNewStream) {
+      // First track for this peer — normal attachment.
+      await _attachRemoteStream(remoteSocketId, stream);
+      return;
+    }
+
+    // Adding ANOTHER track (typically video after audio) to a stream
+    // the renderer is already displaying. RTCVideoRenderer enumerates
+    // its srcObject's tracks at assignment time and does NOT pick up
+    // tracks added later — so without re-binding, audio plays but
+    // remote video stays black even though `🎬 remote track` fired.
+    // Clearing srcObject and reassigning forces the renderer to
+    // re-enumerate, and the late-added video track starts rendering.
+    final renderer = state.remoteRenderers[remoteSocketId];
+    if (renderer == null) {
+      // Renderer was disposed since the first track. Re-create.
+      _remoteStreams[remoteSocketId] = stream;
+      await _attachRemoteStream(remoteSocketId, stream);
+      return;
+    }
+    _log('[SFU] re-binding renderer for $remoteSocketId to pick up '
+        'new ${track.kind} track');
+    renderer.srcObject = null;
+    // Yield a frame so the platform-side renderer fully detaches
+    // before we re-attach. Without the delay some flutter_webrtc
+    // platforms drop the second assignment as a no-op.
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    if (!mounted || _disposed) return;
+    renderer.srcObject = stream;
   }
 
   /// SFU notified us a consumer was closed (peer left, server
