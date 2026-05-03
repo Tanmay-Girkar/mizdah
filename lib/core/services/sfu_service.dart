@@ -547,11 +547,14 @@ class SFUService {
 
     // The mediasoup convention is to create consumers paused so the
     // first frame isn't dropped while the receiving end attaches. The
-    // server resumes when we say so.
-    _socket.emit('resumeConsumer', {
+    // server resumes when we say so. Use the ack form even though we
+    // ignore the result — the deployed web client does the same, and
+    // some socket.io servers treat missing-ack-when-expected as a
+    // protocol error and drop the connection.
+    _socket.emitWithAck('resumeConsumer', {
       'meetingId': meetingId,
       'consumerId': consumerId,
-    });
+    }, ack: ([dynamic _]) {});
   }
 
   Future<Map<String, dynamic>?> _emitWithAck(

@@ -1878,22 +1878,63 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     // signaling manager cache (we hit a 502 once when both sockets
     // shared a manager and the path got mutated — see the comment
     // above the signaling socket build).
+    // Match the deployed web client byte-for-byte (see its main bundle):
+    //   transports websocket+polling, upgrade:false (don't try to upgrade
+    //   from polling→websocket — start direct on websocket), timeout
+    //   20s, reconnection backoff 1s→5s for up to 10 attempts. Mirroring
+    //   these resolved a mystery 12-second media socket drop where our
+    //   defaults differed from the server's expected handshake cadence.
     final Map<String, dynamic> mediaOpts = {
       'path': ApiConfig.mediaPath,
       'transports': ['websocket', 'polling'],
+      'upgrade': false,
+      'timeout': 20000,
       'autoConnect': false,
       'forceNew': true,
       'reconnection': true,
-      'reconnectionAttempts': 5,
+      'reconnectionAttempts': 10,
       'reconnectionDelay': 1000,
+      'reconnectionDelayMax': 5000,
     };
     final mediaSocket = io.io('${ApiConfig.signalingUrl}/media', mediaOpts);
     _mediaSocket = mediaSocket;
 
     final connectedCompleter = Completer<bool>();
-    mediaSocket.onConnect((_) {
+    mediaSocket.onConnect((_) async {
       _log('[SFU] media socket CONNECTED (sid=${mediaSocket.id})');
-      if (!connectedCompleter.isCompleted) connectedCompleter.complete(true);
+      if (!connectedCompleter.isCompleted) {
+        // First connect — bootstrap proceeds below.
+        connectedCompleter.complete(true);
+        return;
+      }
+      // RE-connect. The server has lost all session state — close the
+      // stale transports/device and re-run the full createRoom →
+      // createTransport → joinMedia → produce flow against the new
+      // socket. Without this, the WebRTC peer connections continue
+      // emitting DTLS keepalives into the void and ICE eventually
+      // drops to `failed`. The deployed web client follows the same
+      // recovery pattern (see the bundle's a.on("connect", ...)
+      // handler that closes es.current/ei.current before re-init).
+      _log('[SFU] media socket RECONNECTED — re-bootstrapping SFU');
+      try {
+        _sfuService?.dispose();
+      } catch (_) {}
+      if (!mounted || _disposed) return;
+      _sfuService = SFUService(
+        mediaSocket: mediaSocket,
+        meetingId: code,
+        signalingSocketId: () => _socket?.id ?? '',
+        onRemoteTrack: _handleSfuRemoteTrack,
+        onRemoteTrackClosed: _handleSfuConsumerClosed,
+        log: (m) => debugPrint('$_kLogTag $m'),
+      );
+      try {
+        await _sfuService!.initialize();
+        _log('[SFU] re-init succeeded after reconnect');
+        await _produceLocalTracksToSfu();
+      } catch (e, st) {
+        _log('[SFU] re-init FAILED: $e\n$st');
+      }
     });
     mediaSocket.onConnectError((err) {
       _log('[SFU] media socket CONNECT_ERROR: $err');
