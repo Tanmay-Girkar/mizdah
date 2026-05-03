@@ -75,6 +75,30 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
 
+  # Generates platform launcher icons from a single source PNG.
+  # Run `dart run flutter_launcher_icons` after editing the
+  # source images in assets/launcher/.
+  flutter_launcher_icons: ^0.14.4
+
+# Source: assets/launcher/icon.png (square 1024×1024 with the
+# Mizdah wordmark on white). Adaptive icon foreground is sized
+# tighter (the platform crops ~33% off each side). Background is
+# white to match the wordmark. Remove `remove_alpha_ios: true`
+# only if you intentionally want a transparent iOS icon.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/launcher/icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/launcher/icon_foreground.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/launcher/icon.png"
+    background_color: "#FFFFFF"
+    theme_color: "#2563EB"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
