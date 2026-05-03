@@ -517,11 +517,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         refreshWaitingList();
       }
 
-      // We are the NEW joiner here. Per the backend protocol
-      // (TECHNICAL_DOCUMENTATION.md §5) existing participants will
-      // initiate offers to us via the `user-joined` event they receive.
-      // We simply wait for those offers — initiating from this side
-      // would cause SDP "glare" (both peers offering simultaneously).
+      // The web client and the new mediasoup backend exchange media
+      // through a separate /media-fresh socket and a mediasoup SFU.
+      // Bootstrap that pipeline now — without it mobile can't see (or
+      // be seen by) the web client at all. Fire-and-forget: errors
+      // are handled inside _bootstrapSfu and leave us on the legacy
+      // P2P fallback if SFU init blows up.
+      // ignore: unawaited_futures
+      _bootstrapSfu();
     });
 
     _socket?.on('request-to-join', (data) {
@@ -574,17 +577,20 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         state = state.copyWith(participants: [...state.participants, newParticipant]);
       }
 
-      // We're an EXISTING participant; the joiner is the one we need
-      // to reach. Per the backend protocol we initiate the offer.
-      // (TECHNICAL_DOCUMENTATION.md §5: H -> S: emit offer to P)
+      // SFU mode (always on now): we don't initiate per-peer offers —
+      // the new joiner will consume our producers via mediasoup once
+      // they call joinMedia and the server replies with
+      // existingProducers. Just re-announce our media state so their
+      // grid tile shows the right mic/camera badges immediately.
+      if (state.isSfuMode) {
+        _log('user-joined ($remoteSid) — SFU mode, no P2P offer needed');
+        _broadcastMediaState();
+        return;
+      }
+
+      // Legacy P2P fallback path. Only reached if SFU init failed.
       _log('Initiating offer to new participant $remoteSid');
       await _createPeerConnection(remoteSid, isOfferer: true);
-
-      // Re-announce our media state so the new joiner doesn't default
-      // their UI to "muted / camera off". Without this, the host's
-      // initial mic+cam=on broadcast (fired 500ms after their own
-      // connect) is lost — the web user wasn't in the room yet, and
-      // socket.io doesn't replay events on connect.
       _broadcastMediaState();
     });
 
@@ -599,6 +605,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('offer', (data) async {
+      if (state.isSfuMode) return; // SFU mode — ignore stray P2P offers
       _log('📥 offer ← from=${data is Map ? data['from'] : '?'}');
       if (data is! Map) return;
       final from = data['from']?.toString();
@@ -608,6 +615,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('answer', (data) async {
+      if (state.isSfuMode) return;
       _log('📥 answer ← from=${data is Map ? data['from'] : '?'}');
       if (data is! Map) return;
       final from = data['from']?.toString();
@@ -617,6 +625,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
 
     _socket?.on('ice-candidate', (data) async {
+      if (state.isSfuMode) return;
       if (data is! Map) return;
       final from = data['from']?.toString();
       final candidate = data['candidate'];
@@ -795,11 +804,13 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
     });
 
+    // The legacy `switch-to-sfu` event was the old hand-off from
+    // peer-to-peer to SFU mid-call. The backend now forwards through
+    // mediasoup unconditionally, so we initialise SFU eagerly inside
+    // the join-confirmation handler instead of waiting for this event.
+    // Kept as a no-op for backwards compatibility with older servers.
     _socket?.on('switch-to-sfu', (_) {
-      _log('🔁 switch-to-sfu requested by server');
-      if (!mounted || _disposed) return;
-      state = state.copyWith(isSfuMode: true);
-      _setupSfu();
+      _log('🔁 switch-to-sfu received (ignored — SFU is initialised eagerly)');
     });
 
     // Host-initiated room termination. Backend broadcasts this to
@@ -1814,8 +1825,182 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     });
   }
 
-  void _setupSfu() {
-    _sfuService ??= SFUService(socket: _socket!);
+  /// Whether we've already attempted to bootstrap the SFU pipeline
+  /// for this meeting. The bootstrap involves opening a second socket
+  /// against `/media-fresh`, asking the server for the room's RTP
+  /// capabilities, and creating both directions of WebRTC transport.
+  /// We only ever do it once per join; if it fails the meeting falls
+  /// back to the legacy P2P path.
+  bool _sfuBootstrapStarted = false;
+
+  /// Bootstraps the mediasoup SFU session. Called once per join from
+  /// the `join-confirmation` handler after we know we're admitted.
+  ///
+  /// Steps:
+  ///   1. Open a SECOND socket.io connection on the `/media`
+  ///      namespace (engine path `/media-fresh`). The signaling
+  ///      socket (`/signaling-fresh`) cannot be reused — the backend
+  ///      separates control and media planes.
+  ///   2. Wait for the media socket to connect.
+  ///   3. Run [SFUService.initialize] which performs the
+  ///      createRoom → load device → createTransport(send/recv) →
+  ///      joinMedia handshake.
+  ///   4. Produce our local audio + video tracks so other peers can
+  ///      consume them.
+  ///
+  /// On any error we log loudly and leave `state.isSfuMode = false`,
+  /// which causes `user-joined` to fall back to the legacy P2P offer
+  /// path. That fallback is wishful — the backend stopped relaying
+  /// P2P offers when it migrated to mediasoup — but at least the
+  /// app doesn't crash, and a future server-side rollback would
+  /// re-enable it for free.
+  Future<void> _bootstrapSfu() async {
+    if (_sfuBootstrapStarted) return;
+    _sfuBootstrapStarted = true;
+    final code = state.meetingCode;
+    if (code == null) {
+      _log('[SFU] bootstrap skipped — no meetingCode');
+      return;
+    }
+
+    // Flip into SFU mode optimistically. If `user-joined` arrives
+    // while we're still opening the media socket the handler will
+    // skip the legacy P2P offer creation — exactly what we want.
+    // Reverted to false at the end of this method on failure.
+    if (mounted && !_disposed) {
+      state = state.copyWith(isSfuMode: true);
+    }
+
+    _log('[SFU] bootstrap → media socket → ${ApiConfig.signalingUrl}/media path=${ApiConfig.mediaPath}');
+    // socket_io_client v3 uses URL "<base>/<namespace>" — appending
+    // `/media` selects the namespace, the `path` option selects the
+    // engine.io endpoint. forceNew=true keeps it independent of the
+    // signaling manager cache (we hit a 502 once when both sockets
+    // shared a manager and the path got mutated — see the comment
+    // above the signaling socket build).
+    final Map<String, dynamic> mediaOpts = {
+      'path': ApiConfig.mediaPath,
+      'transports': ['websocket', 'polling'],
+      'autoConnect': false,
+      'forceNew': true,
+      'reconnection': true,
+      'reconnectionAttempts': 5,
+      'reconnectionDelay': 1000,
+    };
+    final mediaSocket = io.io('${ApiConfig.signalingUrl}/media', mediaOpts);
+    _mediaSocket = mediaSocket;
+
+    final connectedCompleter = Completer<bool>();
+    mediaSocket.onConnect((_) {
+      _log('[SFU] media socket CONNECTED (sid=${mediaSocket.id})');
+      if (!connectedCompleter.isCompleted) connectedCompleter.complete(true);
+    });
+    mediaSocket.onConnectError((err) {
+      _log('[SFU] media socket CONNECT_ERROR: $err');
+      if (!connectedCompleter.isCompleted) connectedCompleter.complete(false);
+    });
+    mediaSocket.onError((err) => _log('[SFU] media socket ERROR: $err'));
+    mediaSocket.onDisconnect((reason) =>
+        _log('[SFU] media socket disconnected: $reason'));
+    mediaSocket.onAny((event, data) =>
+        _log('[SFU] 📡 media event: $event'));
+
+    mediaSocket.connect();
+
+    // Cap the wait — if the server is unreachable we'd hang forever.
+    final connected = await connectedCompleter.future
+        .timeout(const Duration(seconds: 10), onTimeout: () => false);
+    if (!connected) {
+      _log('[SFU] bootstrap aborted — media socket did not connect');
+      if (mounted && !_disposed) {
+        state = state.copyWith(isSfuMode: false);
+      }
+      return;
+    }
+    if (!mounted || _disposed) return;
+
+    _sfuService = SFUService(
+      mediaSocket: mediaSocket,
+      meetingId: code,
+      signalingSocketId: () => _socket?.id ?? '',
+      onRemoteTrack: _handleSfuRemoteTrack,
+      onRemoteTrackClosed: _handleSfuConsumerClosed,
+      log: (m) => debugPrint('$_kLogTag $m'),
+    );
+
+    try {
+      await _sfuService!.initialize();
+      _log('[SFU] initialize() succeeded');
+      if (!mounted || _disposed) return;
+      await _produceLocalTracksToSfu();
+    } catch (e, st) {
+      _log('[SFU] initialize() FAILED: $e\n$st');
+      if (mounted && !_disposed) {
+        state = state.copyWith(isSfuMode: false);
+      }
+    }
+  }
+
+  /// Produces the current local audio + video tracks via the SFU.
+  /// Called once after [SFUService.initialize] completes; safe to
+  /// call again later (re-producing with the same track is a no-op).
+  Future<void> _produceLocalTracksToSfu() async {
+    final svc = _sfuService;
+    final stream = _localStream;
+    if (svc == null || stream == null || !svc.isReady) return;
+    final audio = stream.getAudioTracks().isNotEmpty
+        ? stream.getAudioTracks().first
+        : null;
+    final video = stream.getVideoTracks().isNotEmpty
+        ? stream.getVideoTracks().first
+        : null;
+    if (audio != null) {
+      try {
+        await svc.produceAudio(audio, stream);
+      } catch (e) {
+        _log('[SFU] produceAudio failed: $e');
+      }
+    }
+    if (video != null) {
+      try {
+        await svc.produceVideo(video, stream);
+      } catch (e) {
+        _log('[SFU] produceVideo failed: $e');
+      }
+    }
+  }
+
+  /// Called by SFUService when a remote producer becomes consumable.
+  /// Aggregates audio + video tracks from the same socketId onto a
+  /// single MediaStream so the per-tile renderer plays both in sync,
+  /// then routes through the existing `_attachRemoteStream` plumbing
+  /// (which also creates the renderer and updates state).
+  Future<void> _handleSfuRemoteTrack(
+    String remoteSocketId,
+    MediaStreamTrack track,
+    Map<String, dynamic> appData,
+  ) async {
+    if (!mounted || _disposed) return;
+    _log('[SFU] 🎬 remote track ← $remoteSocketId kind=${track.kind} '
+        'isScreen=${appData['isScreen']}');
+
+    var stream = _remoteStreams[remoteSocketId];
+    stream ??= await createLocalMediaStream('sfu-remote-$remoteSocketId');
+    try {
+      await stream.addTrack(track);
+    } catch (e) {
+      _log('[SFU] addTrack to remote stream failed (already added?): $e');
+    }
+    await _attachRemoteStream(remoteSocketId, stream);
+  }
+
+  /// SFU notified us a consumer was closed (peer left, server
+  /// terminated, etc.). We can't easily map consumerId back to a
+  /// socketId from the lean info we get, so we lean on the
+  /// `user-left` event for tile teardown. Logged here purely for
+  /// debugging.
+  void _handleSfuConsumerClosed(String consumerId) {
+    _log('[SFU] consumer closed: $consumerId');
   }
 
   @override
