@@ -40,6 +40,16 @@ class MeetingState {
   final bool isConnected;
   final RTCVideoRenderer localRenderer;
   final Map<String, RTCVideoRenderer> remoteRenderers;
+  /// Per-peer screen-share renderers, keyed by socketId. Separate
+  /// from `remoteRenderers` because a presenting peer publishes
+  /// camera AND screen as TWO distinct mediasoup producers — the
+  /// camera goes onto remoteRenderers[socketId] and the screen
+  /// goes here. The grid surfaces them as TWO tiles ("uyf" and
+  /// "uyf · Presenting") rather than swapping the camera tile.
+  /// Without this split the renderer plays whichever track was
+  /// attached last and the other one disappears — exactly the bug
+  /// the user reported when a web peer started sharing.
+  final Map<String, RTCVideoRenderer> remoteScreenRenderers;
   /// Renderer attached to the LOCAL screen-share stream. Non-null
   /// only while the local user is presenting; the grid surfaces it
   /// as a dedicated tile so the host can see what they're sharing.
@@ -106,6 +116,7 @@ class MeetingState {
     this.isConnected = false,
     required this.localRenderer,
     this.remoteRenderers = const {},
+    this.remoteScreenRenderers = const {},
     this.isMicOn = true,
     this.isCameraOn = true,
     this.isRecording = false,
@@ -140,6 +151,7 @@ class MeetingState {
   MeetingState copyWith({
     bool? isConnected,
     Map<String, RTCVideoRenderer>? remoteRenderers,
+    Map<String, RTCVideoRenderer>? remoteScreenRenderers,
     bool? isMicOn,
     bool? isCameraOn,
     bool? isRecording,
@@ -179,6 +191,8 @@ class MeetingState {
       isConnected: isConnected ?? this.isConnected,
       localRenderer: localRenderer,
       remoteRenderers: remoteRenderers ?? this.remoteRenderers,
+      remoteScreenRenderers:
+          remoteScreenRenderers ?? this.remoteScreenRenderers,
       isMicOn: isMicOn ?? this.isMicOn,
       isCameraOn: isCameraOn ?? this.isCameraOn,
       isRecording: isRecording ?? this.isRecording,
@@ -778,6 +792,29 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           //                        Reattach later if the peer's next
           //                        media-toggle says videoEnabled:true.
           if (stoppedSharing) {
+            // Tear down the dedicated screen renderer/stream for
+            // this peer. Their camera tile (remoteRenderers[from])
+            // is unaffected — separate stream.
+            final screenR = state.remoteScreenRenderers[from];
+            if (screenR != null) {
+              screenR.srcObject = null;
+              screenR.dispose();
+              state = state.copyWith(
+                remoteScreenRenderers:
+                    Map<String, RTCVideoRenderer>.from(
+                        state.remoteScreenRenderers)
+                      ..remove(from),
+              );
+            }
+            _remoteScreenStreams.remove(from);
+
+            // Legacy P2P-mode behaviour: in P2P the camera + screen
+            // share the same RTPSender so when share stops we have
+            // to flush the cached screen frame from the camera
+            // renderer. In SFU mode the camera renderer never had
+            // the screen track, so this is a no-op there — but
+            // leave it in place for any pre-SFU clients still
+            // present in the same room.
             final r = state.remoteRenderers[from];
             final s = _remoteStreams[from];
             if (r != null) {
@@ -1467,9 +1504,59 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   static const _screenShareFg = MethodChannel('com.mizdah/screen_share_fg');
 
+  /// Whether the OS will let our flutter_webrtc 0.12.7 build start
+  /// a screen capture without crashing.
+  ///
+  /// Android 15 (SDK 35) and 16 (SDK 36) added a strict-mode rule:
+  /// the `mediaProjection`-typed foreground service can ONLY start
+  /// AFTER the user has granted MediaProjection consent (which sets
+  /// the `android:project_media` appop). flutter_webrtc 0.12.7
+  /// expects the FGS to be running BEFORE consent, because that's
+  /// what Android 14 required — there's a chicken-and-egg conflict
+  /// the plugin itself doesn't resolve until 0.13+.
+  ///
+  /// On Android 14 and below, our existing FGS-first flow works
+  /// correctly. On 15+, calling getDisplayMedia results in an
+  /// uncaught `SecurityException` from flutter_webrtc's
+  /// `OrientationAwareScreenCapturer.startCapture` that kills the
+  /// activity. Better to refuse up front with a friendly message
+  /// than to crash mid-meeting.
+  ///
+  /// Re-enable once flutter_webrtc 0.13+ ships and we upgrade.
+  bool _screenShareSupportedOnThisOs() {
+    if (!Platform.isAndroid) return true;
+    final match =
+        RegExp(r'API (\d+)').firstMatch(Platform.operatingSystemVersion);
+    final api = int.tryParse(match?.group(1) ?? '0') ?? 0;
+    // SDK 34 = Android 14 (last good).
+    return api <= 34;
+  }
+
   Future<void> _startScreenShare() async {
     try {
       _log('🖥️  starting screen share');
+
+      if (!_screenShareSupportedOnThisOs()) {
+        _log('🖥️  screen share blocked — Android 15+ FGS rules + '
+            'flutter_webrtc 0.12.7 incompatibility (would crash). '
+            'Will be re-enabled on plugin upgrade.');
+        // Best we can do without ScaffoldMessenger access: tag the
+        // failure on state and let the UI show a snackbar. Use the
+        // existing error-surfacing pattern (no new fields needed —
+        // toggle isScreenSharing to false to ensure the icon
+        // doesn't go active, and surface via incomingChatToast as a
+        // pseudo-system message).
+        state = state.copyWith(
+          isScreenSharing: false,
+          incomingChatToast: {
+            'sender': 'Mizdah',
+            'text': "Screen sharing isn't available on this Android "
+                'version yet. We\'re shipping a fix soon.',
+            'at': DateTime.now().millisecondsSinceEpoch,
+          },
+        );
+        return;
+      }
 
       // Android 14+ refuses MediaProjection unless a foreground
       // service of TYPE_MEDIA_PROJECTION is ALREADY running by the
@@ -1795,13 +1882,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _peerConnections.remove(socketId);
     _pendingIce.remove(socketId);
     _remoteStreams.remove(socketId);
+    _remoteScreenStreams.remove(socketId);
     final renderer = state.remoteRenderers[socketId];
+    final screenRenderer = state.remoteScreenRenderers[socketId];
     if (renderer != null) {
       renderer.srcObject = null;
       renderer.dispose();
-      final updated = Map<String, RTCVideoRenderer>.from(state.remoteRenderers)
-        ..remove(socketId);
-      state = state.copyWith(remoteRenderers: updated);
+    }
+    if (screenRenderer != null) {
+      screenRenderer.srcObject = null;
+      screenRenderer.dispose();
+    }
+    if (renderer != null || screenRenderer != null) {
+      state = state.copyWith(
+        remoteRenderers: Map<String, RTCVideoRenderer>.from(
+            state.remoteRenderers)
+          ..remove(socketId),
+        remoteScreenRenderers: Map<String, RTCVideoRenderer>.from(
+            state.remoteScreenRenderers)
+          ..remove(socketId),
+      );
     }
   }
 
@@ -2124,14 +2224,28 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// single MediaStream so the per-tile renderer plays both in sync,
   /// then routes through the existing `_attachRemoteStream` plumbing
   /// (which also creates the renderer and updates state).
+  /// Per-peer screen-share streams, keyed by socketId. Held alive
+  /// here so the renderer in `state.remoteScreenRenderers` keeps a
+  /// valid srcObject. Separate from `_remoteStreams` (camera).
+  final Map<String, MediaStream> _remoteScreenStreams = {};
+
   Future<void> _handleSfuRemoteTrack(
     String remoteSocketId,
     MediaStreamTrack track,
     Map<String, dynamic> appData,
   ) async {
     if (!mounted || _disposed) return;
+    final isScreen = appData['isScreen'] == true;
     _log('[SFU] 🎬 remote track ← $remoteSocketId kind=${track.kind} '
-        'isScreen=${appData['isScreen']}');
+        'isScreen=$isScreen');
+
+    // Screen-share tracks live on a SEPARATE stream + renderer from
+    // the peer's camera. The grid renders them as a second tile
+    // ("Name · Presenting") rather than overwriting the camera tile.
+    if (isScreen) {
+      await _attachRemoteScreenTrack(remoteSocketId, track);
+      return;
+    }
 
     final isNewStream = !_remoteStreams.containsKey(remoteSocketId);
     var stream = _remoteStreams[remoteSocketId];
@@ -2171,6 +2285,49 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     await Future<void>.delayed(const Duration(milliseconds: 30));
     if (!mounted || _disposed) return;
     renderer.srcObject = stream;
+  }
+
+  /// Attach a remote SCREEN-SHARE track (`appData.isScreen == true`)
+  /// to its own MediaStream + RTCVideoRenderer keyed by the
+  /// presenter's socketId. This intentionally bypasses the camera
+  /// path so the camera tile keeps rendering normally — the grid
+  /// renders the presentation as an additional tile beside it.
+  Future<void> _attachRemoteScreenTrack(
+    String remoteSocketId,
+    MediaStreamTrack track,
+  ) async {
+    var stream = _remoteScreenStreams[remoteSocketId];
+    if (stream == null) {
+      stream =
+          await createLocalMediaStream('sfu-remote-screen-$remoteSocketId');
+      _remoteScreenStreams[remoteSocketId] = stream;
+    }
+    try {
+      await stream.addTrack(track);
+    } catch (e) {
+      _log('[SFU] addTrack to screen stream failed (already added?): $e');
+    }
+
+    var renderer = state.remoteScreenRenderers[remoteSocketId];
+    if (renderer == null) {
+      renderer = RTCVideoRenderer();
+      await renderer.initialize();
+    }
+    // Always force a rebind — this method is called once per
+    // SFU consumer, so the track is brand-new for the renderer
+    // and the binding may need to flush a previous frame buffer.
+    renderer.srcObject = null;
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    if (!mounted || _disposed) return;
+    renderer.srcObject = stream;
+
+    state = state.copyWith(
+      remoteScreenRenderers: {
+        ...state.remoteScreenRenderers,
+        remoteSocketId: renderer,
+      },
+    );
+    _log('🖥️  ← attached screen renderer for $remoteSocketId');
   }
 
   /// SFU notified us a consumer was closed (peer left, server

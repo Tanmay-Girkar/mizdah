@@ -627,10 +627,15 @@ class _VideoGrid extends ConsumerWidget {
       if (socketId != null && socketId == meetingState.userId) continue;
       final name = (p['name'] ?? p['displayName'] ?? 'Participant').toString();
       final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
+      final screenRenderer = socketId != null
+          ? meetingState.remoteScreenRenderers[socketId]
+          : null;
       final videoEnabled = p['videoEnabled'] != false;
       final audioEnabled = p['audioEnabled'] != false;
       final isPresenting = p['isSharing'] == true;
       final isHandRaised = p['isHandRaised'] == true;
+
+      // Camera tile.
       tiles.add(_ParticipantTileData(
         name: name,
         renderer: renderer,
@@ -641,6 +646,29 @@ class _VideoGrid extends ConsumerWidget {
         meetingId: meetingState.meetingCode ?? meetingState.meetingId,
         isHandRaised: isHandRaised,
       ));
+
+      // If the peer is also presenting, surface a SECOND tile for
+      // their screen-share. Sourced from the dedicated
+      // remoteScreenRenderers map (filled by `_attachRemoteScreenTrack`
+      // when a producer with `appData.isScreen=true` arrives via
+      // SFU). Without this, the screen producer either replaced the
+      // camera frame or hid behind it depending on attach order —
+      // exactly the bug the user reported when web peers shared.
+      if (screenRenderer != null) {
+        tiles.add(_ParticipantTileData(
+          name: '$name · Presenting',
+          renderer: screenRenderer,
+          // Screen has no audio of its own; mute icon is meaningless.
+          audioEnabled: true,
+          videoEnabled: true,
+          // We're not the presenter; can't request control of our
+          // own screen. The remote-control flow runs off the
+          // CAMERA tile's `isPresenting` flag instead.
+          isPresenting: false,
+          socketId: '$socketId/screen',
+          meetingId: meetingState.meetingCode ?? meetingState.meetingId,
+        ));
+      }
     }
     // Orphan-renderer fallback: a renderer exists for this socketId but
     // no matching `participant` row arrived yet. We render it as a
