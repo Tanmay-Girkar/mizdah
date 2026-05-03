@@ -244,29 +244,31 @@ class _V1HeroAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ListView (not Column+Spacer) so the layout adapts to whatever
+    // height the parent phone-frame is — even on 9:18.5 frames the
+    // hero+secondary+empty+recent stack can be ~1px over the box,
+    // which used to assert in debug. ListView quietly clips/scrolls.
     return Container(
       color: const Color(0xFF0B1120),
       child: SafeArea(
-        child: Padding(
+        child: ListView(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _MiniTopBar(showSearch: false),
-              const SizedBox(height: 24),
-              const Text(
-                'Good evening,',
-                style: TextStyle(color: Colors.white60, fontSize: 14),
+          children: [
+            _MiniTopBar(showSearch: false),
+            const SizedBox(height: 24),
+            const Text(
+              'Good evening,',
+              style: TextStyle(color: Colors.white60, fontSize: 14),
+            ),
+            const Text(
+              _kUserName,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
               ),
-              const Text(
-                _kUserName,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 24),
+            ),
+            const SizedBox(height: 24),
               // Hero CTA
               Container(
                 padding: const EdgeInsets.all(18),
@@ -387,11 +389,10 @@ class _V1HeroAction extends StatelessWidget {
               const SizedBox(height: 20),
               const _SectionLabel('Recent'),
               const SizedBox(height: 8),
-              for (final m in _kRecent.take(2))
-                _RecentRow(meeting: m, dense: false),
-              const Spacer(),
-            ],
-          ),
+            for (final m in _kRecent.take(2))
+              _RecentRow(meeting: m, dense: false),
+            const SizedBox(height: 24),
+          ],
         ),
       ),
     );
