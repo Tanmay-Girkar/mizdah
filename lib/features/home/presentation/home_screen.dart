@@ -290,59 +290,141 @@ class _ScheduleTile extends StatelessWidget {
   final dynamic schedule; // Use your model if available
   const _ScheduleTile({required this.schedule});
 
+  /// Recovers the actual meeting code from a schedule row.
+  ///
+  /// Priority order:
+  ///   1. `meetingCode` field (when backend ships fix — preferred)
+  ///   2. `meetingId` field (also backend-fix path; could be either
+  ///      a UUID linking to the Meeting row, or the code itself)
+  ///   3. Title suffix `[xxxxxx]` — the legacy escape hatch the
+  ///      Flutter client currently embeds during schedule creation
+  ///      so the code survives the round-trip even though the
+  ///      backend ignores the dedicated fields. See
+  ///      docs/SCHEDULING_BACKEND.md.
+  ///   4. null — no code is recoverable; tap should explain.
+  static String? _extractMeetingCode(dynamic schedule) {
+    final code = schedule['meetingCode']?.toString();
+    if (code != null && code.isNotEmpty) return code;
+    final mid = schedule['meetingId']?.toString();
+    if (mid != null && mid.isNotEmpty) return mid;
+    final title = schedule['title']?.toString() ?? '';
+    final m = RegExp(r'\[([a-z0-9-]{6,})\]').firstMatch(title);
+    return m?.group(1);
+  }
+
+  /// Removes the legacy `[code]` suffix from titles for display so
+  /// the user-visible title is just `Mizdah Meeting` instead of
+  /// `Mizdah Meeting [docscht3xy]`. If the strip leaves an empty
+  /// string (paranoid guard for titles that were ONLY a code), the
+  /// raw title is shown verbatim.
+  static String _displayTitle(String raw) {
+    final stripped =
+        raw.replaceAll(RegExp(r'\s*\[[a-z0-9-]{6,}\]\s*$'), '').trim();
+    return stripped.isEmpty ? raw : stripped;
+  }
+
   @override
   Widget build(BuildContext context) {
     final startTime = DateTime.parse(schedule['startTime']);
-    final title = schedule['title'] ?? 'Untitled Meeting';
+    final rawTitle = schedule['title']?.toString() ?? 'Untitled Meeting';
+    final title = _displayTitle(rawTitle);
+    final code = _extractMeetingCode(schedule);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  DateFormat('MMM').format(startTime).toUpperCase(),
-                  style: const TextStyle(color: MizdahTheme.primaryBlue, fontWeight: FontWeight.bold, fontSize: 10),
-                ),
-                Text(
-                  DateFormat('d').format(startTime),
-                  style: const TextStyle(color: MizdahTheme.primaryBlue, fontWeight: FontWeight.w900, fontSize: 18),
-                ),
-              ],
+    void onTap() {
+      if (code == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This schedule has no meeting code yet — open it from your calendar invite.',
             ),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                Text(
-                  '${DateFormat('h:mm a').format(startTime)} • ${schedule['timezone'] ?? 'UTC'}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
+        );
+        return;
+      }
+      context.push('/pre-join/$code');
+    }
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.black.withValues(alpha: 0.05)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    DateFormat('MMM').format(startTime).toUpperCase(),
+                    style: const TextStyle(
+                        color: MizdahTheme.primaryBlue,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10),
+                  ),
+                  Text(
+                    DateFormat('d').format(startTime),
+                    style: const TextStyle(
+                        color: MizdahTheme.primaryBlue,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18),
+                  ),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
-            onPressed: () => context.push('/pre-join/${schedule['id']}'),
-          ),
-        ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 15)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${DateFormat('h:mm a').format(startTime)} • ${schedule['timezone'] ?? 'UTC'}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  if (code != null) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: MizdahTheme.primaryBlue.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        code,
+                        style: const TextStyle(
+                          color: MizdahTheme.primaryBlue,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+          ],
+        ),
       ),
     );
   }
@@ -789,13 +871,14 @@ class _NewMeetingOptions extends StatelessWidget {
   }
 
   Future<void> _scheduleMeeting(BuildContext context) async {
-    final repository = ref.read(schedulingRepositoryProvider);
+    final scheduleRepo = ref.read(schedulingRepositoryProvider);
+    final meetingRepo = ref.read(mizdahRepositoryProvider);
     final calendarService = ref.read(googleCalendarServiceProvider);
     final authState = ref.read(authProvider);
     final user = authState.user;
-    
+
     if (user == null) return;
-    
+
     Navigator.pop(context); // Close sheet
 
     try {
@@ -803,36 +886,59 @@ class _NewMeetingOptions extends StatelessWidget {
       final endTime = startTime.add(const Duration(hours: 1));
       final timezone = DateTime.now().timeZoneName;
 
-      print("📅 1. Creating schedule in Mizdah backend...");
-      final result = await repository.scheduleMeeting(
+      // 1. Create the actual meeting room FIRST so we have a real
+      //    join code (e.g. `xfm9kpqlnt`). The previous code only
+      //    created a `schedule` row, whose UUID is NOT a valid
+      //    meeting code — the calendar link it sent users pointed
+      //    to a meeting that never existed (404 on /api/meeting/<id>).
+      final code = MeetingUtils.generateMeetingCode();
+      print('📅 1. Creating meeting room (code=$code)…');
+      final meeting = await meetingRepo.createMeeting(
+        title: 'Mizdah Meeting',
+        dateTime: startTime,
+        code: code,
+      );
+      final realCode = meeting.code; // authoritative
+
+      // 2. Create the schedule row pointing at that meeting. The
+      //    backend currently drops `meetingId`/`meetingCode`
+      //    (see docs/SCHEDULING_BACKEND.md), so as a stop-gap we
+      //    also append the code in square brackets to the title —
+      //    that's the only field guaranteed to round-trip on GET.
+      //    `_ScheduleTile` parses it back out. Once the backend
+      //    persists the dedicated fields this title-tagging can
+      //    be dropped.
+      print('📅 2. Creating schedule row referencing $realCode…');
+      await scheduleRepo.scheduleMeeting(
         hostId: user.id,
-        title: 'Mizdah Meeting', 
+        title: 'Mizdah Meeting [$realCode]',
         startTime: startTime,
         endTime: endTime,
         recurrence: 'none',
         timezone: timezone,
+        meetingId: meeting.id,
+        meetingCode: realCode,
       );
-      
-      // Extract code from result
-      final code = (result['meeting_code'] ?? result['code'] ?? result['meetingId'] ?? result['id'] ?? '').toString();
-      
-      print("📅 2. Mizdah schedule created (Code: $code). Opening Google Calendar...");
-      final link = MeetingUtils.generateMeetingLink(code);
+
+      // 3. Open Google Calendar with the real (working) code.
+      print('📅 3. Opening Google Calendar…');
+      final link = MeetingUtils.generateMeetingLink(realCode);
       await calendarService.openGoogleCalendarTemplate(
         title: 'Mizdah Meeting',
-        description: 'Join with Mizdah: $link\nMeeting Code: $code',
+        description: 'Join with Mizdah: $link\nMeeting Code: $realCode',
         location: link,
         startTime: startTime,
       );
 
-      // Refresh data providers
+      // Refresh data providers so the new schedule appears.
       ref.invalidate(schedulesProvider);
       ref.invalidate(callHistoryProvider);
-
     } catch (e) {
-      print("📅 ERROR during scheduling: $e");
+      print('📅 ERROR during scheduling: $e');
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to schedule meeting: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to schedule meeting: $e')),
+        );
       }
     }
   }
