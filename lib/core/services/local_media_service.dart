@@ -51,9 +51,39 @@ class LocalMediaService {
   /// Open the camera + mic if not already open. Idempotent — repeated
   /// calls share the same in-flight Future and return immediately
   /// once the stream is live.
-  Future<void> initialize({bool video = true, bool audio = true}) async {
+  ///
+  /// Pass [force]: true to FULLY tear down the cached stream and
+  /// re-acquire from scratch. Called when the meeting screen
+  /// detects that an underlying track has died (camera-app stole
+  /// the device, OS reclaimed mic on resume, etc.) — without this
+  /// the cache would happily return the dead stream forever.
+  Future<void> initialize({
+    bool video = true,
+    bool audio = true,
+    bool force = false,
+  }) async {
     _shutdownTimer?.cancel();
     _shutdownTimer = null;
+
+    if (force && _stream != null) {
+      _log('initialize(force) — disposing stale stream and re-acquiring');
+      try {
+        for (final t in _stream!.getTracks()) {
+          try {
+            t.stop();
+          } catch (_) {}
+        }
+        await _stream!.dispose();
+      } catch (e) {
+        _log('initialize(force) — dispose error (non-fatal): $e');
+      }
+      _stream = null;
+      // Detach the renderer's srcObject so the next attach picks
+      // up the fresh tracks. Don't dispose the renderer itself
+      // — it's referenced by every meeting screen and recreating
+      // it would force every consumer to rebind.
+      _renderer?.srcObject = null;
+    }
 
     // Already running? Just sync the requested track-enabled state.
     if (_stream != null) {

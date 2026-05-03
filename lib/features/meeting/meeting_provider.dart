@@ -1349,15 +1349,75 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   void toggleMic() {
+    // Recovery path: if the audio track was destroyed mid-call
+    // (camera-app stole the input device, OS reclaimed the mic on
+    // resume, etc.), `toggleAudio()` would warn `track is null` and
+    // do nothing — peers see the user as permanently muted with no
+    // way to recover. Re-acquire the local stream first, then
+    // re-produce into the SFU so the audio producer picks up the
+    // fresh track instead of carrying the dead reference.
+    final stream = _localStream;
+    final hasLiveAudio = stream != null &&
+        stream.getAudioTracks().isNotEmpty &&
+        stream.getAudioTracks().first.id != null;
+    if (!hasLiveAudio) {
+      _log('toggleMic — audio track is null, re-acquiring local media');
+      _reacquireLocalMediaAndReproduce();
+      return;
+    }
     final newState = LocalMediaService.instance.toggleAudio();
     state = state.copyWith(isMicOn: newState);
     _broadcastMediaState();
   }
 
   void toggleCamera() {
+    // See toggleMic — same recovery for the video track. This is
+    // the path the user hit when they reported "my video is not
+    // displaying in web": the underlying camera track had been
+    // released, so flipping `enabled` was a no-op locally AND the
+    // SFU producer was sending dead RTP — peers saw a black tile.
+    final stream = _localStream;
+    final hasLiveVideo = stream != null &&
+        stream.getVideoTracks().isNotEmpty &&
+        stream.getVideoTracks().first.id != null;
+    if (!hasLiveVideo) {
+      _log('toggleCamera — video track is null, re-acquiring local media');
+      _reacquireLocalMediaAndReproduce();
+      return;
+    }
     final newState = LocalMediaService.instance.toggleVideo();
     state = state.copyWith(isCameraOn: newState);
     _broadcastMediaState();
+  }
+
+  /// Tear down the dead local stream, ask LocalMediaService to
+  /// re-initialise camera+mic, then re-produce the new tracks into
+  /// the SFU so the previous (dead) producers get their tracks
+  /// swapped instead of the receiver staying stuck on a black
+  /// frame. Called from the toggle handlers when they detect a
+  /// null track.
+  Future<void> _reacquireLocalMediaAndReproduce() async {
+    try {
+      _log('🔄 re-acquiring local media after dead-track detection');
+      // Force a clean re-init even if the cached stream still
+      // exists — the cache may be holding the dead reference.
+      await LocalMediaService.instance.initialize(
+        video: true,
+        audio: true,
+        force: true,
+      );
+      if (!mounted || _disposed) return;
+      // Sync UI flags to the just-re-initialised state (both on).
+      state = state.copyWith(isMicOn: true, isCameraOn: true);
+      // Re-produce so the SFU picks up the fresh tracks. The
+      // SFUService internally calls `replaceTrack` if a producer
+      // already exists — so the receivers don't have to re-consume,
+      // they just start seeing live frames again.
+      await _produceLocalTracksToSfu();
+      _broadcastMediaState();
+    } catch (e) {
+      _log('❌ _reacquireLocalMediaAndReproduce failed: $e');
+    }
   }
 
   /// Toggle the local user's "raise hand" indicator. Broadcasts to
@@ -2191,21 +2251,34 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   }
 
   /// Produces the current local audio + video tracks via the SFU.
-  /// Called once after [SFUService.initialize] completes; safe to
-  /// call again later (re-producing with the same track is a no-op).
+  /// Called once after [SFUService.initialize] completes, and again
+  /// from `toggleMic` / `toggleCamera` when the previous track has
+  /// died (re-acquire path). Safe to call repeatedly — already-
+  /// producing tracks are a no-op inside [SFUService.produceAudio /
+  /// produceVideo] when the same track is passed.
   Future<void> _produceLocalTracksToSfu() async {
     final svc = _sfuService;
     final stream = _localStream;
-    if (svc == null || stream == null || !svc.isReady) return;
+    _log('[SFU] _produceLocalTracksToSfu — '
+        'svc=${svc != null} ready=${svc?.isReady} '
+        'stream=${stream != null} '
+        'tracks=${stream?.getTracks().map((t) => "${t.kind}:${t.id}").join(",") ?? "(none)"}');
+    if (svc == null || stream == null || !svc.isReady) {
+      _log('[SFU] _produceLocalTracksToSfu — skipped (svc/stream/ready false)');
+      return;
+    }
     final audio = stream.getAudioTracks().isNotEmpty
         ? stream.getAudioTracks().first
         : null;
     final video = stream.getVideoTracks().isNotEmpty
         ? stream.getVideoTracks().first
         : null;
+    _log('[SFU] _produceLocalTracksToSfu — '
+        'audio=${audio?.id ?? "<none>"} video=${video?.id ?? "<none>"}');
     if (audio != null) {
       try {
         await svc.produceAudio(audio, stream);
+        _log('[SFU] produceAudio ok (track=${audio.id})');
       } catch (e) {
         _log('[SFU] produceAudio failed: $e');
       }
@@ -2213,6 +2286,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (video != null) {
       try {
         await svc.produceVideo(video, stream);
+        _log('[SFU] produceVideo ok (track=${video.id})');
       } catch (e) {
         _log('[SFU] produceVideo failed: $e');
       }
