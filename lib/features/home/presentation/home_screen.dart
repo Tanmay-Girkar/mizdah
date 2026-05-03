@@ -100,9 +100,15 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _handleNewMeeting(BuildContext context, WidgetRef ref) async {
+    // isScrollControlled: true lifts the default ~50%-screen cap on
+    // modal bottom sheets so the 3 option tiles always fit, even on
+    // shorter phones / landscape. Without it the third tile
+    // ("Schedule in Google Calendar") was clipped and the sheet
+    // body overflowed by ~123px.
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (context) => _NewMeetingOptions(ref: ref),
     );
   }
@@ -773,58 +779,68 @@ class _NewMeetingOptions extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag Handle
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white24 : Colors.black12,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 24),
-          
-          const Text(
-            'Create Meeting',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const SizedBox(height: 24),
+      // SafeArea keeps the bottom padding above the system gesture
+      // bar so the last tile isn't grazed by it on phones with no
+      // hardware nav. SingleChildScrollView is a graceful fallback —
+      // even if a future tile is added or the user has large text
+      // scale enabled, the sheet scrolls instead of asserting.
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag Handle
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 24),
 
-          _OptionTile(
-            icon: Icons.link_rounded,
-            title: 'Create a meeting for later',
-            subtitle: 'Get a link you can share with others',
-            color: Colors.blue,
-            onTap: () => _createMeeting(context, 'Share'),
+              const Text(
+                'Create Meeting',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              _OptionTile(
+                icon: Icons.link_rounded,
+                title: 'Create a meeting for later',
+                subtitle: 'Get a link you can share with others',
+                color: Colors.blue,
+                onTap: () => _createMeeting(context, 'Share'),
+              ),
+              const SizedBox(height: 12),
+              _OptionTile(
+                icon: Icons.video_call_rounded,
+                title: 'Start an instant meeting',
+                subtitle: 'Join and invite people right now',
+                color: Colors.green,
+                onTap: () {
+                  Navigator.pop(context);
+                  context.push('/pre-join');
+                },
+              ),
+              const SizedBox(height: 12),
+              _OptionTile(
+                icon: Icons.calendar_today_rounded,
+                title: 'Schedule in Google Calendar',
+                subtitle: 'Plan a meeting in your calendar',
+                color: Colors.orange,
+                onTap: () => _scheduleMeeting(context),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          _OptionTile(
-            icon: Icons.video_call_rounded,
-            title: 'Start an instant meeting',
-            subtitle: 'Join and invite people right now',
-            color: Colors.green,
-            onTap: () {
-              Navigator.pop(context);
-              context.push('/pre-join');
-            },
-          ),
-          const SizedBox(height: 12),
-          _OptionTile(
-            icon: Icons.calendar_today_rounded,
-            title: 'Schedule in Google Calendar',
-            subtitle: 'Plan a meeting in your calendar',
-            color: Colors.orange,
-            onTap: () => _scheduleMeeting(context),
-          ),
-        ],
+        ),
       ),
     );
   }
