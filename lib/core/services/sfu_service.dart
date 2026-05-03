@@ -1,4 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+// `RTCPriorityType` is re-exported by mediasoup_client_flutter via its
+// dependency on flutter_webrtc, so we don't need to import flutter_webrtc
+// directly. Don't be tempted to add `package:flutter_webrtc/...` — the
+// analyzer flags it as an unnecessary import.
 import 'package:mediasoup_client_flutter/mediasoup_client_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
@@ -268,10 +273,13 @@ class SFUService {
   void _wireSendTransport(Transport t) {
     t.on('connect', (Map data) {
       _log('[SFU] sendTransport connect — emitting connectTransport');
+      final dtlsMap = (data['dtlsParameters'] as DtlsParameters).toMap();
+      final sanitisedDtls =
+          jsonDecode(jsonEncode(dtlsMap, toEncodable: _encodeForSocketIo));
       _emitWithAck('connectTransport', {
         'meetingId': meetingId,
         'transportId': t.id,
-        'dtlsParameters': (data['dtlsParameters'] as DtlsParameters).toMap(),
+        'dtlsParameters': sanitisedDtls,
       }).then((ack) {
         if (ack != null && ack['error'] != null) {
           _log('[SFU] connectTransport(send) error: ${ack['error']}');
@@ -284,11 +292,19 @@ class SFUService {
 
     t.on('produce', (Map data) {
       _log('[SFU] sendTransport produce — kind=${data['kind']}');
+      // RtpParameters.toMap() embeds an `RTCPriorityType` enum
+      // inside each encoding's `priority`/`networkPriority`. The
+      // socket.io serializer is plain jsonEncode and chokes on the
+      // enum. Sanitize via a roundtrip with a `toEncodable` that
+      // converts the enum to the string the server expects.
+      final rtpMap = (data['rtpParameters'] as RtpParameters).toMap();
+      final sanitisedRtp = jsonDecode(jsonEncode(rtpMap,
+          toEncodable: _encodeForSocketIo));
       _emitWithAck('produce', {
         'meetingId': meetingId,
         'transportId': t.id,
         'kind': data['kind'],
-        'rtpParameters': (data['rtpParameters'] as RtpParameters).toMap(),
+        'rtpParameters': sanitisedRtp,
         'appData': data['appData'],
       }).then((ack) {
         if (ack == null || ack['error'] != null) {
@@ -307,10 +323,13 @@ class SFUService {
   void _wireRecvTransport(Transport t) {
     t.on('connect', (Map data) {
       _log('[SFU] recvTransport connect — emitting connectTransport');
+      final dtlsMap = (data['dtlsParameters'] as DtlsParameters).toMap();
+      final sanitisedDtls =
+          jsonDecode(jsonEncode(dtlsMap, toEncodable: _encodeForSocketIo));
       _emitWithAck('connectTransport', {
         'meetingId': meetingId,
         'transportId': t.id,
-        'dtlsParameters': (data['dtlsParameters'] as DtlsParameters).toMap(),
+        'dtlsParameters': sanitisedDtls,
       }).then((ack) {
         if (ack != null && ack['error'] != null) {
           _log('[SFU] connectTransport(recv) error: ${ack['error']}');
@@ -442,11 +461,14 @@ class SFUService {
       return;
     }
 
+    final rtpCapsMap = _device!.rtpCapabilities.toMap();
+    final sanitisedCaps =
+        jsonDecode(jsonEncode(rtpCapsMap, toEncodable: _encodeForSocketIo));
     final ack = await _emitWithAck('consume', {
       'meetingId': meetingId,
       'transportId': _recvTransport!.id,
       'producerId': producerId,
-      'rtpCapabilities': _device!.rtpCapabilities.toMap(),
+      'rtpCapabilities': sanitisedCaps,
     });
     if (ack == null || ack['error'] != null) {
       _log('[SFU] consume error: ${ack?['error']}');
@@ -498,11 +520,16 @@ class SFUService {
         completer.complete(null);
       }
     });
-    _socket.emitWithAck(event, payload, ack: (response) {
+    // The socket.io ack callback is invoked via Function.apply with
+    // whatever the server sends back. If the server replies with no
+    // arguments (a bare ack), Dart will throw NoSuchMethodError on
+    // a 1-arg signature — make `response` an OPTIONAL positional
+    // arg so 0-arg invocation is legal.
+    _socket.emitWithAck(event, payload, ack: ([dynamic response]) {
       timeout?.cancel();
       if (completer.isCompleted) return;
       if (response == null) {
-        completer.complete(null);
+        completer.complete(<String, dynamic>{});
       } else if (response is Map) {
         completer.complete(Map<String, dynamic>.from(response));
       } else {
@@ -510,5 +537,27 @@ class SFUService {
       }
     });
     return completer.future;
+  }
+
+  /// Used as the `toEncodable` callback for jsonEncode when sanitising
+  /// mediasoup-client structures before they go onto the socket. The
+  /// flutter_webrtc enum `RTCPriorityType` shows up inside
+  /// `RtpEncodingParameters.toMap()` and breaks the default encoder.
+  static Object? _encodeForSocketIo(Object? value) {
+    if (value is RTCPriorityType) {
+      switch (value) {
+        case RTCPriorityType.veryLow:
+          return 'very-low';
+        case RTCPriorityType.low:
+          return 'low';
+        case RTCPriorityType.medium:
+          return 'medium';
+        case RTCPriorityType.high:
+          return 'high';
+      }
+    }
+    // Fall back to the value's string form rather than throwing —
+    // a hex-encoded debug string is better than a crashed call.
+    return value?.toString();
   }
 }
