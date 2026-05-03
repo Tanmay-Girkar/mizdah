@@ -621,10 +621,31 @@ class _VideoGrid extends ConsumerWidget {
         isHandRaised: isHandRaised,
       ));
     }
+    // Orphan-renderer fallback: a renderer exists for this socketId but
+    // no matching `participant` row arrived yet. We render it as a
+    // generic "Participant" tile so the user-joined→track-attached gap
+    // doesn't show a black grid.
+    //
+    // EXCEPT for users still in the waiting room. The mediasoup SFU
+    // starts forwarding the requesting user's audio/video producers to
+    // the room as soon as their media socket connects — that happens
+    // BEFORE the host clicks Admit. Without this guard a "Participant"
+    // tile pops into the grid alongside the admit/deny dialog, which
+    // is exactly the bug the user reported. Keep them invisible until
+    // they're actually admitted.
+    final waitingSocketIds = <String>{
+      for (final w in meetingState.waitingParticipants)
+        if (w is Map && w['socketId'] != null) w['socketId'].toString(),
+    };
     for (final entry in meetingState.remoteRenderers.entries) {
+      if (waitingSocketIds.contains(entry.key)) continue;
       final already = tiles.any((t) => t.renderer == entry.value);
       if (!already) {
-        tiles.add(_ParticipantTileData(name: 'Participant', renderer: entry.value));
+        tiles.add(_ParticipantTileData(
+          name: 'Participant',
+          renderer: entry.value,
+          socketId: entry.key,
+        ));
       }
     }
     // While the local user is presenting, show a STATIC placeholder
@@ -3126,36 +3147,64 @@ class _JoinRequestBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Two-row layout: identity on top, actions on bottom.
+    //
+    // The previous single-row layout put the name in an `Expanded(Text)`
+    // alongside the View / Deny / Admit buttons. On a ~340px-wide phone
+    // those 3 buttons consume ~270px, leaving the text widget ~30px —
+    // which collapses the name into a one-letter-per-line column
+    // (`g`, `f`, `w`, `a`, `n`, `t`, `s`, `t`, `o`, …). Stacking gives
+    // the name the full row width and the buttons their own row, so
+    // the dialog reads cleanly even with long names.
+    final message = count > 1
+        ? '$firstName and ${count - 1} others want to join'
+        : '$firstName wants to join';
     return GlassCard(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 10),
       radius: 16,
       opacity: 0.95,
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.person_add_rounded, color: MizdahTheme.primaryBlue),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              count > 1 
-                ? '$firstName and ${count - 1} others want to join'
-                : '$firstName wants to join',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-            ),
+          Row(
+            children: [
+              const Icon(Icons.person_add_rounded,
+                  color: MizdahTheme.primaryBlue),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 14),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: onView,
-            child: const Text('View', style: TextStyle(color: MizdahTheme.primaryBlue)),
-          ),
-          const SizedBox(width: 4),
-          TextButton(
-            onPressed: onDeny,
-            child: const Text('Deny', style: TextStyle(color: Colors.redAccent)),
-          ),
-          const SizedBox(width: 4),
-          MizdahButton(
-            label: 'Admit',
-            isFullWidth: false,
-            onTap: onAdmit,
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: onView,
+                child: const Text('View',
+                    style: TextStyle(color: MizdahTheme.primaryBlue)),
+              ),
+              const SizedBox(width: 2),
+              TextButton(
+                onPressed: onDeny,
+                child: const Text('Deny',
+                    style: TextStyle(color: Colors.redAccent)),
+              ),
+              const SizedBox(width: 6),
+              MizdahButton(
+                label: 'Admit',
+                isFullWidth: false,
+                onTap: onAdmit,
+              ),
+            ],
           ),
         ],
       ),
