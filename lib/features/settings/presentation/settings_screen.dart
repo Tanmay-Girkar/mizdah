@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/mizdah_button.dart';
@@ -112,6 +113,11 @@ class _GeneralSettings extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
         _MeetingLayoutPicker(isDark: isDark),
+        const SizedBox(height: 32),
+        // Standalone preview: opens a side-by-side gallery of
+        // candidate home-screen redesigns. Production home/drawer
+        // are NOT touched — picking here just shows the concept.
+        _HomeDesignsEntry(isDark: isDark),
         const SizedBox(height: 32),
         _SupportSection(),
       ],
@@ -412,6 +418,67 @@ class _ThemeTile extends StatelessWidget {
         onChanged: (val) => ref.read(themeProvider.notifier).setTheme(val!),
       ),
       onTap: () => ref.read(themeProvider.notifier).setTheme(mode),
+    );
+  }
+}
+
+/// Entry tile that opens the standalone home-design gallery at
+/// `/home-designs`. The gallery is preview-only — picking a design
+/// there does NOT alter the live home screen, it's a spike for
+/// visual review. Tile lives in Settings → General.
+class _HomeDesignsEntry extends StatelessWidget {
+  final bool isDark;
+  const _HomeDesignsEntry({required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Experimental designs',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: isDark ? Colors.white : Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Browse mockups for an upcoming home-screen redesign. '
+          'The current home screen is unaffected.',
+          style: TextStyle(
+            fontSize: 12,
+            color: isDark ? Colors.white54 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 12),
+        GlassCard(
+          child: ListTile(
+            leading: const Icon(Icons.dashboard_customize_rounded,
+                color: MizdahTheme.primaryBlue),
+            title: Text(
+              'Home screen designs',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              '6 concepts to compare — preview only',
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black54,
+                fontSize: 12,
+              ),
+            ),
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+            onTap: () => context.push('/home-designs'),
+          ),
+        ),
+      ],
     );
   }
 }
