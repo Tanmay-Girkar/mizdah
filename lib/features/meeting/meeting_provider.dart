@@ -545,11 +545,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           isInWaitingRoom: false,
           phase: MeetingPhase.inMeeting,
         );
-        // Re-run anything that normally fires on a successful host join
+        // Re-run anything that normally fires on a successful host
+        // join — including SFU bootstrap. The early return below
+        // used to skip _bootstrapSfu() (it lives in the standard
+        // JOINED branch ~80 lines down) which left the host stuck
+        // in "joined" with no media socket, no producers, no
+        // remote video — exactly the "now all not working" report.
         if (state.meetingCode != null && state.userId != null) {
           _startWaitingListPolling(state.meetingCode!);
           refreshWaitingList();
         }
+        // Critical: open the media socket and produce local
+        // tracks. Without this the host stays mute/black to
+        // every other participant.
+        // ignore: unawaited_futures
+        _bootstrapSfu();
         return;
       }
 
