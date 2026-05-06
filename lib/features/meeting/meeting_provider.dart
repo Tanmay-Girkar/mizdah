@@ -112,6 +112,23 @@ class MeetingState {
   /// options sheet.
   final bool isOnTheGoMode;
 
+  /// True while the meeting is being recorded server-side (any
+  /// participant — the host kicked off the recording, but all
+  /// participants need to know so the REC indicator + "this
+  /// meeting is being recorded" banner show. Driven by
+  /// `recording-started` / `recording-stopped` socket events from
+  /// the backend. See docs/RECORDING_BACKEND.md.
+  final bool isRecordingActive;
+
+  /// The id of the active recording, when [isRecordingActive] is
+  /// true. Used for the recordings list screen "currently being
+  /// recorded" badge.
+  final String? activeRecordingId;
+
+  /// Display name of whoever started the active recording. Shown
+  /// in the consent banner so participants know who initiated.
+  final String? recordingHostName;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -146,6 +163,9 @@ class MeetingState {
     this.controlOfPeerSocketId,
     this.audioLevels = const {},
     this.isOnTheGoMode = false,
+    this.isRecordingActive = false,
+    this.activeRecordingId,
+    this.recordingHostName,
   });
 
   MeetingState copyWith({
@@ -186,6 +206,11 @@ class MeetingState {
     bool clearControlOfPeer = false,
     Map<String, double>? audioLevels,
     bool? isOnTheGoMode,
+    bool? isRecordingActive,
+    String? activeRecordingId,
+    bool clearActiveRecordingId = false,
+    String? recordingHostName,
+    bool clearRecordingHostName = false,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -232,6 +257,13 @@ class MeetingState {
           : (controlOfPeerSocketId ?? this.controlOfPeerSocketId),
       audioLevels: audioLevels ?? this.audioLevels,
       isOnTheGoMode: isOnTheGoMode ?? this.isOnTheGoMode,
+      isRecordingActive: isRecordingActive ?? this.isRecordingActive,
+      activeRecordingId: clearActiveRecordingId
+          ? null
+          : (activeRecordingId ?? this.activeRecordingId),
+      recordingHostName: clearRecordingHostName
+          ? null
+          : (recordingHostName ?? this.recordingHostName),
     );
   }
 }
@@ -485,6 +517,41 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.on('join-confirmation', (data) async {
       _log('🟢 join-confirmation: $data');
       if (!mounted || _disposed) return;
+
+      // BACKEND-BUG WORKAROUND: the server's join-meeting handler
+      // doesn't compare the joining userId against meetings.host_id,
+      // so it puts the room creator into THEIR OWN waiting room
+      // (status WAITING_FOR_APPROVAL with isHost: false). The local
+      // hostMatch check in joinMeeting() already knows we're the
+      // host — trust that and override. Documented in
+      // docs/HOST_DETECTION_BACKEND.md so the BE dev can fix
+      // server-side; once they do, this guard becomes a no-op (the
+      // server will never send WAITING to a host).
+      bool serverFalselyDeniedHost(dynamic d) {
+        if (!state.isHost) return false; // genuinely not the host
+        if (d is String) return d == 'WAITING_FOR_APPROVAL' || d == 'WAITING';
+        if (d is Map) {
+          final s = d['status']?.toString();
+          return s == 'WAITING_FOR_APPROVAL' || s == 'WAITING';
+        }
+        return false;
+      }
+
+      if (serverFalselyDeniedHost(data)) {
+        _log('⚠️  Server put us in waiting room but we ARE the host '
+            '— overriding to JOINED locally (backend host-detection bug).');
+        state = state.copyWith(
+          isConnected: true,
+          isInWaitingRoom: false,
+          phase: MeetingPhase.inMeeting,
+        );
+        // Re-run anything that normally fires on a successful host join
+        if (state.meetingCode != null && state.userId != null) {
+          _startWaitingListPolling(state.meetingCode!);
+          refreshWaitingList();
+        }
+        return;
+      }
 
       // Backend may send a String status or a structured Map.
       if (data is String) {
@@ -898,6 +965,75 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _socket?.on('end-meeting-for-all', onMeetingEnded);
     _socket?.on('meeting-ended', onMeetingEnded);
     _socket?.on('host-left', onMeetingEnded);
+
+    // ─── Recording lifecycle ─────────────────────────────────────
+    // Backend broadcasts these to every socket in the room when
+    // recording starts / stops. Drives the REC indicator on every
+    // participant's top bar AND the consent banner shown to those
+    // who joined after recording was already active. See
+    // docs/RECORDING_BACKEND.md for the wire format.
+    _socket?.on('recording-started', (data) {
+      if (!mounted || _disposed) return;
+      _log('🔴 recording-started: $data');
+      final map = data is Map ? data : const <String, dynamic>{};
+      state = state.copyWith(
+        isRecordingActive: true,
+        activeRecordingId: map['recordingId']?.toString(),
+        recordingHostName:
+            (map['hostName'] ?? map['name'])?.toString() ?? 'The host',
+        isRecording: state.isHost ? true : state.isRecording,
+      );
+    });
+
+    _socket?.on('recording-stopped', (data) {
+      if (!mounted || _disposed) return;
+      _log('⏹  recording-stopped: $data');
+      state = state.copyWith(
+        isRecordingActive: false,
+        clearActiveRecordingId: true,
+        clearRecordingHostName: true,
+        isRecording: false,
+      );
+    });
+
+    _socket?.on('recording-ready', (data) {
+      if (!mounted || _disposed) return;
+      _log('✅ recording-ready: $data');
+      // Re-use the chat-toast slot to surface "Recording ready —
+      // tap to view" without adding another transient-state field.
+      // The meeting screen already renders this toast.
+      final map = data is Map ? data : const <String, dynamic>{};
+      final url = map['url']?.toString();
+      if (url == null) return;
+      state = state.copyWith(
+        incomingChatToast: {
+          'sender': '🎬 Recording ready',
+          'text': 'Tap to open the recording',
+          'at': DateTime.now().millisecondsSinceEpoch,
+          'recordingUrl': url,
+          'isRecordingToast': true,
+        },
+      );
+    });
+
+    _socket?.on('recording-failed', (data) {
+      if (!mounted || _disposed) return;
+      final reason =
+          (data is Map ? data['reason']?.toString() : null) ?? 'unknown';
+      _log('❌ recording-failed: $reason');
+      state = state.copyWith(
+        isRecordingActive: false,
+        clearActiveRecordingId: true,
+        clearRecordingHostName: true,
+        isRecording: false,
+        incomingChatToast: {
+          'sender': '⚠️  Recording failed',
+          'text': reason,
+          'at': DateTime.now().millisecondsSinceEpoch,
+          'isRecordingFailureToast': true,
+        },
+      );
+    });
 
     _chatSocket?.on('chat-receive', _handleNewMessage);
     _chatSocket?.on('chat-message', _handleNewMessage);
@@ -2042,13 +2178,35 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _waitingListTimer = null;
       return;
     }
-    _log('🛎  Waiting-room poll → ${list.length} participants');
+    // BACKEND-BUG WORKAROUND: the same host-detection bug
+    // (docs/HOST_DETECTION_BACKEND.md) makes the server include
+    // the host in their OWN waiting list. Strip ourselves out so
+    // the host doesn't see themselves in the "1 person waiting"
+    // banner of their own meeting.
+    final mySocketId = _socket?.id;
+    final myUserId = state.userId;
+    final filtered = list.where((p) {
+      // p is already typed as Map<String,dynamic> — no need to
+      // re-check. Just match by socketId or userId; either hit
+      // means the row is the host themselves and should be hidden
+      // from their own waiting-room banner.
+      if (mySocketId != null && p['socketId']?.toString() == mySocketId) {
+        return false;
+      }
+      if (myUserId != null &&
+          (p['userId'] ?? p['user_id'])?.toString() == myUserId) {
+        return false;
+      }
+      return true;
+    }).toList();
+    _log('🛎  Waiting-room poll → ${filtered.length} participants '
+        '(${list.length} raw, ${list.length - filtered.length} self-stripped)');
     // Wrap the assignment: a Riverpod consumer of this provider may have
     // unmounted between the guard above and the synchronous listener
     // notification below (e.g. during navigation). Disposed/defunct
     // listeners would otherwise crash the runtime.
     try {
-      state = state.copyWith(waitingParticipants: list);
+      state = state.copyWith(waitingParticipants: filtered);
     } catch (e) {
       _log('refreshWaitingList: state set skipped ($e)');
     }

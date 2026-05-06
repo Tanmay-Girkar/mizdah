@@ -212,12 +212,38 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                 right: 0,
                 child: _MeetingTopBar(
                   meetingId: widget.meetingId,
-                  isRecording: meetingState.isRecording,
+                  // REC dot visibility is driven by `isRecordingActive`
+                  // (room-wide, set by `recording-started` socket
+                  // event) — NOT the host's local `isRecording`
+                  // flag. Every participant needs to see the dot,
+                  // not only the host who initiated.
+                  isRecording: meetingState.isRecordingActive ||
+                      meetingState.isRecording,
                   isSpeakerphoneOn: meetingState.isSpeakerphoneOn,
                   onToggleSpeakerphone: meetingNotifier.toggleSpeakerphone,
                   onSwitchCamera: meetingNotifier.switchCamera,
                 ),
               ),
+
+              // Recording consent banner.
+              //
+              // Slides down from below the top bar when recording
+              // becomes active. Auto-dismisses after 6 seconds —
+              // permanent presence is overkill, the REC dot in the
+              // top bar handles the always-on state. The host
+              // already sees a confirm dialog when they START the
+              // recording, so this banner is primarily for OTHER
+              // participants who need disclosure that the room is
+              // being recorded.
+              if (meetingState.isRecordingActive)
+                Positioned(
+                  top: 72,
+                  left: 16,
+                  right: 16,
+                  child: _RecordingConsentBanner(
+                    hostName: meetingState.recordingHostName ?? 'The host',
+                  ),
+                ),
 
               // Captions Overlay
               Positioned(
@@ -331,7 +357,38 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                             key: ValueKey(meetingState.incomingChatToast!['at']),
                             sender: (meetingState.incomingChatToast!['sender'] ?? '').toString(),
                             text: (meetingState.incomingChatToast!['text'] ?? '').toString(),
-                            onTap: () => setState(() => _activePanel = 'chat'),
+                            // Tap-action varies by toast type:
+                            //  • recording-ready toast → open the signed
+                            //    URL in the device browser
+                            //  • everything else → open the in-call
+                            //    chat panel (existing behaviour)
+                            onTap: () {
+                              final toast = meetingState.incomingChatToast;
+                              final url = toast?['recordingUrl']?.toString();
+                              if (toast?['isRecordingToast'] == true &&
+                                  url != null &&
+                                  url.isNotEmpty) {
+                                // Capture messenger before the await so
+                                // the analyzer doesn't flag use_build_
+                                // context_synchronously, AND so the
+                                // SnackBar still surfaces if the user
+                                // navigated away while the launch was
+                                // in flight.
+                                final messenger =
+                                    ScaffoldMessenger.of(context);
+                                launchUrl(
+                                  Uri.parse(url),
+                                  mode: LaunchMode.externalApplication,
+                                ).catchError((Object e) {
+                                  messenger.showSnackBar(
+                                    SnackBar(content: Text('Open failed: $e')),
+                                  );
+                                  return false;
+                                });
+                                return;
+                              }
+                              setState(() => _activePanel = 'chat');
+                            },
                           ),
                   ),
                 ),
@@ -3320,6 +3377,22 @@ class _HostControlsViewState extends ConsumerState<_HostControlsView> {
           onChanged: widget.onRecordingToggle,
         ),
         const SizedBox(height: 32),
+        // Quick link to past recordings for THIS meeting room. Opens
+        // the recordings list screen which lists every recording
+        // including the one currently being made (status badge shows
+        // 'recording' / 'processing' until the file is ready).
+        MizdahButton(
+          label: 'View past recordings',
+          backgroundColor: Colors.white10,
+          onTap: () {
+            final code = ref
+                    .read(meetingProvider(widget.meetingId))
+                    .meetingCode ??
+                widget.meetingId;
+            context.push('/recordings/$code');
+          },
+        ),
+        const SizedBox(height: 12),
         MizdahButton(
           label: 'Mute All',
           backgroundColor: Colors.white10,
@@ -3507,6 +3580,116 @@ class _RoomItem extends StatelessWidget {
             onTap: () {},
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Surfaced across the top of the meeting room when a recording
+/// is active — a Google-Meet-style red strip telling participants
+/// the call is being recorded so they have informed consent. Auto-
+/// dismisses after a short window since the persistent REC dot in
+/// the top bar handles the always-on indicator. Driven by the
+/// `recording-started` socket event (see meeting_provider.dart).
+class _RecordingConsentBanner extends StatefulWidget {
+  final String hostName;
+  const _RecordingConsentBanner({required this.hostName});
+
+  @override
+  State<_RecordingConsentBanner> createState() =>
+      _RecordingConsentBannerState();
+}
+
+class _RecordingConsentBannerState extends State<_RecordingConsentBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  bool _dismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    )..forward();
+    // Auto-dismiss after 6 s.
+    Future.delayed(const Duration(seconds: 6), () {
+      if (!mounted) return;
+      _ctrl.reverse().whenComplete(() {
+        if (!mounted) return;
+        setState(() => _dismissed = true);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+    return SizeTransition(
+      sizeFactor: CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
+      axisAlignment: -1,
+      child: FadeTransition(
+        opacity: _ctrl,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.red.withValues(alpha: 0.95),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.red.withValues(alpha: 0.4),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.25),
+                ),
+                child: const Icon(Icons.fiber_manual_record,
+                    color: Colors.white, size: 12),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'This meeting is being recorded',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                    Text(
+                      'Started by ${widget.hostName}. By staying you '
+                      'consent to being recorded.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
