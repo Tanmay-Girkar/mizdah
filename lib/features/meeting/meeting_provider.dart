@@ -342,8 +342,15 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// Top-level join sequence. Order matters: media MUST be ready before
   /// we open the signaling socket so the first incoming offer/answer
   /// can attach our local tracks.
+  /// Build-stamp baked at commit time so the user can tell from
+  /// the device log which build their APK is from. Update this when
+  /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
+  /// confirms the bug-fix code is actually running.
+  static const String _kBuildStamp = 'sfu-v3 2026-05-07 (joinMeeting-bootstrap)';
+
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true}) async {
+    _log('🔖 [BUILD] $_kBuildStamp');
     _log('joinMeeting → meetingId=$meetingId userId=$userId name=$name video=$video audio=$audio');
     _userName = name;
     if (mounted && !_disposed) {
@@ -390,6 +397,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _startWaitingListPolling(cleanCode);
       // Kick an immediate fetch so the UI updates without waiting 5s.
       refreshWaitingList();
+
+      // BULLETPROOF SFU bootstrap for hosts — fired right here from
+      // joinMeeting(), the moment we know we're the host. Does NOT
+      // wait for:
+      //   - signaling socket to connect (parallel channels)
+      //   - join-confirmation to come back (server sometimes lies)
+      //   - the bypass branch in the join-confirmation handler to
+      //     fire (depended on isHost being true at the right moment)
+      //
+      // The `_sfuBootstrapStarted` guard inside `_bootstrapSfu()` makes
+      // this safe: whichever path reaches the function first wins,
+      // every subsequent call is a no-op. So this can co-exist with
+      // BOTH the socket-onConnect trigger AND the join-confirmation
+      // bypass trigger — three independent code paths, any one of
+      // which is enough to get media working. The bug we keep hitting
+      // is "no path triggers" — three paths fixes that.
+      _log('[SFU] 🚀 firing _bootstrapSfu() from joinMeeting (host path)');
+      // ignore: unawaited_futures
+      _bootstrapSfu();
     }
 
     // 3. CRITICAL: set up local media BEFORE opening signaling socket.
