@@ -28,12 +28,19 @@ class MeetingRoomScreen extends ConsumerStatefulWidget {
   final String meetingId;
   final bool initialVideo;
   final bool initialAudio;
+  /// Hint from the route that the local user is the meeting host
+  /// (e.g. they just created an instant meeting from pre-join). When
+  /// set, the meeting provider can fire the SFU bootstrap before the
+  /// REST round-trip resolves the canonical hostId — saving 200-3500ms
+  /// of perceived "video appears after a few seconds" delay.
+  final bool isHostHint;
 
   const MeetingRoomScreen({
-    super.key, 
+    super.key,
     required this.meetingId,
     this.initialVideo = true,
     this.initialAudio = true,
+    this.isHostHint = false,
   });
 
   @override
@@ -60,6 +67,7 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
         jwtToken,
         video: widget.initialVideo,
         audio: widget.initialAudio,
+        isHostHint: widget.isHostHint,
       );
     });
   }

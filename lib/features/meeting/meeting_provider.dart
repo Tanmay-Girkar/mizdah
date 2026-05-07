@@ -346,18 +346,48 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v3 2026-05-07 (joinMeeting-bootstrap)';
+  static const String _kBuildStamp = 'sfu-v4 2026-05-07 (early-bootstrap)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
-      {bool video = true, bool audio = true}) async {
+      {bool video = true, bool audio = true, bool isHostHint = false}) async {
     _log('🔖 [BUILD] $_kBuildStamp');
-    _log('joinMeeting → meetingId=$meetingId userId=$userId name=$name video=$video audio=$audio');
+    _log('joinMeeting → meetingId=$meetingId userId=$userId name=$name '
+        'video=$video audio=$audio isHostHint=$isHostHint');
     _userName = name;
     if (mounted && !_disposed) {
       state = state.copyWith(phase: MeetingPhase.connecting);
     }
 
     final cleanCode = meetingId.toLowerCase().trim();
+
+    // ⚡ EARLY BOOTSTRAP — when we have a host hint (i.e. user just
+    // created this meeting from pre-join, so we KNOW they're the
+    // host), skip the 200ms-3500ms wait on `getMeetingInfo` and fire
+    // `_bootstrapSfu()` immediately. The bootstrap can run in parallel
+    // with the REST calls below, shaving the perceived "video appears
+    // after a few seconds" delay. The actual host check is still done
+    // below from the REST response — the hint just unblocks the SFU
+    // setup early. If the hint turns out wrong (it shouldn't, since
+    // pre-join only sets it when we created the meeting ourselves),
+    // _bootstrapSfu's idempotency guard means at worst we did some
+    // extra mediasoup work.
+    if (isHostHint) {
+      if (mounted && !_disposed) {
+        state = state.copyWith(
+          meetingCode: cleanCode,
+          userId: userId,
+          isHost: true,
+        );
+      }
+      _log('[SFU] ⚡ EARLY firing _bootstrapSfu() from host hint '
+          '(BEFORE REST round-trip)');
+      // ignore: unawaited_futures
+      _bootstrapSfu();
+      // Also start producing local tracks as soon as media is ready —
+      // _setupMedia below uses the cached singleton so this race
+      // resolves in the bootstrap's favour 99% of the time, but the
+      // post-_setupMedia produce kick handles the cold-start case.
+    }
 
     // 1. Validate meeting (with brief retry — instant meetings can lag).
     _log('REST GET ${ApiConfig.getMeeting}/$cleanCode');
@@ -427,6 +457,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       await _setupMedia(video: video, audio: audio);
     } else {
       _log('Local stream already exists (${_localStream!.getTracks().length} tracks)');
+    }
+
+    // RACE FIX: with EARLY bootstrap fired before _setupMedia, the
+    // SFU may have called _produceLocalTracksToSfu while _localStream
+    // was still null — that path silently no-ops. Now that media is
+    // up, kick produce again. Idempotent: SFUService.produceAudio /
+    // produceVideo are no-ops when the same track is already producing.
+    if (state.isSfuMode && _sfuService?.isReady == true) {
+      _log('[SFU] kicking _produceLocalTracksToSfu after _setupMedia');
+      // ignore: unawaited_futures
+      _produceLocalTracksToSfu();
     }
 
     // Apply default audio routing once we have a stream — the OS

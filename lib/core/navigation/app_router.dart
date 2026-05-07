@@ -69,10 +69,16 @@ final appRouter = GoRouter(
       builder: (context, state) {
         final video = state.uri.queryParameters['video'] == 'true';
         final audio = state.uri.queryParameters['audio'] == 'true';
+        // `host=true` is a fast-path hint passed by pre-join when the
+        // user just created an instant meeting (so we know they're the
+        // host without waiting for the REST round-trip). Lets the
+        // meeting provider fire SFU bootstrap immediately.
+        final isHostHint = state.uri.queryParameters['host'] == 'true';
         return MeetingRoomScreen(
           meetingId: state.pathParameters['id']!,
           initialVideo: video,
           initialAudio: audio,
+          isHostHint: isHostHint,
         );
       },
     ),

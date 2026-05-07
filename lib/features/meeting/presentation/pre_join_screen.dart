@@ -101,10 +101,18 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
 
   Future<void> _handleJoin() async {
     setState(() => _isJoining = true);
-    
+
     String? finalMeetingId = widget.meetingId;
+    // True when we know — without waiting for the meeting REST lookup
+    // in the meeting screen — that the local user is the host. Threaded
+    // into the route as `host=true` so the meeting provider can fire
+    // the SFU bootstrap immediately, instead of after the 200-3500ms
+    // `getMeetingInfo` round-trip. Saves the perceptible "video appears
+    // after a few seconds" delay reported on instant meetings.
+    bool isHostHint = false;
 
     try {
+      final currentUserId = ref.read(authProvider).user?.id;
       // If we don't have a meeting ID yet, we are creating an instant meeting
       if (finalMeetingId == null) {
         final repository = ref.read(mizdahRepositoryProvider);
@@ -115,10 +123,17 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
           code: code,
         );
         finalMeetingId = meeting.code;
-        
+        isHostHint = true; // we just created it → we are the host
+
         // Refresh data providers to show the new meeting in history
         ref.invalidate(callHistoryProvider);
         ref.invalidate(schedulesProvider);
+      } else if (_meeting?.hostId != null &&
+          currentUserId != null &&
+          _meeting!.hostId == currentUserId) {
+        // Re-joining our own previously-created meeting (e.g. tapping a
+        // schedule entry we own). We know we're the host — same fast path.
+        isHostHint = true;
       }
 
       if (!mounted) return;
@@ -133,6 +148,7 @@ class _PreJoinScreenState extends ConsumerState<PreJoinScreen> {
           queryParameters: {
             'video': _isCameraOn.toString(),
             'audio': _isMicOn.toString(),
+            if (isHostHint) 'host': 'true',
           },
         ).toString(),
       );
