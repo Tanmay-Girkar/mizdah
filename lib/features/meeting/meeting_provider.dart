@@ -460,6 +460,36 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       // Tell the room our initial mic/camera state so peers don't
       // render us with their default (muted/no-video) assumption.
       Future.delayed(const Duration(milliseconds: 500), _broadcastMediaState);
+
+      // Belt-and-suspenders: hosts kick off the SFU bootstrap as
+      // soon as the signaling socket is up. We previously gated
+      // bootstrap on the join-confirmation handler running, which
+      // depended on the server correctly identifying us as the
+      // host — but the server has a bug there
+      // (see docs/HOST_DETECTION_BACKEND.md), and even though we
+      // workaround it in the join-confirmation handler, that
+      // workaround can be missed if the server sends a different
+      // kind of bad payload, or if the join-confirmation arrives
+      // before our handler is wired. SFU is a parallel media
+      // channel — it doesn't actually need to wait for the join-
+      // confirmation. The `_sfuBootstrapStarted` guard in
+      // `_bootstrapSfu()` ensures we don't double-bootstrap if
+      // the join-confirmation handler ALSO calls it.
+      //
+      // We only do this for the LOCAL host (computed from the
+      // REST `/api/meeting/<code>` lookup before the socket
+      // even connected). Guests still bootstrap from the JOINED
+      // branch as before, so guests in the waiting room don't
+      // produce media before being admitted.
+      if (state.isHost && state.meetingCode != null) {
+        _log('[SFU] 🎯 host kicking off bootstrap from socket-onConnect '
+            '(belt-and-suspenders — does not wait for join-confirmation)');
+        // ignore: unawaited_futures
+        Future.delayed(
+          const Duration(milliseconds: 200), // tiny grace period for state sync
+          _bootstrapSfu,
+        );
+      }
     });
 
     _socket?.onConnectError((err) => _log('❌ Signaling CONNECT_ERROR: $err'));
@@ -2291,6 +2321,12 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// app doesn't crash, and a future server-side rollback would
   /// re-enable it for free.
   Future<void> _bootstrapSfu() async {
+    // Diagnostic: always log entry so it's obvious in the device
+    // log whether this method was called at all. Past bugs masked
+    // a missing call as a silent media-never-starts symptom.
+    _log('[SFU] 🚀 _bootstrapSfu() entered '
+        '(started=$_sfuBootstrapStarted, code=${state.meetingCode}, '
+        'isHost=${state.isHost})');
     if (_sfuBootstrapStarted) return;
     _sfuBootstrapStarted = true;
     final code = state.meetingCode;
