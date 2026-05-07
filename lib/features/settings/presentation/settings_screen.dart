@@ -478,6 +478,44 @@ class _HomeDesignsEntry extends StatelessWidget {
             onTap: () => context.push('/home-designs'),
           ),
         ),
+        const SizedBox(height: 8),
+        GlassCard(
+          child: ListTile(
+            leading: const Icon(Icons.auto_awesome_rounded,
+                color: Color(0xFF6366F1)),
+            title: Text(
+              'Premium design ideas',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              'Round 2 · 5 fresh concepts (bento, glass, editorial)',
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black54,
+                fontSize: 12,
+              ),
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6366F1).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'NEW',
+                style: TextStyle(
+                  color: Color(0xFF6366F1),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+            onTap: () => context.push('/home-designs-v2'),
+          ),
+        ),
       ],
     );
   }
