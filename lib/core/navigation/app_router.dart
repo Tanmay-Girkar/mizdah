@@ -14,6 +14,7 @@ import '../../features/meeting/presentation/screen_share_designs_preview.dart';
 import '../../features/meeting/presentation/recordings_list_screen.dart';
 import '../../features/home/presentation/home_designs_preview.dart';
 import '../../features/home/presentation/home_designs_preview_v2.dart';
+import '../../features/home/presentation/home_designs_preview_v3.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
 import '../../features/auth/two_factor_screen.dart';
@@ -62,6 +63,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/home-designs-v2',
       builder: (context, state) => const HomeDesignsPreviewV2Screen(),
+    ),
+    GoRoute(
+      path: '/home-designs-v3',
+      builder: (context, state) => const HomeDesignsPreviewV3Screen(),
     ),
     GoRoute(
       path: '/recordings/:code',

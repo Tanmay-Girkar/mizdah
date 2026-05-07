@@ -497,23 +497,53 @@ class _HomeDesignsEntry extends StatelessWidget {
                 fontSize: 12,
               ),
             ),
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+            onTap: () => context.push('/home-designs-v2'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        GlassCard(
+          child: ListTile(
+            leading: const Icon(Icons.diamond_rounded,
+                color: Color(0xFFC9A961)),
+            title: Text(
+              'Luxury design ideas',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              'Round 3 · obsidian · ivory · twilight · chrome · concierge',
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black54,
+                fontSize: 12,
+              ),
+            ),
             trailing: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.12),
+                color: const Color(0xFFC9A961).withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: const Color(0xFFC9A961).withValues(alpha: 0.4),
+                  width: 0.5,
+                ),
               ),
               child: const Text(
                 'NEW',
                 style: TextStyle(
-                  color: Color(0xFF6366F1),
+                  color: Color(0xFFC9A961),
                   fontSize: 9,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 1,
                 ),
               ),
             ),
-            onTap: () => context.push('/home-designs-v2'),
+            onTap: () => context.push('/home-designs-v3'),
           ),
         ),
       ],
