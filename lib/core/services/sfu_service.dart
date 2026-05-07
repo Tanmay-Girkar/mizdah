@@ -92,6 +92,15 @@ class SFUService {
   // transport's consumerCallback fires.
   final Map<String, Completer<Consumer>> _pendingConsumers = {};
 
+  // Active VIDEO consumer ids — the keyframe-pump watchdog walks
+  // this set every few seconds and asks the SFU for a fresh keyframe
+  // so the H264 decoder can recover from packet loss / simulcast
+  // layer switches without freezing for the natural 5-15s gap
+  // between encoder keyframes. Audio is omitted (Opus is a coded
+  // stream that doesn't need keyframes).
+  final Set<String> _videoConsumerIds = {};
+  Timer? _keyframePumpTimer;
+
   // Track our own active producers so we can replace tracks on
   // mute/unmute and screen-share. Mediasoup-client delivers each
   // producer via `producerCallback` on the send transport — we
@@ -289,6 +298,9 @@ class SFUService {
     if (_disposed) return;
     _disposed = true;
     _log('[SFU] dispose()');
+    _keyframePumpTimer?.cancel();
+    _keyframePumpTimer = null;
+    _videoConsumerIds.clear();
     _socket.off('existingProducers', _handleExistingProducers);
     _socket.off('newProducer', _handleNewProducer);
     _socket.off('consumerClosed', _handleConsumerClosed);
@@ -477,6 +489,7 @@ class SFUService {
     final id = data['consumerId']?.toString();
     if (id == null) return;
     _log('[SFU] consumerClosed: $id');
+    _videoConsumerIds.remove(id);
     onRemoteTrackClosed(id);
   }
 
@@ -555,6 +568,96 @@ class SFUService {
       'meetingId': meetingId,
       'consumerId': consumerId,
     }, ack: ([dynamic _]) {});
+
+    // Track video consumers for the keyframe pump (see below). Audio
+    // doesn't need keyframes — Opus self-recovers from packet loss.
+    if (consumer.kind == 'video') {
+      _videoConsumerIds.add(consumerId);
+      _ensureKeyframePumpRunning();
+      // One-shot keyframe-after-attach: ~600ms after the renderer
+      // has been wired, ask for a fresh keyframe. The SFU usually
+      // sends one on the initial resumeConsumer above, but if the
+      // peer was already producing simulcast and the SFU started us
+      // on a low layer that hasn't keyframe'd yet, we'd otherwise
+      // wait several seconds for the next periodic keyframe — that
+      // shows up as "video appeared then froze" during early seconds.
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (_disposed) return;
+        if (!_videoConsumerIds.contains(consumerId)) return;
+        _requestConsumerKeyFrame(consumerId);
+      });
+    }
+  }
+
+  /// Starts the keyframe-pump watchdog if it's not already running.
+  /// Runs every 4 seconds and asks the SFU for a fresh keyframe on
+  /// every active video consumer. This is what unsticks the
+  /// "remote video froze after a few seconds" symptom that comes from
+  /// simulcast layer switches: when the SFU drops to a smaller layer
+  /// (e.g. 720p → 180p under congestion), the H264 decoder must
+  /// reinitialise and needs a keyframe to start producing frames; if
+  /// none arrives within the natural keyframe interval (5-15s on most
+  /// encoders), the renderer shows the last good frame and looks frozen.
+  void _ensureKeyframePumpRunning() {
+    if (_keyframePumpTimer?.isActive == true) return;
+    _log('[SFU] starting keyframe-pump (4s interval, '
+        '${_videoConsumerIds.length} video consumer(s))');
+    _keyframePumpTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) {
+        if (_disposed) {
+          _keyframePumpTimer?.cancel();
+          return;
+        }
+        if (_videoConsumerIds.isEmpty) {
+          _keyframePumpTimer?.cancel();
+          _keyframePumpTimer = null;
+          return;
+        }
+        for (final id in _videoConsumerIds.toList()) {
+          _requestConsumerKeyFrame(id);
+        }
+      },
+    );
+  }
+
+  /// Asks the SFU to push a keyframe for the given consumer's
+  /// producer. Two emissions in parallel:
+  ///   1. `requestConsumerKeyFrame` — preferred, single round-trip
+  ///      (server calls `consumer.requestKeyFrame()` server-side).
+  ///      If the server ever wires this up (see backend doc), it
+  ///      becomes the entire fix.
+  ///   2. `pauseConsumer` then `resumeConsumer` — fallback that
+  ///      works on the existing server: server-side `consumer.resume()`
+  ///      after a pause triggers a PLI to the producer. The pause
+  ///      window is ~80ms — invisible to the user but enough to
+  ///      force the keyframe.
+  void _requestConsumerKeyFrame(String consumerId) {
+    if (_disposed) return;
+    // Path 1 — preferred custom event (no-op if backend doesn't handle it).
+    _socket.emit('requestConsumerKeyFrame', {
+      'meetingId': meetingId,
+      'consumerId': consumerId,
+    });
+    // Path 2 — pause/resume fallback. Tiny window so the user
+    // doesn't see a flicker. Wrapped in try so a server that
+    // doesn't ack pauseConsumer doesn't break us.
+    try {
+      _socket.emitWithAck('pauseConsumer', {
+        'meetingId': meetingId,
+        'consumerId': consumerId,
+      }, ack: ([dynamic _]) {});
+      Future.delayed(const Duration(milliseconds: 80), () {
+        if (_disposed) return;
+        if (!_videoConsumerIds.contains(consumerId)) return;
+        _socket.emitWithAck('resumeConsumer', {
+          'meetingId': meetingId,
+          'consumerId': consumerId,
+        }, ack: ([dynamic _]) {});
+      });
+    } catch (e) {
+      _log('[SFU] keyframe-pump pause/resume error: $e');
+    }
   }
 
   Future<Map<String, dynamic>?> _emitWithAck(
