@@ -1,18 +1,25 @@
 class ApiConfig {
-  /*
-  // Replace with your local machine's IP address (run `ipconfig` on Windows)
-  static const String pcIp = '192.168.1.24'; 
+  // ── Local dev server ────────────────────────────────────────────
+  // Point at the backend dev's machine on the local network. The
+  // server runs media + signaling + REST on a single port (3001) and
+  // exposes the same `/signaling-fresh` and `/media-fresh` engine.io
+  // paths as production, so only the host:port needs to change.
+  //
+  // Requires `android:usesCleartextTraffic="true"` in
+  // AndroidManifest.xml (already set) since this is plain HTTP. iOS
+  // Info.plist also needs `NSAllowsArbitraryLoads` if testing on iOS.
+  //
+  // To switch back to production, replace `_devHost` with the
+  // production URL: `https://mizdah-backend.ogoul.cloud`.
+  static const String _devHost = 'http://192.168.1.117:3001';
 
-  // Ports as defined in FLUTTER_API_SWAGGER.md
-  static const String gatewayPort = '3000';
-  static const String signalingPort = '3001';
-  static const String chatSocketPort = '4005';
-  */
+  // ── Production (kept for easy revert) ───────────────────────────
+  // static const String _devHost = 'https://mizdah-backend.ogoul.cloud';
 
-  static const String baseUrl = 'https://mizdah-backend.ogoul.cloud';
-  static const String signalingUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String baseUrl = _devHost;
+  static const String signalingUrl = _devHost;
   static const String signalingPath = '/signaling-fresh';
-  static const String chatSocketUrl = 'https://mizdah-backend.ogoul.cloud';
+  static const String chatSocketUrl = _devHost;
   static const String mediaPath = '/media-fresh';
 
   // API Endpoints
