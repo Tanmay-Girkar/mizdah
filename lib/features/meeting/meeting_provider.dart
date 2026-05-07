@@ -346,7 +346,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v4 2026-05-07 (early-bootstrap)';
+  static const String _kBuildStamp = 'sfu-v5 2026-05-07 (wait-for-sid)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2538,6 +2538,37 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       _log('[SFU] _produceLocalTracksToSfu — skipped (svc/stream/ready false)');
       return;
     }
+
+    // ⚠️ CRITICAL: wait for the signaling socket id to be available
+    // before producing. The producer's `appData.socketId` carries
+    // OUR signaling socket id; web peers route incoming producers to
+    // their participant tiles by socketId. With the EARLY bootstrap
+    // path (host hint), produce can otherwise fire before the
+    // signaling socket has connected — `_socket?.id` returns null,
+    // mediasoup ships the producer with `appData.socketId=''`, and
+    // the web client drops the video on the floor (it can't find a
+    // participant tile keyed by empty string).
+    //
+    // Symptom this fixes: "user side video screen is displaying in
+    // my side but my side video screen is not displaying in user
+    // side". Mobile encodes & uploads RTP fine (REMB/twcc bitrate
+    // adaptation visible in MediaCodec logs), but web silently
+    // discards the producer — there's no JS error, just no tile.
+    final waitStart = DateTime.now();
+    while (mounted &&
+        !_disposed &&
+        (_socket?.id == null || _socket!.id!.isEmpty)) {
+      if (DateTime.now().difference(waitStart) >
+          const Duration(seconds: 8)) {
+        _log('[SFU] _produceLocalTracksToSfu — timed out waiting for '
+            'signaling socket id; producing anyway with empty socketId '
+            '(web peers may not see this stream)');
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    _log('[SFU] _produceLocalTracksToSfu — signaling sid=${_socket?.id} '
+        '(waited ${DateTime.now().difference(waitStart).inMilliseconds}ms)');
     final audio = stream.getAudioTracks().isNotEmpty
         ? stream.getAudioTracks().first
         : null;
