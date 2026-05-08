@@ -474,7 +474,7 @@ class _BlobIllustration extends StatelessWidget {
         return Transform.translate(
           offset: Offset(0, t * 4),
           child: Image.asset(
-            'assets/images/bg_image.jpeg',
+            'assets/images/bg_image.png',
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
               return Container(
