@@ -99,23 +99,23 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
         return AlertDialog(
           title: const Text('Repeat'),
           contentPadding: const EdgeInsets.only(top: 12.0, bottom: 12.0),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _repeatOptions.map((option) {
-              return ListTile(
-                title: Text(option),
-                leading: Radio<String>(
-                  value: option,
-                  groupValue: _repeatOption,
-                  onChanged: (String? value) {
-                    Navigator.of(context).pop(value);
+          content: RadioGroup<String>(
+            groupValue: _repeatOption,
+            onChanged: (String? value) {
+              Navigator.of(context).pop(value);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: _repeatOptions.map((option) {
+                return ListTile(
+                  title: Text(option),
+                  leading: Radio<String>(value: option),
+                  onTap: () {
+                    Navigator.of(context).pop(option);
                   },
-                ),
-                onTap: () {
-                  Navigator.of(context).pop(option);
-                },
-              );
-            }).toList(),
+                );
+              }).toList(),
+            ),
           ),
         );
       },
