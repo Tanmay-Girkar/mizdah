@@ -603,14 +603,23 @@ class SFUService {
     if (consumer.kind == 'video') {
       _videoConsumerIds.add(consumerId);
       _ensureKeyframePumpRunning();
-      // One-shot keyframe-after-attach: ~600ms after the renderer
-      // has been wired, ask for a fresh keyframe. The SFU usually
-      // sends one on the initial resumeConsumer above, but if the
-      // peer was already producing simulcast and the SFU started us
-      // on a low layer that hasn't keyframe'd yet, we'd otherwise
-      // wait several seconds for the next periodic keyframe — that
-      // shows up as "video appeared then froze" during early seconds.
-      Future.delayed(const Duration(milliseconds: 600), () {
+      // Three-shot keyframe-after-attach pump (sfu-v15):
+      //   • immediate — tells the SFU to push a keyframe as soon as
+      //     resumeConsumer is acked, so the decoder sees a frame
+      //     within the first RTT instead of waiting 5–15s for the
+      //     natural keyframe interval. This is the user-visible
+      //     "few-seconds delay before remote video appears" fix.
+      //   • 200ms — covers the case where the immediate request lost
+      //     the race against resumeConsumer's own internal PLI.
+      //   • 1500ms — last-chance for slow links where the first two
+      //     keyframes were dropped in transit.
+      _requestConsumerKeyFrame(consumerId);
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (_disposed) return;
+        if (!_videoConsumerIds.contains(consumerId)) return;
+        _requestConsumerKeyFrame(consumerId);
+      });
+      Future.delayed(const Duration(milliseconds: 1500), () {
         if (_disposed) return;
         if (!_videoConsumerIds.contains(consumerId)) return;
         _requestConsumerKeyFrame(consumerId);
