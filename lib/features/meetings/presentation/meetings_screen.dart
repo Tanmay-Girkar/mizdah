@@ -60,48 +60,59 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
       activeIndex: 1,
       body: SafeArea(
         bottom: false,
-        child: RefreshIndicator(
-          onRefresh: () async {
-            ref.invalidate(schedulesProvider);
-            ref.invalidate(callHistoryProvider);
-            await Future<void>.delayed(const Duration(milliseconds: 350));
-          },
-          color: MizdahTokens.primary,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(
-                parent: BouncingScrollPhysics()),
-            // Bottom space for the floating nav is reserved by
-            // MizdahTabScaffold so the ListView clip ends above it.
-            padding: const EdgeInsets.only(bottom: 8),
-            children: [
-              MizdahFadeUp(
-                controller: _entryCtrl,
-                delay: 0.0,
-                child: const MizdahPageHeader(
-                  leading: 'Your',
-                  accent: 'meetings',
-                  subtitle: 'Schedules · History · Quick joins',
+        // Pinned header + segment switcher above a scrollable body.
+        // Drag only moves the list; title and tab toggle stay put
+        // (WhatsApp / Telegram pattern).
+        child: Column(
+          children: [
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.0,
+              child: const MizdahPageHeader(
+                leading: 'Your',
+                accent: 'meetings',
+                subtitle: 'Schedules · History · Quick joins',
+              ),
+            ),
+            const SizedBox(height: 12),
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.10,
+              child: _SegmentSwitcher(
+                segment: _segment,
+                onChanged: (v) => setState(() => _segment = v),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () async {
+                  ref.invalidate(schedulesProvider);
+                  ref.invalidate(callHistoryProvider);
+                  await Future<void>.delayed(
+                      const Duration(milliseconds: 350));
+                },
+                color: MizdahTokens.primary,
+                displacement: 24,
+                edgeOffset: 0,
+                child: ListView(
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  children: [
+                    MizdahFadeUp(
+                      controller: _entryCtrl,
+                      delay: 0.20,
+                      child: _segment == 0
+                          ? const _UpcomingList()
+                          : const _RecentList(),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              MizdahFadeUp(
-                controller: _entryCtrl,
-                delay: 0.10,
-                child: _SegmentSwitcher(
-                  segment: _segment,
-                  onChanged: (v) => setState(() => _segment = v),
-                ),
-              ),
-              const SizedBox(height: 18),
-              MizdahFadeUp(
-                controller: _entryCtrl,
-                delay: 0.20,
-                child: _segment == 0
-                    ? const _UpcomingList()
-                    : const _RecentList(),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

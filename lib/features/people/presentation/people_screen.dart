@@ -80,12 +80,10 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
       activeIndex: 3,
       body: SafeArea(
         bottom: false,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(
-              parent: BouncingScrollPhysics()),
-          // Bottom space for the floating nav is reserved by
-            // MizdahTabScaffold so the ListView clip ends above it.
-            padding: const EdgeInsets.only(bottom: 8),
+        // Pinned title + search bar above a scrollable result list.
+        // Header stays put when the user drags so only the list
+        // bounces (WhatsApp pattern).
+        child: Column(
           children: [
             MizdahFadeUp(
               controller: _entryCtrl,
@@ -97,8 +95,6 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
               ),
             ),
             const SizedBox(height: 14),
-
-            // Search bar
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.10,
@@ -110,12 +106,17 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
               ),
             ),
             const SizedBox(height: 18),
-
-            // Body
-            MizdahFadeUp(
-              controller: _entryCtrl,
-              delay: 0.20,
-              child: async.when(
+            Expanded(
+              child: ListView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
+                padding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  MizdahFadeUp(
+                    controller: _entryCtrl,
+                    delay: 0.20,
+                    child: async.when(
                 loading: () => const Padding(
                   padding: EdgeInsets.symmetric(vertical: 60),
                   child: Center(
@@ -202,6 +203,9 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
                     ),
                   );
                 },
+              ),
+                ),
+                ],
               ),
             ),
           ],

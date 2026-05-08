@@ -56,18 +56,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       activeIndex: 4,
       body: SafeArea(
         bottom: false,
-        child: ListView(
-          physics: const BouncingScrollPhysics(),
-          // Bottom space for the floating nav is reserved by
-          // MizdahTabScaffold so the ListView clip ends above it.
-          padding: const EdgeInsets.only(bottom: 8),
+        // Pinned header (title + theme pill + subtitle) above a
+        // scrollable list of profile/stats/sections. Header doesn't
+        // bounce with drag — only the body does.
+        child: Column(
           children: [
-            // ── Page header — title on the left, compact theme
-            //    switcher pill on the right. The pill is the new
-            //    home for "Appearance": a single-tap segmented
-            //    control with sun / moon / auto icons. Premium
-            //    placement — accessible from the very top, no
-            //    scrolling required.
+            // ── PINNED page header — title + theme pill + subtitle.
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.0,
@@ -133,6 +127,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
             ),
             const SizedBox(height: 14),
+
+            // ── Scrollable body ─────────────────────────────────
+            Expanded(
+              child: ListView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
+                padding: const EdgeInsets.only(bottom: 8),
+                children: [
 
             // ── Profile card (gradient hero) ─────────────────────
             MizdahFadeUp(
@@ -261,6 +264,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   fontWeight: FontWeight.w500,
                   letterSpacing: 0.4,
                 ),
+              ),
+            ),
+                ],
               ),
             ),
           ],

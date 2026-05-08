@@ -110,11 +110,12 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
       activeIndex: 2,
       body: SafeArea(
         bottom: false,
-        child: ListView(
-          physics: const BouncingScrollPhysics(),
-          // Bottom space for the floating nav is reserved by
-            // MizdahTabScaffold so the ListView clip ends above it.
-            padding: const EdgeInsets.only(bottom: 8),
+        // Pinned header + search field above a scrollable result
+        // list. Crucial for this screen — when the keyboard pops
+        // up to fill in the search query, the title and search
+        // bar stay locked at the top while only the results
+        // compress (WhatsApp / Telegram pattern).
+        child: Column(
           children: [
             MizdahFadeUp(
               controller: _entryCtrl,
@@ -126,7 +127,6 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
               ),
             ),
             const SizedBox(height: 16),
-
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.10,
@@ -141,20 +141,27 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
               ),
             ),
             const SizedBox(height: 18),
-
-            // Body — search results win when there's a query, else
-            // the recent-contacts list.
-            MizdahFadeUp(
-              controller: _entryCtrl,
-              delay: 0.18,
-              child: _query.isEmpty
-                  ? _RecentContactsSection(onCall: _placeCall)
-                  : _SearchResultsSection(
-                      results: _results,
-                      busy: _searching,
-                      query: _query,
-                      onCall: _placeCall,
-                    ),
+            Expanded(
+              child: ListView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
+                padding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  MizdahFadeUp(
+                    controller: _entryCtrl,
+                    delay: 0.18,
+                    child: _query.isEmpty
+                        ? _RecentContactsSection(onCall: _placeCall)
+                        : _SearchResultsSection(
+                            results: _results,
+                            busy: _searching,
+                            query: _query,
+                            onCall: _placeCall,
+                          ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

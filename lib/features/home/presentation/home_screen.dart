@@ -114,6 +114,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       drawer: const MizdahDrawer(),
       endDrawer: const NotificationsDrawer(),
       backgroundColor: md.MizdahTokens.bg(context),
+      // Don't let the keyboard push the whole layout up — only the
+      // active scroll region inside `Expanded` should compress.
+      // Matches WhatsApp's behaviour where the header stays put
+      // even when an input field at the bottom is focused.
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // Faint background gradient wash — adaptive: lavender →
@@ -128,12 +133,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             ),
           ),
 
-          // Scroll area — explicitly bounded ABOVE the floating nav
-          // (`bottom: navInset`). With this constraint the ListView's
-          // clip rect ends above the nav, so scrolling content can
-          // never render underneath it (WhatsApp / Telegram / Zoom-
-          // style behaviour). Items physically disappear at the edge
-          // of the box rather than being covered by an opaque pill.
+          // Body — bounded ABOVE the floating nav (`bottom: navInset`)
+          // so scroll content can never render under the nav. Inside,
+          // the layout splits into a PINNED header + a scrollable
+          // body so dragging only moves the list. Header, logo,
+          // hamburger and bell stay locked in place — no parent
+          // bounce, no parallax, just the list responding.
           Positioned(
             top: 0,
             left: 0,
@@ -141,40 +146,53 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             bottom: navInset,
             child: SafeArea(
               bottom: false,
-              child: RefreshIndicator(
-                color: _Tokens.primary,
-                onRefresh: () async {
-                  ref.invalidate(callHistoryProvider);
-                  ref.invalidate(schedulesProvider);
-                },
-                child: ListView(
-                  // Tiny inner padding for breathing room at the
-                  // last item — the bulk of the bottom inset is
-                  // already reserved by the parent Positioned.
-                  padding: const EdgeInsets.only(bottom: 8),
-                  physics: const BouncingScrollPhysics(
-                      parent: AlwaysScrollableScrollPhysics()),
-                  children: [
-                    _Header(entryCtrl: _entryCtrl),
-                    _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
-                    const SizedBox(height: 8),
-                    _ActionCardsRow(entryCtrl: _entryCtrl),
-                    const SizedBox(height: 24),
-                    _UpcomingSection(entryCtrl: _entryCtrl),
-                    const SizedBox(height: 14),
-                    _RecentActivityCard(entryCtrl: _entryCtrl),
-                    const SizedBox(height: 16),
-                  ],
-                ),
+              child: Column(
+                children: [
+                  // ── Pinned header — stays put during scroll ─────
+                  _Header(entryCtrl: _entryCtrl),
+                  // ── Scrollable content area ─────────────────────
+                  Expanded(
+                    child: RefreshIndicator(
+                      color: _Tokens.primary,
+                      // Spinner appears 32 px below the top of the
+                      // scroll region so it lives in the body, not
+                      // over the header — keeps the gesture subtle.
+                      displacement: 32,
+                      edgeOffset: 0,
+                      onRefresh: () async {
+                        ref.invalidate(callHistoryProvider);
+                        ref.invalidate(schedulesProvider);
+                      },
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        // BouncingScrollPhysics → native iOS feel,
+                        // ClampingScrollPhysics fallback on Android
+                        // via ScrollBehavior. The header is now
+                        // outside this widget so the bounce stays
+                        // contained to the list area.
+                        physics: const BouncingScrollPhysics(
+                          parent: AlwaysScrollableScrollPhysics(),
+                        ),
+                        children: [
+                          _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
+                          const SizedBox(height: 8),
+                          _ActionCardsRow(entryCtrl: _entryCtrl),
+                          const SizedBox(height: 24),
+                          _UpcomingSection(entryCtrl: _entryCtrl),
+                          const SizedBox(height: 14),
+                          _RecentActivityCard(entryCtrl: _entryCtrl),
+                          const SizedBox(height: 16),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
 
           // The floating nav is rendered by the shell route
-          // (`MizdahTabsShell`) so it never rebuilds on tab change
-          // — switching between Home / Meetings / Call / People /
-          // Settings is an instant IndexedStack swap with no
-          // flicker.
+          // (`MizdahTabsShell`) so it never rebuilds on tab change.
         ],
       ),
     );
