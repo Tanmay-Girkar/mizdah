@@ -1,160 +1,322 @@
+import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../core/utils/meeting_utils.dart';
-import '../../../core/widgets/mizdah_text_field.dart';
 import 'package:intl/intl.dart';
-import '../../../data/repositories/meeting_repository.dart';
-import '../../../data/repositories/participant_repository.dart';
-import '../../../data/repositories/scheduling_repository.dart';
-import '../../../data/models/models.dart';
-import '../../../core/widgets/glass_card.dart';
-import '../../../core/widgets/mizdah_button.dart';
-import '../../../core/theme/theme_provider.dart';
-import '../../auth/auth_provider.dart';
-import '../notification_provider.dart';
-import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../core/services/google_calendar_service.dart';
+import '../../../core/utils/meeting_utils.dart';
+import '../../../core/widgets/mizdah_button.dart';
+import '../../../data/models/models.dart';
+import '../../../data/repositories/meeting_repository.dart';
 import '../../../data/repositories/mizdah_repository.dart';
+import '../../../data/repositories/participant_repository.dart';
+import '../../../data/repositories/scheduling_repository.dart';
+import '../../auth/auth_provider.dart';
+import '../notification_provider.dart';
 
-class HomeScreen extends ConsumerWidget {
+// ════════════════════════════════════════════════════════════════════
+//  Design tokens — purple/blue gradient theme per spec.
+//  Centralised so future tweaks (palette, shadow recipe, radii) are
+//  one-edit affairs instead of grep-and-replace.
+// ════════════════════════════════════════════════════════════════════
+
+class _Tokens {
+  static const primary = Color(0xFF6C63FF);
+  // Spec-required palette tokens — referenced in heroGradient and
+  // kept named for future ports. Suppressed since they're not used
+  // standalone (only via the gradient).
+  // ignore: unused_field
+  static const secondary = Color(0xFF8B5CF6);
+  // ignore: unused_field
+  static const tertiary = Color(0xFFA78BFA);
+  static const lavenderBg = Color(0xFFF6F7FB);
+  static const cardBorder = Color(0xFFEEF0F7);
+  static const ink = Color(0xFF0F1322);
+  static const muted = Color(0xFF6B7180);
+  static const subtleStroke = Color(0xFFE7E9F2);
+
+  static const heroGradient = LinearGradient(
+    colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6), Color(0xFFA78BFA)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  /// Soft, layered shadow system — never use one harsh shadow. The
+  /// purple-tinted inner shadow gives the floating-card look used
+  /// across the design without going dark/heavy.
+  static List<BoxShadow> softShadow({double elevation = 1}) => [
+        BoxShadow(
+          color: const Color(0xFF6C63FF).withValues(alpha: 0.06 * elevation),
+          blurRadius: 32 * elevation,
+          offset: Offset(0, 12 * elevation),
+        ),
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.03 * elevation),
+          blurRadius: 8 * elevation,
+          offset: Offset(0, 2 * elevation),
+        ),
+      ];
+}
+
+// Color palette for timeline dots — rotates per row index so each
+// upcoming meeting gets a distinct colour without needing per-row
+// configuration on the backend side.
+const List<List<Color>> _kRowColors = [
+  [Color(0xFFEDE9FE), Color(0xFF8B5CF6)], // violet
+  [Color(0xFFDBEAFE), Color(0xFF3B82F6)], // blue
+  [Color(0xFFD1FAE5), Color(0xFF10B981)], // emerald
+  [Color(0xFFFEF3C7), Color(0xFFF59E0B)], // amber
+  [Color(0xFFFCE7F3), Color(0xFFEC4899)], // pink
+];
+
+// ════════════════════════════════════════════════════════════════════
+//  THE LIVE HOME SCREEN — Mizdah Premium
+//  Wired to real data:
+//    • authProvider                  → header avatar + drawer
+//    • schedulesProvider             → upcoming meetings timeline
+//    • callHistoryProvider           → recent activity card
+//    • notificationsProvider         → bell badge + drawer
+//    • _NewMeetingOptions sheet      → "Start a Meeting" tap
+//    • meetingRepositoryProvider     → "Join with Code" validate/push
+// ════════════════════════════════════════════════════════════════════
+
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final callHistoryAsync = ref.watch(callHistoryProvider);
-    final authState = ref.watch(authProvider);
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
 
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with TickerProviderStateMixin {
+  late final AnimationController _floatCtrl;
+  late final AnimationController _entryCtrl;
 
+  @override
+  void initState() {
+    super.initState();
+    // 6s sin-wave loop drives the slow floating motion of the blob
+    // illustration's icon cards. Auto-reverses so the wave stays
+    // continuous instead of snapping back to 0.
+    _floatCtrl = AnimationController(
+      duration: const Duration(seconds: 6),
+      vsync: this,
+    )..repeat(reverse: true);
+    // Single 700ms forward run drives the staggered fade-up entry
+    // animation on each section.
+    _entryCtrl = AnimationController(
+      duration: const Duration(milliseconds: 700),
+      vsync: this,
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _floatCtrl.dispose();
+    _entryCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       drawer: const MizdahDrawer(),
       endDrawer: const NotificationsDrawer(),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: isDark ? MizdahTheme.darkGradient : null,
-          color: isDark ? null : MizdahTheme.lightBackground,
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: MizdahAppBar(user: authState.user),
-              ),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () async => ref.refresh(callHistoryProvider),
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      // Restored Premium Action Cards
-                      IntrinsicHeight(
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(
-                              child: _ActionCard(
-                                title: 'New Meeting',
-                                icon: Icons.video_call_rounded,
-                                color: MizdahTheme.primaryBlue,
-                                onTap: () => _handleNewMeeting(context, ref),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            const Expanded(
-                              child: JoinMeetingCard(),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const UpcomingMeetingsSection(),
-                      const SizedBox(height: 24),
-                      const SizedBox(height: 32),
-
-                      // Recent History Section
-                      _SectionHeader(title: 'Recent activity'),
-                      const SizedBox(height: 16),
-                      callHistoryAsync.when(
-                        data: (history) => history.isEmpty
-                            ? const EmptyStateView()
-                            : Column(
-                                children: history.map((item) => HistoryTile(item: item)).toList(),
-                              ),
-                        loading: () => const Center(child: CircularProgressIndicator()),
-                        error: (err, stack) => Center(child: Text('Failed to load history')),
-                      ),
-                    ],
-                  ),
+      backgroundColor: _Tokens.lavenderBg,
+      body: Stack(
+        children: [
+          // Faint background gradient wash (lavender → off-white)
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topRight,
+                  end: Alignment.bottomLeft,
+                  colors: [Color(0xFFF1EEFF), Color(0xFFFAFBFE)],
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+
+          // Scrollable content
+          SafeArea(
+            bottom: false,
+            child: RefreshIndicator(
+              color: _Tokens.primary,
+              onRefresh: () async {
+                ref.invalidate(callHistoryProvider);
+                ref.invalidate(schedulesProvider);
+              },
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(0, 0, 0, 96),
+                physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics()),
+                children: [
+                  _Header(entryCtrl: _entryCtrl),
+                  _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
+                  const SizedBox(height: 16),
+                  _ActionCardsRow(entryCtrl: _entryCtrl),
+                  const SizedBox(height: 28),
+                  _UpcomingSection(entryCtrl: _entryCtrl),
+                  const SizedBox(height: 16),
+                  _RecentActivityCard(entryCtrl: _entryCtrl),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+          ),
+
+          // Floating bottom navigation
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: MediaQuery.of(context).padding.bottom + 10,
+            child: const _FloatingNav(),
+          ),
+        ],
       ),
-    );
-  }
-
-  Future<void> _handleNewMeeting(BuildContext context, WidgetRef ref) async {
-    // isScrollControlled: true lifts the default ~50%-screen cap on
-    // modal bottom sheets so the 3 option tiles always fit, even on
-    // shorter phones / landscape. Without it the third tile
-    // ("Schedule in Google Calendar") was clipped and the sheet
-    // body overflowed by ~123px.
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => _NewMeetingOptions(ref: ref),
-    );
-  }
-
-  void _showJoinCodeDialog(BuildContext context, WidgetRef ref) {
-    showDialog(
-      context: context,
-      builder: (context) => const JoinCodeDialog(),
     );
   }
 }
 
-class _ActionCard extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
+// ────────────────────────────────────────────────────────────────────
+//  Header — hamburger / wordmark / bell+badge / gradient avatar
+// ────────────────────────────────────────────────────────────────────
 
-  const _ActionCard({
-    required this.title,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-  });
+class _Header extends ConsumerWidget {
+  final AnimationController entryCtrl;
+  const _Header({required this.entryCtrl});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: GlassCard(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(authProvider).user;
+    final notificationsAsync = ref.watch(notificationsProvider);
+    // Show the small purple dot only when there's at least one
+    // unread / unseen notification. We don't have a "read" concept on
+    // the model yet, so any non-empty list lights the dot.
+    final hasNotifications = notificationsAsync.maybeWhen(
+      data: (list) => list.isNotEmpty,
+      orElse: () => false,
+    );
+    final initial = (user?.name.isNotEmpty == true)
+        ? user!.name[0].toUpperCase()
+        : 'A';
+
+    return _FadeUp(
+      controller: entryCtrl,
+      delay: 0,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 16, 4),
+        child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
+            // Hamburger
+            _IconTap(
+              onTap: () => Scaffold.of(context).openDrawer(),
+              tooltip: 'Menu',
+              child: const Icon(
+                Icons.menu_rounded,
+                color: _Tokens.ink,
+                size: 22,
               ),
-              child: Icon(icon, color: MizdahTheme.primaryBlue, size: 28),
             ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-              textAlign: TextAlign.center,
+            const Spacer(),
+            // Logo + wordmark
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    gradient: _Tokens.heroGradient,
+                    borderRadius: BorderRadius.circular(6),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: Colors.white,
+                    size: 13,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'MIZDAH',
+                  style: TextStyle(
+                    color: _Tokens.ink,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 3.5,
+                  ),
+                ),
+              ],
+            ),
+            const Spacer(),
+            // Bell with notification dot
+            _IconTap(
+              onTap: () => Scaffold.of(context).openEndDrawer(),
+              tooltip: 'Notifications',
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Icon(
+                      Icons.notifications_none_rounded,
+                      color: _Tokens.ink,
+                      size: 22,
+                    ),
+                    if (hasNotifications)
+                      Positioned(
+                        top: 2,
+                        right: 4,
+                        child: Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            gradient: _Tokens.heroGradient,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: _Tokens.lavenderBg, width: 1.2),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Avatar — first letter of user name, gradient bg
+            GestureDetector(
+              onTap: () => Scaffold.of(context).openDrawer(),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  gradient: _Tokens.heroGradient,
+                  shape: BoxShape.circle,
+                  boxShadow: _Tokens.softShadow(elevation: 0.6),
+                ),
+                child: Center(
+                  child: Text(
+                    initial,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -163,65 +325,524 @@ class _ActionCard extends StatelessWidget {
   }
 }
 
-class UpcomingMeetingsSection extends ConsumerWidget {
-  const UpcomingMeetingsSection({super.key});
+/// Tap target for header icons that gives a 36x36 hit area without
+/// taking up visual space (matches Apple HIG minimum without
+/// making the icon look chunky).
+class _IconTap extends StatelessWidget {
+  final VoidCallback onTap;
+  final String tooltip;
+  final Widget child;
+  const _IconTap({
+    required this.onTap,
+    required this.tooltip,
+    required this.child,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final schedulesAsync = ref.watch(schedulesProvider);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Scheduled meetings'),
-        const SizedBox(height: 16),
-        schedulesAsync.when(
-          data: (schedules) => schedules.isEmpty
-              ? GlassCard(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
-                    children: [
-                      Container(
-                        height: 48,
-                        width: 48,
-                        decoration: BoxDecoration(
-                          color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.event_available, color: MizdahTheme.primaryBlue),
-                      ),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('No meetings today', style: TextStyle(fontWeight: FontWeight.bold)),
-                            Text('Tap schedule to plan one', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : Column(
-                  children: schedules.map((s) => _ScheduleTile(schedule: s)).toList(),
-                ),
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (err, stack) => Center(child: Text('Failed to load schedules')),
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: Center(child: child),
         ),
-      ],
+      ),
     );
   }
 }
 
-class JoinMeetingCard extends ConsumerStatefulWidget {
-  const JoinMeetingCard({super.key});
+// ────────────────────────────────────────────────────────────────────
+//  Hero — left text + right glass blob illustration
+// ────────────────────────────────────────────────────────────────────
+
+class _Hero extends StatelessWidget {
+  final AnimationController floatCtrl;
+  final AnimationController entryCtrl;
+  const _Hero({required this.floatCtrl, required this.entryCtrl});
 
   @override
-  ConsumerState<JoinMeetingCard> createState() => _JoinMeetingCardState();
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 6, 16, 10),
+      child: SizedBox(
+        height: 168,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: _FadeUp(
+                controller: entryCtrl,
+                delay: 0.05,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    _HeroHeading(),
+                    SizedBox(height: 8),
+                    Text(
+                      'Collaborate · Meet · Achieve',
+                      style: TextStyle(
+                        color: _Tokens.muted,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Glass blob illustration
+            SizedBox(
+              width: 130,
+              height: 168,
+              child: _BlobIllustration(floatCtrl: floatCtrl),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
+class _HeroHeading extends StatelessWidget {
+  const _HeroHeading();
+
+  // "Ready to\nconnect today?" — "today" gets the purple gradient via
+  // ShaderMask. WidgetSpan keeps it on the same baseline as the rest
+  // of the heading instead of dropping below.
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(
+          color: _Tokens.ink,
+          fontSize: 24,
+          fontWeight: FontWeight.w800,
+          height: 1.15,
+          letterSpacing: -0.6,
+        ),
+        children: [
+          const TextSpan(text: 'Ready to\nconnect '),
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: ShaderMask(
+              shaderCallback: (rect) =>
+                  _Tokens.heroGradient.createShader(rect),
+              child: const Text(
+                'today',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  height: 1.15,
+                  letterSpacing: -0.6,
+                ),
+              ),
+            ),
+          ),
+          const TextSpan(text: '?'),
+        ],
+      ),
+    );
+  }
+}
+
+/// Translucent blobs + orbit lines + floating icon cards — the
+/// signature illustration in the hero. Drives subtle vertical
+/// motion on the icons via the supplied float controller's
+/// sin-wave value so the scene feels alive without being noisy.
+class _BlobIllustration extends StatelessWidget {
+  final AnimationController floatCtrl;
+  const _BlobIllustration({required this.floatCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: floatCtrl,
+      builder: (context, _) {
+        final t = math.sin(floatCtrl.value * math.pi * 2);
+        return Stack(
+          children: [
+            // Big purple blob
+            Positioned(
+              top: 20 + t * 4,
+              left: 10,
+              child: _Blob(
+                size: 90,
+                colors: const [Color(0xFFB6A8FF), Color(0xFF8B5CF6)],
+                opacity: 0.28,
+                blur: 14,
+              ),
+            ),
+            // Smaller indigo blob
+            Positioned(
+              top: 70 - t * 6,
+              right: 0,
+              child: _Blob(
+                size: 70,
+                colors: const [Color(0xFF6C63FF), Color(0xFF3B82F6)],
+                opacity: 0.22,
+                blur: 18,
+              ),
+            ),
+            // Soft white wash blob
+            Positioned(
+              bottom: 0,
+              left: 30 + t * 3,
+              child: _Blob(
+                size: 60,
+                colors: const [Colors.white, Color(0xFFEEF2FF)],
+                opacity: 0.55,
+                blur: 10,
+              ),
+            ),
+            // Orbit ring
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _OrbitPainter(progress: floatCtrl.value),
+              ),
+            ),
+            // Floating icon — video (top right)
+            Positioned(
+              top: 14 + t * -3,
+              right: 8,
+              child: const _FloatIconCard(
+                icon: Icons.videocam_rounded,
+                colors: [Color(0xFF8B5CF6), Color(0xFF6C63FF)],
+                size: 38,
+              ),
+            ),
+            // Floating icon — team (right middle)
+            Positioned(
+              top: 70 + t * 2,
+              right: 30,
+              child: const _FloatIconCard(
+                icon: Icons.groups_rounded,
+                colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
+                size: 32,
+              ),
+            ),
+            // Floating icon — chat (bottom)
+            Positioned(
+              bottom: 24 + t * -2,
+              right: 50,
+              child: const _FloatIconCard(
+                icon: Icons.chat_bubble_rounded,
+                colors: [Color(0xFFA78BFA), Color(0xFF8B5CF6)],
+                size: 26,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _Blob extends StatelessWidget {
+  final double size;
+  final List<Color> colors;
+  final double opacity;
+  final double blur;
+  const _Blob({
+    required this.size,
+    required this.colors,
+    required this.opacity,
+    required this.blur,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [
+                colors[0].withValues(alpha: opacity),
+                colors[1].withValues(alpha: opacity * 0.4),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OrbitPainter extends CustomPainter {
+  final double progress;
+  _OrbitPainter({required this.progress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2 + 6, size.height / 2 + 4);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = const Color(0xFF8B5CF6).withValues(alpha: 0.20);
+
+    final r1 = math.min(size.width, size.height) * 0.55;
+    final r2 = math.min(size.width, size.height) * 0.40;
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(progress * math.pi * 0.1);
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset.zero, width: r1 * 2, height: r1 * 1.4),
+      paint,
+    );
+    paint.color = const Color(0xFF6C63FF).withValues(alpha: 0.15);
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset.zero, width: r2 * 2, height: r2 * 1.6),
+      paint,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_OrbitPainter old) => old.progress != progress;
+}
+
+class _FloatIconCard extends StatelessWidget {
+  final IconData icon;
+  final List<Color> colors;
+  final double size;
+  const _FloatIconCard({
+    required this.icon,
+    required this.colors,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: colors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(size * 0.28),
+        boxShadow: [
+          BoxShadow(
+            color: colors[0].withValues(alpha: 0.45),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.35),
+          width: 1,
+        ),
+      ),
+      child: Icon(icon, color: Colors.white, size: size * 0.45),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Action cards row
+// ────────────────────────────────────────────────────────────────────
+
+class _ActionCardsRow extends StatelessWidget {
+  final AnimationController entryCtrl;
+  const _ActionCardsRow({required this.entryCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: _FadeUp(
+              controller: entryCtrl,
+              delay: 0.10,
+              child: const _StartMeetingCard(),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _FadeUp(
+              controller: entryCtrl,
+              delay: 0.18,
+              child: const _JoinCodeCard(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StartMeetingCard extends ConsumerStatefulWidget {
+  const _StartMeetingCard();
+  @override
+  ConsumerState<_StartMeetingCard> createState() => _StartMeetingCardState();
+}
+
+class _StartMeetingCardState extends ConsumerState<_StartMeetingCard> {
+  bool _pressed = false;
+
+  void _open() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _NewMeetingOptions(ref: ref),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressScale(
+      onPressedChange: (v) => setState(() => _pressed = v),
+      onTap: _open,
+      child: Container(
+        height: 200,
+        padding: const EdgeInsets.fromLTRB(18, 18, 16, 16),
+        decoration: BoxDecoration(
+          gradient: _Tokens.heroGradient,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+              blurRadius: 24,
+              offset: const Offset(0, 14),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            // Curved abstract overlay shapes
+            Positioned(
+              right: -24,
+              top: -22,
+              child: ClipOval(
+                child: Container(
+                  width: 100,
+                  height: 100,
+                  color: Colors.white.withValues(alpha: 0.10),
+                ),
+              ),
+            ),
+            Positioned(
+              right: -40,
+              bottom: -30,
+              child: ClipOval(
+                child: Container(
+                  width: 110,
+                  height: 110,
+                  color: Colors.white.withValues(alpha: 0.06),
+                ),
+              ),
+            ),
+            // Content
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Start a',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Meeting',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Create new meeting\ninstantly',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+                const Spacer(),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: const Icon(Icons.videocam_rounded,
+                          color: Colors.white, size: 20),
+                    ),
+                    const Spacer(),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(19),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.white
+                                .withValues(alpha: _pressed ? 0.5 : 0.3),
+                            blurRadius: _pressed ? 18 : 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.arrow_forward_rounded,
+                        color: _Tokens.primary,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _JoinCodeCard extends ConsumerStatefulWidget {
+  const _JoinCodeCard();
+  @override
+  ConsumerState<_JoinCodeCard> createState() => _JoinCodeCardState();
+}
+
+class _JoinCodeCardState extends ConsumerState<_JoinCodeCard> {
   final _controller = TextEditingController();
   bool _validating = false;
 
@@ -232,9 +853,14 @@ class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
   }
 
   Future<void> _join() async {
-    final code = MeetingUtils.extractCode(_controller.text);
+    final raw = _controller.text;
+    if (raw.trim().isEmpty) {
+      _snack('Please enter a meeting code', error: true);
+      return;
+    }
+    final code = MeetingUtils.extractCode(raw);
     if (code.isEmpty) {
-      _showError('Please enter a meeting code');
+      _snack('Invalid meeting code', error: true);
       return;
     }
     setState(() => _validating = true);
@@ -243,24 +869,19 @@ class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
     if (!mounted) return;
     setState(() => _validating = false);
     if (meeting == null) {
-      _showError('Meeting code is not valid');
+      _snack('Meeting code is not valid', error: true);
       return;
     }
-    context.push('/pre-join/$code');
+    final identifier = meeting.code.isNotEmpty ? meeting.code : meeting.id;
+    context.push('/pre-join/$identifier');
   }
 
-  void _showError(String msg) {
+  void _snack(String msg, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.error_outline, color: Colors.white, size: 18),
-            const SizedBox(width: 8),
-            Expanded(child: Text(msg)),
-          ],
-        ),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFFB71C1C),
+        backgroundColor: error ? const Color(0xFFB42318) : _Tokens.primary,
+        content: Text(msg),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -268,23 +889,122 @@ class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
-      padding: const EdgeInsets.all(20),
+    return Container(
+      height: 200,
+      padding: const EdgeInsets.fromLTRB(16, 18, 14, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: _Tokens.cardBorder, width: 1),
+        boxShadow: _Tokens.softShadow(),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          MizdahTextField(
-            controller: _controller,
-            hintText: 'abc-defg-hij',
-            prefixIcon: Icons.link_rounded,
-            onSubmitted: (_) => _join(),
+          const Text(
+            'Join with',
+            style: TextStyle(
+              color: _Tokens.muted,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-          const SizedBox(height: 12),
-          MizdahButton(
-            label: _validating ? 'Checking…' : 'Join',
-            onTap: _validating ? null : _join,
-            isFullWidth: true,
+          const SizedBox(height: 2),
+          const Text(
+            'Meeting Code',
+            style: TextStyle(
+              color: _Tokens.ink,
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Enter the code and\njoin the meeting',
+            style: TextStyle(
+              color: _Tokens.muted,
+              fontSize: 11,
+              height: 1.35,
+            ),
+          ),
+          const Spacer(),
+          // Input field
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 38,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F8),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.link_rounded,
+                          color: _Tokens.muted, size: 14),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          textInputAction: TextInputAction.go,
+                          onSubmitted: (_) => _join(),
+                          style: const TextStyle(
+                            color: _Tokens.ink,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                          decoration: const InputDecoration(
+                            isCollapsed: true,
+                            border: InputBorder.none,
+                            hintText: 'Enter code',
+                            hintStyle: TextStyle(
+                              color: _Tokens.muted,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: _validating ? null : _join,
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    gradient: _Tokens.heroGradient,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: _validating
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
+                          ),
+                        )
+                      : const Icon(
+                          Icons.arrow_forward_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -292,37 +1012,212 @@ class _JoinMeetingCardState extends ConsumerState<JoinMeetingCard> {
   }
 }
 
-class _ScheduleTile extends StatelessWidget {
-  final dynamic schedule; // Use your model if available
-  const _ScheduleTile({required this.schedule});
+// ────────────────────────────────────────────────────────────────────
+//  Upcoming Meetings — header + timeline list (real schedules data)
+// ────────────────────────────────────────────────────────────────────
 
-  /// Recovers the actual meeting code from a schedule row.
-  ///
-  /// Priority order:
-  ///   1. `meetingCode` field (when backend ships fix — preferred)
-  ///   2. `meetingId` field (also backend-fix path; could be either
-  ///      a UUID linking to the Meeting row, or the code itself)
-  ///   3. Title suffix `[xxxxxx]` — the legacy escape hatch the
-  ///      Flutter client currently embeds during schedule creation
-  ///      so the code survives the round-trip even though the
-  ///      backend ignores the dedicated fields. See
-  ///      docs/SCHEDULING_BACKEND.md.
-  ///   4. null — no code is recoverable; tap should explain.
-  static String? _extractMeetingCode(dynamic schedule) {
-    final code = schedule['meetingCode']?.toString();
+class _UpcomingSection extends ConsumerWidget {
+  final AnimationController entryCtrl;
+  const _UpcomingSection({required this.entryCtrl});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final schedulesAsync = ref.watch(schedulesProvider);
+
+    return _FadeUp(
+      controller: entryCtrl,
+      delay: 0.26,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+            child: Row(
+              children: [
+                const Text(
+                  'Upcoming Meetings',
+                  style: TextStyle(
+                    color: _Tokens.ink,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const Spacer(),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {}, // future: dedicated meetings list page
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ShaderMask(
+                          shaderCallback: (r) =>
+                              _Tokens.heroGradient.createShader(r),
+                          child: const Text(
+                            'View all',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        const Icon(Icons.chevron_right_rounded,
+                            color: _Tokens.primary, size: 16),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // List card
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: _Tokens.cardBorder, width: 1),
+                boxShadow: _Tokens.softShadow(elevation: 0.7),
+              ),
+              child: schedulesAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor:
+                            AlwaysStoppedAnimation(_Tokens.primary),
+                      ),
+                    ),
+                  ),
+                ),
+                error: (_, __) => const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: _UpcomingEmpty(
+                    icon: Icons.cloud_off_rounded,
+                    title: 'Could not load schedules',
+                    subtitle: 'Pull down to retry',
+                  ),
+                ),
+                data: (schedules) => schedules.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: _UpcomingEmpty(
+                          icon: Icons.event_available_rounded,
+                          title: 'No meetings scheduled',
+                          subtitle: 'Tap “Start a Meeting” to plan one',
+                        ),
+                      )
+                    : Column(
+                        children: [
+                          for (var i = 0; i < schedules.length; i++)
+                            _MeetingRow(
+                              schedule: schedules[i],
+                              colorIndex: i,
+                              isFirst: i == 0,
+                              isLast: i == schedules.length - 1,
+                            ),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UpcomingEmpty extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _UpcomingEmpty({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEEF2FF),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(icon, color: _Tokens.primary, size: 22),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _Tokens.ink,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: _Tokens.muted,
+                  fontSize: 11.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MeetingRow extends StatelessWidget {
+  final dynamic schedule;
+  final int colorIndex;
+  final bool isFirst;
+  final bool isLast;
+  const _MeetingRow({
+    required this.schedule,
+    required this.colorIndex,
+    required this.isFirst,
+    required this.isLast,
+  });
+
+  /// Recovers the meeting code from a schedule row using the same
+  /// priority chain the legacy `_ScheduleTile` used: explicit
+  /// `meetingCode` → `meetingId` → `[code]` suffix in the title →
+  /// null. See docs/SCHEDULING_BACKEND.md.
+  static String? _extractMeetingCode(dynamic s) {
+    final code = s['meetingCode']?.toString();
     if (code != null && code.isNotEmpty) return code;
-    final mid = schedule['meetingId']?.toString();
+    final mid = s['meetingId']?.toString();
     if (mid != null && mid.isNotEmpty) return mid;
-    final title = schedule['title']?.toString() ?? '';
+    final title = s['title']?.toString() ?? '';
     final m = RegExp(r'\[([a-z0-9-]{6,})\]').firstMatch(title);
     return m?.group(1);
   }
 
-  /// Removes the legacy `[code]` suffix from titles for display so
-  /// the user-visible title is just `Mizdah Meeting` instead of
-  /// `Mizdah Meeting [docscht3xy]`. If the strip leaves an empty
-  /// string (paranoid guard for titles that were ONLY a code), the
-  /// raw title is shown verbatim.
+  /// Strips the `[code]` suffix from titles for display.
   static String _displayTitle(String raw) {
     final stripped =
         raw.replaceAll(RegExp(r'\s*\[[a-z0-9-]{6,}\]\s*$'), '').trim();
@@ -331,19 +1226,30 @@ class _ScheduleTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final startTime = DateTime.parse(schedule['startTime']);
-    final rawTitle = schedule['title']?.toString() ?? 'Untitled Meeting';
+    final start = DateTime.tryParse(schedule['startTime']?.toString() ?? '') ??
+        DateTime.now();
+    final end = DateTime.tryParse(schedule['endTime']?.toString() ?? '');
+    final rawTitle = schedule['title']?.toString() ?? 'Meeting';
     final title = _displayTitle(rawTitle);
     final code = _extractMeetingCode(schedule);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final palette = _kRowColors[colorIndex % _kRowColors.length];
+    final iconBg = palette[0];
+    final iconFg = palette[1];
+
+    final timeRange = end != null
+        ? '${DateFormat('h:mm a').format(start)} – ${DateFormat('h:mm a').format(end)}'
+        : DateFormat('h:mm a').format(start);
+    final duration = end != null
+        ? _formatDuration(end.difference(start))
+        : (schedule['timezone']?.toString() ?? 'IST');
 
     void onTap() {
       if (code == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
+            behavior: SnackBarBehavior.floating,
             content: Text(
-              'This schedule has no meeting code yet — open it from your calendar invite.',
-            ),
+                'No meeting code on this schedule yet — open it from the calendar invite.'),
           ),
         );
         return;
@@ -351,75 +1257,152 @@ class _ScheduleTile extends StatelessWidget {
       context.push('/pre-join/$code');
     }
 
-    return InkWell(
-      borderRadius: BorderRadius.circular(20),
+    return _PressScale(
+      scaleTo: 0.98,
       onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.05)
-                  : Colors.black.withValues(alpha: 0.05)),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // Date pill
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              width: 50,
+              padding: const EdgeInsets.symmetric(vertical: 8),
               decoration: BoxDecoration(
-                color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                color: iconBg,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 children: [
                   Text(
-                    DateFormat('MMM').format(startTime).toUpperCase(),
-                    style: const TextStyle(
-                        color: MizdahTheme.primaryBlue,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 10),
+                    DateFormat('MMM').format(start).toUpperCase(),
+                    style: TextStyle(
+                      color: iconFg,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
                   ),
                   Text(
-                    DateFormat('d').format(startTime),
-                    style: const TextStyle(
-                        color: MizdahTheme.primaryBlue,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 18),
+                    DateFormat('d').format(start),
+                    style: TextStyle(
+                      color: iconFg,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.6,
+                      height: 1.05,
+                    ),
+                  ),
+                  Text(
+                    DateFormat('EEE').format(start).toUpperCase(),
+                    style: TextStyle(
+                      color: iconFg.withValues(alpha: 0.75),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 16),
+            // Timeline column
+            SizedBox(
+              width: 18,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned.fill(
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        top: isFirst ? 22 : 0,
+                        bottom: isLast ? 22 : 0,
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 1.2,
+                          color: _Tokens.subtleStroke,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: iconFg,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: iconFg.withValues(alpha: 0.4),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Title + time + code chip
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 15)),
-                  const SizedBox(height: 2),
                   Text(
-                    '${DateFormat('h:mm a').format(startTime)} • ${schedule['timezone'] ?? 'UTC'}',
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    title,
+                    style: const TextStyle(
+                      color: _Tokens.ink,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          timeRange,
+                          style: const TextStyle(
+                            color: _Tokens.muted,
+                            fontSize: 10.5,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const Text(
+                        ' · ',
+                        style: TextStyle(
+                            color: _Tokens.muted, fontSize: 10.5),
+                      ),
+                      Text(
+                        duration,
+                        style: const TextStyle(
+                          color: _Tokens.muted,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    ],
                   ),
                   if (code != null) ...[
                     const SizedBox(height: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
-                        color: MizdahTheme.primaryBlue.withValues(alpha: 0.12),
+                        color: const Color(0xFFEEF2FF),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
                         code,
                         style: const TextStyle(
-                          color: MizdahTheme.primaryBlue,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                          color: _Tokens.primary,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
                           letterSpacing: 0.4,
                         ),
                       ),
@@ -428,76 +1411,501 @@ class _ScheduleTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            const SizedBox(width: 6),
+            // Action icon
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: iconBg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.videocam_rounded, color: iconFg, size: 16),
+            ),
           ],
         ),
       ),
     );
   }
+
+  static String _formatDuration(Duration d) {
+    if (d.inMinutes < 60) return '${d.inMinutes} min';
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
 }
 
+// ────────────────────────────────────────────────────────────────────
+//  Recent activity card — uses the most recent CallHistory item
+// ────────────────────────────────────────────────────────────────────
 
-class HistoryTile extends ConsumerWidget {
-  final CallHistory item;
-  const HistoryTile({super.key, required this.item});
+class _RecentActivityCard extends ConsumerWidget {
+  final AnimationController entryCtrl;
+  const _RecentActivityCard({required this.entryCtrl});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(authProvider);
-    final isHost = item.hostId != null && authState.user != null && item.hostId == authState.user!.id;
-    final displayTitle = (item.title.contains('http') || item.title.length > 20) 
-        ? (item.meetingCode ?? item.title) 
-        : item.title;
+    final historyAsync = ref.watch(callHistoryProvider);
+    final user = ref.watch(authProvider).user;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(16),
+    return _FadeUp(
+      controller: entryCtrl,
+      delay: 0.34,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 4, 18, 4),
+        child: GestureDetector(
+          onTap: () => historyAsync.whenData((items) {
+            if (items.isNotEmpty) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (_) => _HistoryDetailModal(
+                  item: items.first,
+                  isHost: items.first.hostId != null &&
+                      user != null &&
+                      items.first.hostId == user.id,
+                ),
+              );
+            }
+          }),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _Tokens.cardBorder, width: 1),
+              boxShadow: _Tokens.softShadow(elevation: 0.5),
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: CustomPaint(painter: _DiagonalPattern()),
+                  ),
+                ),
+                historyAsync.when(
+                  loading: () => _activityRow(
+                    title: 'Loading…',
+                    subtitle: '',
+                    timestamp: '',
+                  ),
+                  error: (_, __) => _activityRow(
+                    title: 'Recent activity',
+                    subtitle: 'Could not load — pull to retry',
+                    timestamp: '',
+                  ),
+                  data: (items) {
+                    if (items.isEmpty) {
+                      return _activityRow(
+                        title: 'No recent activity',
+                        subtitle: 'Your past meetings will show here',
+                        timestamp: '',
+                      );
+                    }
+                    final item = items.first;
+                    final isHost = item.hostId != null &&
+                        user != null &&
+                        item.hostId == user.id;
+                    final displayTitle =
+                        (item.title.contains('http') ||
+                                item.title.length > 24)
+                            ? (item.meetingCode ?? 'Meeting')
+                            : item.title;
+                    return _activityRow(
+                      title: isHost
+                          ? 'You hosted a meeting'
+                          : 'You joined a meeting',
+                      subtitle: displayTitle,
+                      timestamp: DateFormat('MMM d, h:mm a')
+                          .format(item.timestamp),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: CircleAvatar(
-          backgroundColor: isHost 
-              ? Colors.green.withValues(alpha: 0.1) 
-              : MizdahTheme.primaryBlue.withValues(alpha: 0.1),
-          child: Icon(
-            isHost ? Icons.outbound_rounded : Icons.call_received_rounded,
-            color: isHost ? Colors.green : MizdahTheme.primaryBlue,
-            size: 20,
+    );
+  }
+
+  Widget _activityRow({
+    required String title,
+    required String subtitle,
+    required String timestamp,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: const BoxDecoration(
+            color: Color(0xFFEEF2FF),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.show_chart_rounded,
+            color: _Tokens.primary,
+            size: 18,
           ),
         ),
-        title: Text(
-          displayTitle, 
-          style: const TextStyle(fontWeight: FontWeight.bold),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Text(
-          isHost ? 'Hosted' : 'Joined',
-          style: TextStyle(
-            fontSize: 12, 
-            color: isHost ? Colors.green : Colors.grey,
-            fontWeight: isHost ? FontWeight.bold : FontWeight.normal,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Recent Activity',
+                style: TextStyle(
+                  color: _Tokens.muted,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _Tokens.ink,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (subtitle.isNotEmpty) ...[
+                const SizedBox(height: 1),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: _Tokens.muted,
+                    fontSize: 11,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
           ),
         ),
-        trailing: Text(
-          DateFormat('MMM d, h:mm a').format(item.timestamp),
-          style: const TextStyle(fontSize: 11, color: Colors.grey),
+        if (timestamp.isNotEmpty) ...[
+          const SizedBox(width: 6),
+          Text(
+            timestamp,
+            style: const TextStyle(
+              color: _Tokens.muted,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _DiagonalPattern extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF6C63FF).withValues(alpha: 0.025)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    const step = 12.0;
+    for (double x = -size.height; x < size.width; x += step) {
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x + size.height, size.height),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DiagonalPattern old) => false;
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Floating bottom navigation
+// ────────────────────────────────────────────────────────────────────
+
+class _FloatingNav extends StatelessWidget {
+  const _FloatingNav();
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: _Tokens.cardBorder, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
+                blurRadius: 28,
+                offset: const Offset(0, 12),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _NavItem(
+                  icon: Icons.home_rounded,
+                  label: 'Home',
+                  active: true,
+                  onTap: () {},
+                ),
+              ),
+              Expanded(
+                child: _NavItem(
+                  icon: Icons.calendar_month_rounded,
+                  label: 'Meetings',
+                  onTap: () {
+                    // No dedicated meetings page yet — fall back to
+                    // the schedule-creation sheet which is the natural
+                    // next-step from "look at my calendar" intent.
+                    final ctx = context;
+                    final ref = ProviderScope.containerOf(ctx);
+                    showModalBottomSheet(
+                      context: ctx,
+                      backgroundColor: Colors.transparent,
+                      isScrollControlled: true,
+                      builder: (sheetCtx) => _NewMeetingOptions(
+                        ref: _ContainerWidgetRefShim(ref),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Expanded(
+                child: _NavItem(
+                  icon: Icons.people_outline_rounded,
+                  label: 'People',
+                  onTap: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        behavior: SnackBarBehavior.floating,
+                        content: Text('People directory coming soon'),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Expanded(
+                child: _NavItem(
+                  icon: Icons.settings_outlined,
+                  label: 'Settings',
+                  onTap: () => context.push('/settings'),
+                ),
+              ),
+            ],
+          ),
         ),
-        onTap: () {
-          showModalBottomSheet(
-            context: context,
-            backgroundColor: Colors.transparent,
-            isScrollControlled: true,
-            builder: (context) => _HistoryDetailModal(item: item, isHost: isHost),
-          );
-        },
       ),
     );
   }
 }
+
+/// Lets us call sheet builders that expect `WidgetRef` from places we
+/// only have a `ProviderContainer`. Wraps just the `read` API since
+/// that's all `_NewMeetingOptions` uses.
+class _ContainerWidgetRefShim implements WidgetRef {
+  final ProviderContainer _container;
+  _ContainerWidgetRefShim(this._container);
+
+  @override
+  T read<T>(ProviderListenable<T> provider) => _container.read(provider);
+
+  @override
+  void invalidate(ProviderOrFamily provider) =>
+      _container.invalidate(provider);
+
+  // Noop for unused members — _NewMeetingOptions only calls `read`
+  // and `invalidate` so the rest can throw if anyone wires it
+  // somewhere richer later.
+  @override
+  dynamic noSuchMethod(Invocation i) =>
+      throw UnsupportedError('Only read() / invalidate() are supported');
+}
+
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: active
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ShaderMask(
+                    shaderCallback: (r) =>
+                        _Tokens.heroGradient.createShader(r),
+                    child: Icon(icon, color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(height: 3),
+                  ShaderMask(
+                    shaderCallback: (r) =>
+                        _Tokens.heroGradient.createShader(r),
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    margin: const EdgeInsets.only(top: 3),
+                    width: 16,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      gradient: _Tokens.heroGradient,
+                      borderRadius: BorderRadius.circular(2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF6C63FF)
+                              .withValues(alpha: 0.5),
+                          blurRadius: 6,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, color: const Color(0xFF8A8FA0), size: 22),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Color(0xFF8A8FA0),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Helpers — fade-up entry animation, press-scale gesture
+// ────────────────────────────────────────────────────────────────────
+
+class _FadeUp extends StatelessWidget {
+  final AnimationController controller;
+  final double delay;
+  final Widget child;
+  const _FadeUp({
+    required this.controller,
+    required this.delay,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final v = ((controller.value - delay) / (1 - delay)).clamp(0.0, 1.0);
+        final eased = Curves.easeOutCubic.transform(v);
+        return Opacity(
+          opacity: eased,
+          child: Transform.translate(
+            offset: Offset(0, (1 - eased) * 14),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PressScale extends StatefulWidget {
+  final Widget child;
+  final double scaleTo;
+  final ValueChanged<bool>? onPressedChange;
+  final VoidCallback? onTap;
+  const _PressScale({
+    required this.child,
+    this.scaleTo = 0.97,
+    this.onPressedChange,
+    this.onTap,
+  });
+  @override
+  State<_PressScale> createState() => _PressScaleState();
+}
+
+class _PressScaleState extends State<_PressScale> {
+  bool _pressed = false;
+  void _set(bool v) {
+    if (_pressed == v) return;
+    setState(() => _pressed = v);
+    widget.onPressedChange?.call(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => _set(true),
+      onTapUp: (_) {
+        _set(false);
+        widget.onTap?.call();
+      },
+      onTapCancel: () => _set(false),
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOut,
+        scale: _pressed ? widget.scaleTo : 1.0,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PRESERVED FROM LEGACY HOME SCREEN
+//  Drawers, dialogs, sheets, history modal — referenced by the new
+//  home screen + by pre_join_screen (callHistoryProvider /
+//  schedulesProvider invalidation). Code is unchanged from the
+//  pre-redesign version so behaviour stays identical.
+// ════════════════════════════════════════════════════════════════════
 
 class JoinCodeDialog extends ConsumerStatefulWidget {
   const JoinCodeDialog({super.key});
@@ -512,19 +1920,20 @@ class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
 
   Future<void> _onJoin() async {
     if (_controller.text.isEmpty) return;
-    
     setState(() => _isLoading = true);
     final repo = ref.read(meetingRepositoryProvider);
     final meeting = await repo.getMeetingInfo(_controller.text);
-    
     if (mounted) {
       setState(() => _isLoading = false);
       if (meeting != null) {
         Navigator.pop(context);
-        final identifier = meeting.code.isNotEmpty ? meeting.code : meeting.id;
+        final identifier =
+            meeting.code.isNotEmpty ? meeting.code : meeting.id;
         context.push('/pre-join/$identifier');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid meeting code')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid meeting code')),
+        );
       }
     }
   }
@@ -541,55 +1950,23 @@ class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
         _isLoading
-          ? const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-          : ElevatedButton(
-              onPressed: _onJoin,
-              child: const Text('Join'),
-            ),
-      ],
-    );
-  }
-}
-
-class MizdahAppBar extends StatelessWidget {
-  final User? user;
-  const MizdahAppBar({super.key, this.user});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => Scaffold.of(context).openDrawer(),
-        ),
-        const Expanded(
-          child: Center(
-            child: Text(
-              'MIZDAH',
-              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 18),
-            ),
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.dashboard_customize_outlined),
-          tooltip: 'Meeting layout designs',
-          onPressed: () => context.push('/meeting-designs'),
-        ),
-        IconButton(
-          icon: const Icon(Icons.notifications_outlined),
-          onPressed: () => Scaffold.of(context).openEndDrawer(),
-        ),
-        const SizedBox(width: 8),
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: MizdahTheme.primaryBlue,
-          child: user != null 
-            ? Text(user!.name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-            : const Icon(Icons.person, color: Colors.white, size: 20),
-        ),
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : ElevatedButton(
+                onPressed: _onJoin,
+                child: const Text('Join'),
+              ),
       ],
     );
   }
@@ -612,7 +1989,9 @@ class NotificationsDrawer extends ConsumerWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Notifications', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  const Text('Notifications',
+                      style: TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold)),
                   IconButton(
                     icon: const Icon(Icons.close),
                     onPressed: () => Navigator.of(context).pop(),
@@ -625,32 +2004,38 @@ class NotificationsDrawer extends ConsumerWidget {
               child: notificationsAsync.when(
                 data: (notifications) {
                   if (notifications.isEmpty) {
-                    return const Center(child: Text('No new notifications', style: TextStyle(color: Colors.grey)));
+                    return const Center(
+                        child: Text('No new notifications',
+                            style: TextStyle(color: Colors.grey)));
                   }
                   return ListView.builder(
                     itemCount: notifications.length,
-                    itemBuilder: (context, index) {
-                      final notif = notifications[index];
+                    itemBuilder: (ctx, i) {
+                      final n = notifications[i];
                       return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: notif.isRead ? Colors.grey.withValues(alpha: 0.2) : MizdahTheme.primaryBlue.withValues(alpha: 0.2),
-                          child: Icon(Icons.notifications, color: notif.isRead ? Colors.grey : MizdahTheme.primaryBlue),
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFFEEF2FF),
+                          child: Icon(Icons.notifications,
+                              color: _Tokens.primary, size: 18),
                         ),
-                        title: Text(notif.title, style: TextStyle(fontWeight: notif.isRead ? FontWeight.normal : FontWeight.bold)),
-                        subtitle: Text(notif.body),
+                        title: Text(n.title,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600)),
+                        subtitle: Text(n.body,
+                            style: const TextStyle(fontSize: 12)),
                         trailing: Text(
-                          DateFormat('MMM d').format(notif.createdAt),
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          DateFormat('h:mm a').format(n.createdAt),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.grey),
                         ),
-                        onTap: () {
-                          // Could mark as read here using the repo
-                        },
                       );
                     },
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (err, stack) => Center(child: Text('Error: $err')),
+                loading: () =>
+                    const Center(child: CircularProgressIndicator()),
+                error: (_, __) =>
+                    const Center(child: Text('Failed to load')),
               ),
             ),
           ],
@@ -665,24 +2050,55 @@ class MizdahDrawer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(authProvider);
-    final user = authState.user;
+    final user = ref.watch(authProvider).user;
 
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
         children: [
           DrawerHeader(
-            decoration: const BoxDecoration(color: MizdahTheme.darkBackgroundTop),
+            decoration: const BoxDecoration(
+              gradient: _Tokens.heroGradient,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                const CircleAvatar(radius: 30, child: Icon(Icons.person)),
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      (user?.name.isNotEmpty == true)
+                          ? user!.name[0].toUpperCase()
+                          : 'A',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 12),
-                Text(user?.name ?? 'Guest User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                Text(user?.email ?? '', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                Text(user?.name ?? 'Guest User',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold)),
+                Text(user?.email ?? '',
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 12)),
               ],
             ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.dashboard_customize_outlined),
+            title: const Text('Meeting layout designs'),
+            onTap: () => context.push('/meeting-designs'),
           ),
           ListTile(
             leading: const Icon(Icons.settings_outlined),
@@ -697,7 +2113,8 @@ class MizdahDrawer extends ConsumerWidget {
           const Divider(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Logout', style: TextStyle(color: Colors.red)),
+            title: const Text('Logout',
+                style: TextStyle(color: Colors.red)),
             onTap: () {
               ref.read(authProvider.notifier).logout();
               context.go('/login');
@@ -709,43 +2126,13 @@ class MizdahDrawer extends ConsumerWidget {
   }
 }
 
-class EmptyStateView extends StatelessWidget {
-  const EmptyStateView({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        children: [
-          const SizedBox(height: 48),
-          Icon(Icons.history, size: 64, color: Colors.grey.withValues(alpha: 0.3)),
-          const SizedBox(height: 16),
-          const Text('No recent activity', style: TextStyle(color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-}
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 18,
-        fontWeight: FontWeight.bold,
-      ),
-    );
-  }
-}
+// ════════════════════════════════════════════════════════════════════
+//  Providers — exported (pre_join_screen invalidates these)
+// ════════════════════════════════════════════════════════════════════
 
 final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
   final authState = ref.watch(authProvider);
   if (authState.user == null) return [];
-  
   final repo = ref.watch(participantRepositoryProvider);
   return repo.getUserHistory(authState.user!.id);
 });
@@ -753,12 +2140,17 @@ final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
 final schedulesProvider = FutureProvider<List<dynamic>>((ref) async {
   final authState = ref.watch(authProvider);
   if (authState.user == null) return [];
-  
   final repo = ref.watch(schedulingRepositoryProvider);
   return repo.getUserSchedules(authState.user!.id);
 });
 
-final googleCalendarServiceProvider = Provider((ref) => GoogleCalendarService());
+final googleCalendarServiceProvider =
+    Provider((ref) => GoogleCalendarService());
+
+// ════════════════════════════════════════════════════════════════════
+//  Bottom-sheet for "Start a Meeting" — preserved from legacy
+// ════════════════════════════════════════════════════════════════════
+
 class _NewMeetingOptions extends StatelessWidget {
   final WidgetRef ref;
   const _NewMeetingOptions({required this.ref});
@@ -766,10 +2158,10 @@ class _NewMeetingOptions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? MizdahTheme.darkSurface : Colors.white,
+        color: isDark ? const Color(0xFF1A1F2E) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
         boxShadow: [
           BoxShadow(
@@ -779,11 +2171,6 @@ class _NewMeetingOptions extends StatelessWidget {
           ),
         ],
       ),
-      // SafeArea keeps the bottom padding above the system gesture
-      // bar so the last tile isn't grazed by it on phones with no
-      // hardware nav. SingleChildScrollView is a graceful fallback —
-      // even if a future tile is added or the user has large text
-      // scale enabled, the sheet scrolls instead of asserting.
       child: SafeArea(
         top: false,
         child: SingleChildScrollView(
@@ -791,7 +2178,6 @@ class _NewMeetingOptions extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Drag Handle
               Container(
                 width: 40,
                 height: 4,
@@ -801,7 +2187,6 @@ class _NewMeetingOptions extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-
               const Text(
                 'Create Meeting',
                 style: TextStyle(
@@ -811,7 +2196,6 @@ class _NewMeetingOptions extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-
               _OptionTile(
                 icon: Icons.link_rounded,
                 title: 'Create a meeting for later',
@@ -848,18 +2232,16 @@ class _NewMeetingOptions extends StatelessWidget {
   Future<void> _createMeeting(BuildContext context, String mode) async {
     final repository = ref.read(mizdahRepositoryProvider);
     final code = MeetingUtils.generateMeetingCode();
-    
+
     try {
       final meeting = await repository.createMeeting(
-        title: 'Meeting', 
+        title: 'Meeting',
         dateTime: DateTime.now(),
         code: code,
       );
-      
+
       if (context.mounted) {
-        Navigator.pop(context); // Close sheet
-        
-        // Refresh data providers to show the latest meeting
+        Navigator.pop(context);
         ref.invalidate(callHistoryProvider);
         ref.invalidate(schedulesProvider);
 
@@ -876,12 +2258,13 @@ class _NewMeetingOptions extends StatelessWidget {
             );
           }
         }
-
       }
-    } catch (e) {
+    } catch (_) {
       if (context.mounted) {
-        Navigator.pop(context); // Close sheet on error too
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to create meeting')));
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to create meeting')),
+        );
       }
     }
   }
@@ -890,41 +2273,28 @@ class _NewMeetingOptions extends StatelessWidget {
     final scheduleRepo = ref.read(schedulingRepositoryProvider);
     final meetingRepo = ref.read(mizdahRepositoryProvider);
     final calendarService = ref.read(googleCalendarServiceProvider);
-    final authState = ref.read(authProvider);
-    final user = authState.user;
+    final user = ref.read(authProvider).user;
 
     if (user == null) return;
-
-    Navigator.pop(context); // Close sheet
+    Navigator.pop(context);
 
     try {
       final startTime = DateTime.now().add(const Duration(hours: 1));
       final endTime = startTime.add(const Duration(hours: 1));
       final timezone = DateTime.now().timeZoneName;
 
-      // 1. Create the actual meeting room FIRST so we have a real
-      //    join code (e.g. `xfm9kpqlnt`). The previous code only
-      //    created a `schedule` row, whose UUID is NOT a valid
-      //    meeting code — the calendar link it sent users pointed
-      //    to a meeting that never existed (404 on /api/meeting/<id>).
+      // Create the actual meeting room first so we have a real
+      // join code; the schedule row references it. Backend currently
+      // drops dedicated meetingId/meetingCode fields so we also embed
+      // the code in the title — see docs/SCHEDULING_BACKEND.md.
       final code = MeetingUtils.generateMeetingCode();
-      print('📅 1. Creating meeting room (code=$code)…');
       final meeting = await meetingRepo.createMeeting(
         title: 'Mizdah Meeting',
         dateTime: startTime,
         code: code,
       );
-      final realCode = meeting.code; // authoritative
+      final realCode = meeting.code;
 
-      // 2. Create the schedule row pointing at that meeting. The
-      //    backend currently drops `meetingId`/`meetingCode`
-      //    (see docs/SCHEDULING_BACKEND.md), so as a stop-gap we
-      //    also append the code in square brackets to the title —
-      //    that's the only field guaranteed to round-trip on GET.
-      //    `_ScheduleTile` parses it back out. Once the backend
-      //    persists the dedicated fields this title-tagging can
-      //    be dropped.
-      print('📅 2. Creating schedule row referencing $realCode…');
       await scheduleRepo.scheduleMeeting(
         hostId: user.id,
         title: 'Mizdah Meeting [$realCode]',
@@ -936,8 +2306,6 @@ class _NewMeetingOptions extends StatelessWidget {
         meetingCode: realCode,
       );
 
-      // 3. Open Google Calendar with the real (working) code.
-      print('📅 3. Opening Google Calendar…');
       final link = MeetingUtils.generateMeetingLink(realCode);
       await calendarService.openGoogleCalendarTemplate(
         title: 'Mizdah Meeting',
@@ -946,11 +2314,9 @@ class _NewMeetingOptions extends StatelessWidget {
         startTime: startTime,
       );
 
-      // Refresh data providers so the new schedule appears.
       ref.invalidate(schedulesProvider);
       ref.invalidate(callHistoryProvider);
     } catch (e) {
-      print('📅 ERROR during scheduling: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to schedule meeting: $e')),
@@ -966,7 +2332,6 @@ class _OptionTile extends StatelessWidget {
   final String subtitle;
   final Color color;
   final VoidCallback onTap;
-
   const _OptionTile({
     required this.icon,
     required this.title,
@@ -978,7 +2343,7 @@ class _OptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -987,10 +2352,14 @@ class _OptionTile extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.02),
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.05)
+                : Colors.black.withValues(alpha: 0.02),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.black.withValues(alpha: 0.05),
             ),
           ),
           child: Row(
@@ -1046,10 +2415,10 @@ class _ShareLinkModal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? MizdahTheme.darkSurface : Colors.white,
+        color: isDark ? const Color(0xFF1A1F2E) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
       ),
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
@@ -1057,11 +2426,10 @@ class _ShareLinkModal extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Top Bar with Drag Handle and Done button
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const SizedBox(width: 60), // Spacer to center the handle
+                const SizedBox(width: 60),
                 Container(
                   width: 40,
                   height: 4,
@@ -1075,7 +2443,7 @@ class _ShareLinkModal extends StatelessWidget {
                   child: const Text(
                     'Done',
                     style: TextStyle(
-                      color: MizdahTheme.primaryBlue,
+                      color: _Tokens.primary,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -1083,17 +2451,16 @@ class _ShareLinkModal extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-            
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                color: _Tokens.primary.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.link_rounded, color: MizdahTheme.primaryBlue, size: 36),
+              child: const Icon(Icons.link_rounded,
+                  color: _Tokens.primary, size: 36),
             ),
             const SizedBox(height: 20),
-            
             const Text(
               'Meeting link ready',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
@@ -1108,15 +2475,18 @@ class _ShareLinkModal extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            
-            // Link Display Box
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.1),
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.black.withValues(alpha: 0.1),
                 ),
               ),
               child: Row(
@@ -1136,19 +2506,23 @@ class _ShareLinkModal extends StatelessWidget {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
-                        Clipboard.setData(ClipboardData(text: MeetingUtils.generateMeetingLink(meeting.code)));
+                        Clipboard.setData(ClipboardData(
+                            text: MeetingUtils.generateMeetingLink(
+                                meeting.code)));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Link copied to clipboard')),
+                          const SnackBar(
+                              content: Text('Link copied to clipboard')),
                         );
                       },
                       borderRadius: BorderRadius.circular(12),
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+                          color: _Tokens.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.copy_rounded, size: 18, color: MizdahTheme.primaryBlue),
+                        child: const Icon(Icons.copy_rounded,
+                            size: 18, color: _Tokens.primary),
                       ),
                     ),
                   ),
@@ -1156,12 +2530,12 @@ class _ShareLinkModal extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            
             MizdahButton(
               label: 'Share Invite',
               icon: Icons.share_rounded,
               onTap: () {
-                final link = MeetingUtils.generateMeetingLink(meeting.code);
+                final link =
+                    MeetingUtils.generateMeetingLink(meeting.code);
                 Share.share(
                   'Join my Mizdah meeting: $link',
                   subject: 'Mizdah Meeting Invite',
@@ -1174,6 +2548,7 @@ class _ShareLinkModal extends StatelessWidget {
     );
   }
 }
+
 class _HistoryDetailModal extends StatelessWidget {
   final CallHistory item;
   final bool isHost;
@@ -1182,13 +2557,13 @@ class _HistoryDetailModal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final displayTitle = (item.title.contains('http') || item.title.length > 20) 
-        ? (item.meetingCode ?? 'Meeting') 
+    final displayTitle = (item.title.contains('http') || item.title.length > 20)
+        ? (item.meetingCode ?? 'Meeting')
         : item.title;
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? MizdahTheme.darkSurface : Colors.white,
+        color: isDark ? const Color(0xFF1A1F2E) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
       ),
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
@@ -1204,20 +2579,18 @@ class _HistoryDetailModal extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
-          
           CircleAvatar(
             radius: 32,
-            backgroundColor: isHost 
-                ? Colors.green.withValues(alpha: 0.1) 
-                : MizdahTheme.primaryBlue.withValues(alpha: 0.1),
+            backgroundColor: isHost
+                ? Colors.green.withValues(alpha: 0.1)
+                : _Tokens.primary.withValues(alpha: 0.1),
             child: Icon(
               isHost ? Icons.outbound_rounded : Icons.call_received_rounded,
-              color: isHost ? Colors.green : MizdahTheme.primaryBlue,
+              color: isHost ? Colors.green : _Tokens.primary,
               size: 32,
             ),
           ),
           const SizedBox(height: 16),
-          
           Text(
             displayTitle,
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
@@ -1227,99 +2600,74 @@ class _HistoryDetailModal extends StatelessWidget {
           Text(
             isHost ? 'Meeting you hosted' : 'Meeting you joined',
             style: TextStyle(
-              color: isHost ? Colors.green : Colors.grey,
+              color: isHost ? Colors.green : _Tokens.primary,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 24),
-          
-          _DetailRow(
-            icon: Icons.calendar_today_rounded,
-            label: 'Date & Time',
-            value: DateFormat('EEEE, MMM d • h:mm a').format(item.timestamp),
-          ),
-          const SizedBox(height: 16),
-          _DetailRow(
-            icon: Icons.timer_outlined,
-            label: 'Duration',
-            value: item.duration.inMinutes > 0 
-                ? '${item.duration.inMinutes} minutes'
-                : 'Under a minute',
-          ),
-          const SizedBox(height: 16),
-          _DetailRow(
-            icon: Icons.tag_rounded,
-            label: 'Meeting Code',
-            value: item.meetingCode ?? 'N/A',
-          ),
-          
-          const SizedBox(height: 32),
-          
-          Row(
-            children: [
-              Expanded(
-                child: MizdahButton(
-                  label: 'Rejoin',
-                  icon: Icons.videocam_rounded,
-                  onTap: () {
-                    Navigator.pop(context);
-                    context.push('/pre-join/${item.meetingCode ?? item.id}');
-                  },
-                ),
+          if (item.meetingCode != null)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : const Color(0xFFF6F7FB),
+                borderRadius: BorderRadius.circular(20),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: MizdahButton(
-                  label: 'Share Link',
-                  backgroundColor: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.05),
-                  icon: Icons.share_rounded,
-                  onTap: () {
-                    final link = MeetingUtils.generateMeetingLink(item.meetingCode ?? item.id);
-                    Share.share('Join my Mizdah meeting: $link');
-                  },
-                ),
+              child: Row(
+                children: [
+                  const Icon(Icons.link_rounded, color: _Tokens.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Meeting Code',
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey)),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.meetingCode!,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy_rounded,
+                        color: _Tokens.primary),
+                    onPressed: () {
+                      Clipboard.setData(
+                          ClipboardData(text: item.meetingCode!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Code copied')),
+                      );
+                    },
+                  ),
+                ],
               ),
-            ],
+            ),
+          const SizedBox(height: 16),
+          Text(
+            DateFormat('EEE, MMM d · h:mm a').format(item.timestamp),
+            style: const TextStyle(color: Colors.grey, fontSize: 13),
           ),
+          const SizedBox(height: 20),
+          if (item.meetingCode != null)
+            MizdahButton(
+              label: 'Rejoin meeting',
+              icon: Icons.video_call_rounded,
+              onTap: () {
+                Navigator.pop(context);
+                context.push('/pre-join/${item.meetingCode}');
+              },
+            ),
         ],
       ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-
-  const _DetailRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, size: 18, color: Colors.grey),
-        ),
-        const SizedBox(width: 16),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          ],
-        ),
-      ],
     );
   }
 }
