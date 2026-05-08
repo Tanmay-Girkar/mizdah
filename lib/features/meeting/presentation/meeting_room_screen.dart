@@ -690,7 +690,19 @@ class _VideoGrid extends ConsumerWidget {
       if (pUserId != null && pUserId == meetingState.userId) continue;
       final socketId = (p['socketId'] ?? p['userId'])?.toString();
       if (socketId != null && socketId == meetingState.userId) continue;
-      final name = (p['name'] ?? p['displayName'] ?? 'Participant').toString();
+      // Defensive: if the participant has no usable name, skip the
+      // tile entirely. _loadParticipants now filters these on insert,
+      // but stale entries from older sessions or future protocol
+      // changes would otherwise show as a generic "Participant"
+      // ghost tile with a "P" avatar.
+      final rawName = (p['name'] ?? p['displayName'])?.toString().trim();
+      if (rawName == null || rawName.isEmpty) continue;
+      // Also skip if the peer already left (left_at populated) — REST
+      // history rows can sneak in via state merges. Live socket events
+      // remove these via _teardownPeer, but the merge race exists.
+      final leftAt = p['leftAt'] ?? p['left_at'];
+      if (leftAt != null && leftAt.toString().isNotEmpty) continue;
+      final name = rawName;
       final renderer = socketId != null ? meetingState.remoteRenderers[socketId] : null;
       final screenRenderer = socketId != null
           ? meetingState.remoteScreenRenderers[socketId]

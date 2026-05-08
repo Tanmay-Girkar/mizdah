@@ -2407,15 +2407,37 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   void _loadParticipants(String meetingId) async {
     final participants = await _participantRepository.getMeetingParticipants(meetingId);
     if (mounted && !_disposed) {
-      // The participant service includes the current user in its list.
-      // Adding ourselves to `participants` makes the grid render a self
-      // tile (avatar "A — akbar") on top of the PIP, then snap back to
-      // the solitary hero view when join-confirmation lands with the
-      // server's authoritative list — that's the flicker the user saw.
+      // The REST endpoint at `/api/participant/<meetingId>` returns
+      // a row PER JOIN — including historical rows where `left_at`
+      // is already set, AND newly-joined rows that don't have a
+      // `name` resolved yet (the backend stores user_id only, no
+      // display name). If we naively merge those into the
+      // participants state, the grid renders ghost tiles labeled
+      // "Participant" with a generic "P" avatar — exactly the
+      // bug the user reported.
+      //
+      // Filter to rows that:
+      //   1. aren't us (existing self-filter)
+      //   2. haven't already left  (left_at == null)
+      //   3. have a usable display name
+      // Socket events (`user-joined` / `user-left`) are the
+      // authoritative source for live participants and arrive with
+      // names attached — REST is just a hint for historical /
+      // re-join scenarios.
       final filtered = participants.where((p) {
-        if (p is! Map) return true;
-        return p['userId'] != state.userId &&
-            p['user_id'] != state.userId;
+        if (p is! Map) return true; // pass non-map through unchanged
+        // 1. self
+        if (p['userId'] == state.userId || p['user_id'] == state.userId) {
+          return false;
+        }
+        // 2. already left
+        final leftAt = p['leftAt'] ?? p['left_at'];
+        if (leftAt != null && leftAt.toString().isNotEmpty) return false;
+        // 3. nameless (no usable display name → would render as
+        //    a "Participant" ghost tile)
+        final name = (p['name'] ?? p['displayName'])?.toString().trim();
+        if (name == null || name.isEmpty) return false;
+        return true;
       }).toList();
       state = state.copyWith(participants: filtered);
     }
