@@ -346,7 +346,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v6 2026-05-07 (keyframe-pump)';
+  static const String _kBuildStamp = 'sfu-v7 2026-05-08 (toggle-reproduce)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -1008,6 +1008,36 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             final s = _remoteStreams[from];
             if (r != null && s != null) r.srcObject = s;
             _stoppedSharingPeers.remove(from);
+          } else if (data.containsKey('videoEnabled')) {
+            // CAMERA TOGGLE (NOT a share-stop) — clear the renderer
+            // when the peer turned their camera off so we don't keep
+            // painting their last frame as a frozen tile, and re-
+            // attach when they turn it back on. Without this, the
+            // remote video on our screen "sticks" on the last frame
+            // even though the peer's videoEnabled is false. The
+            // renderer's GPU texture holds the previous frame
+            // because no new frames arrive — explicit detach forces
+            // it to clear.
+            final r = state.remoteRenderers[from];
+            final s = _remoteStreams[from];
+            if (r != null) {
+              if (data['videoEnabled'] == true && s != null) {
+                // Camera came back on. Reattach if we previously
+                // detached, no-op otherwise.
+                if (r.srcObject != s) {
+                  _log('🔌 reattaching camera stream for $from '
+                      '(videoEnabled=true)');
+                  r.srcObject = s;
+                }
+              } else if (data['videoEnabled'] == false) {
+                // Camera went off — flush the frozen frame.
+                if (r.srcObject != null) {
+                  _log('🧹 detaching camera stream for $from '
+                      '(videoEnabled=false) to clear stuck frame');
+                  r.srcObject = null;
+                }
+              }
+            }
           }
       }
     });
@@ -1631,6 +1661,47 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final newState = LocalMediaService.instance.toggleVideo();
     state = state.copyWith(isCameraOn: newState);
     _broadcastMediaState();
+
+    // When the camera goes from off → on, the H264 hardware encoder
+    // gets fully released and re-initialised by flutter_webrtc
+    // (visible in the device log as `HardwareVideoEncoder: Releasing
+    // MediaCodec` followed by `initEncode`). The new encoder generates
+    // a fresh IDR (keyframe) on its first frame, but mediasoup's
+    // existing consumers on web peers don't always get notified to
+    // pick up the new keyframe — they keep showing the last frame
+    // they had before the toggle, OR a black tile if there was none.
+    //
+    // Defensive nudge: re-run _produceLocalTracksToSfu so the SFU
+    // producer's track reference is current, AND emit a keyframe
+    // request so any consumer of our producer gets pulled into a
+    // fresh sync. Both are idempotent — safe even if the producer
+    // was healthy throughout.
+    if (newState && state.isSfuMode && _sfuService?.isReady == true) {
+      _log('📹 camera toggled ON — re-producing to SFU + nudging '
+          'consumers for fresh keyframe');
+      // Wait one frame so the encoder has time to emit a sync frame
+      // before we ask consumers to re-sync.
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (!mounted || _disposed) return;
+        // ignore: unawaited_futures
+        _produceLocalTracksToSfu();
+        // Tell the server to broadcast a keyframe to every consumer
+        // of OUR video producer. The backend already supports
+        // `requestConsumerKeyFrame` (see RECEIVER_HEALTH_BACKEND.md);
+        // a producer-side equivalent would let us nudge our own
+        // outgoing stream — until that ships, the existing per-
+        // consumer keyframe pump on the receiving side eventually
+        // pulls us back into sync within ~4s.
+        final producerId = _sfuService?.videoProducer?.id;
+        if (producerId != null) {
+          _socket?.emit('requestProducerKeyFrame', {
+            'meetingId': state.meetingCode,
+            'producerId': producerId,
+          });
+          _log('📤 emit requestProducerKeyFrame producer=$producerId');
+        }
+      });
+    }
   }
 
   /// Tear down the dead local stream, ask LocalMediaService to

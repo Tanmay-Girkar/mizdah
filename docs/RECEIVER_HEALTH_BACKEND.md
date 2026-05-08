@@ -136,6 +136,42 @@ socket.on('setConsumerPreferredLayers', async (
 });
 ```
 
+## Bonus — producer-side keyframe nudge
+
+When the mobile camera is toggled off then back on, flutter_webrtc
+fully releases and re-initialises the H264 hardware encoder. The
+new encoder emits a fresh IDR on its first frame, but the
+remote consumers on web sometimes don't pick it up — they keep
+showing the last frame they had before the toggle, OR a black
+tile if there was none. The receiver-side keyframe pump
+eventually pulls them back into sync, but a producer-side nudge
+is much faster:
+
+```js
+socket.on('requestProducerKeyFrame', async (
+  { meetingId, producerId },
+) => {
+  const producer = producersById.get(producerId);
+  if (!producer || producer.kind !== 'video') return;
+  try {
+    // mediasoup's Producer doesn't expose requestKeyFrame
+    // directly — instead enumerate every consumer of this
+    // producer and ask each one for a key frame. The end
+    // effect is the same: a PLI is sent up to the producer's
+    // RTP source and the next encoded frame becomes an IDR.
+    for (const c of consumersByProducerId.get(producerId) ?? []) {
+      if (c.kind === 'video') c.requestKeyFrame().catch(() => {});
+    }
+  } catch (e) {
+    console.warn('requestProducerKeyFrame failed', producerId, e.message);
+  }
+});
+```
+
+The mobile emits this exactly once per camera-on toggle, ~200ms
+after `track.enabled = true`. No ack needed — fire-and-forget like
+`requestConsumerKeyFrame`.
+
 The mobile FE can then "pin" each consumer to the highest layer
 that fits its decoded resolution, avoiding the layer-switch
 storms entirely. Not required for the fix above to work — file
