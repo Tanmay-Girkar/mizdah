@@ -59,21 +59,82 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         child: ListView(
           physics: const BouncingScrollPhysics(),
           // Bottom space for the floating nav is reserved by
-            // MizdahTabScaffold so the ListView clip ends above it.
-            padding: const EdgeInsets.only(bottom: 8),
+          // MizdahTabScaffold so the ListView clip ends above it.
+          padding: const EdgeInsets.only(bottom: 8),
           children: [
+            // ── Page header — title on the left, compact theme
+            //    switcher pill on the right. The pill is the new
+            //    home for "Appearance": a single-tap segmented
+            //    control with sun / moon / auto icons. Premium
+            //    placement — accessible from the very top, no
+            //    scrolling required.
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.0,
-              child: const MizdahPageHeader(
-                leading: 'Your',
-                accent: 'settings',
-                subtitle: 'Profile · Theme · Privacy',
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 18, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: RichText(
+                        maxLines: 2,
+                        text: TextSpan(
+                          style: TextStyle(
+                            color: MizdahTokens.inkOf(context),
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.6,
+                            height: 1.1,
+                          ),
+                          children: [
+                            const TextSpan(text: 'Your '),
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.baseline,
+                              baseline: TextBaseline.alphabetic,
+                              child: ShaderMask(
+                                shaderCallback: (r) =>
+                                    MizdahTokens.heroGradient.createShader(r),
+                                child: const Text(
+                                  'settings',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.6,
+                                    height: 1.1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _ThemePill(
+                      current: themeMode,
+                      onChanged: (m) =>
+                          ref.read(themeProvider.notifier).setTheme(m),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+              child: Text(
+                'Profile · Stats · Privacy',
+                style: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
             const SizedBox(height: 14),
 
-            // Profile card
+            // ── Profile card (gradient hero) ─────────────────────
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.10,
@@ -88,7 +149,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             const SizedBox(height: 14),
 
-            // Quick stats
+            // ── 3-column stats: Hosted · Joined · Total ──────────
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.16,
@@ -99,25 +160,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             const SizedBox(height: 22),
 
-            // Appearance
+            // ── Account ──────────────────────────────────────────
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.22,
-              child: _Section(
-                title: 'Appearance',
-                child: _ThemeCard(
-                  current: themeMode,
-                  onChanged: (m) =>
-                      ref.read(themeProvider.notifier).setTheme(m),
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-
-            // Account
-            MizdahFadeUp(
-              controller: _entryCtrl,
-              delay: 0.28,
               child: _Section(
                 title: 'Account',
                 child: MizdahCard(
@@ -154,10 +200,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             const SizedBox(height: 18),
 
-            // Privacy & Security
+            // ── Privacy & Security ───────────────────────────────
             MizdahFadeUp(
               controller: _entryCtrl,
-              delay: 0.34,
+              delay: 0.28,
               child: _Section(
                 title: 'Privacy & Security',
                 child: MizdahCard(
@@ -184,10 +230,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             const SizedBox(height: 18),
 
-            // About
+            // ── About ────────────────────────────────────────────
             MizdahFadeUp(
               controller: _entryCtrl,
-              delay: 0.40,
+              delay: 0.34,
               child: _Section(
                 title: 'About',
                 child: MizdahCard(
@@ -409,22 +455,31 @@ class _ProfileCard extends StatelessWidget {
 //  Stats row — derived from callHistoryProvider
 // ────────────────────────────────────────────────────────────────────
 
+/// 3-column stats card showing Hosted | Joined | Total. Derives the
+/// counts from `callHistoryProvider`; the user's `id` decides which
+/// items count as hosted vs joined.
 class _StatsRow extends ConsumerWidget {
   const _StatsRow();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(callHistoryProvider);
-    final stats = async.when(
+    final me = ref.watch(authProvider).user?.id;
+
+    final counts = async.when(
       loading: () => null,
       error: (_, __) => null,
       data: (h) {
-        final total = h.length;
-        final mins = h.fold<int>(
-          0,
-          (acc, c) => acc + c.duration.inMinutes,
-        );
-        return (total, mins);
+        var hosted = 0;
+        var joined = 0;
+        for (final c in h) {
+          if (c.hostId != null && me != null && c.hostId == me) {
+            hosted++;
+          } else {
+            joined++;
+          }
+        }
+        return (hosted: hosted, joined: joined, total: h.length);
       },
     );
 
@@ -432,19 +487,28 @@ class _StatsRow extends ConsumerWidget {
       children: [
         Expanded(
           child: _StatCard(
-            label: 'Meetings',
-            value: stats == null ? '—' : '${stats.$1}',
-            accent: const Color(0xFF8B5CF6),
+            label: 'Hosted',
+            value: counts == null ? '—' : '${counts.hosted}',
+            accent: const Color(0xFF6C63FF),
             icon: Icons.video_call_rounded,
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
           child: _StatCard(
-            label: 'Total minutes',
-            value: stats == null ? '—' : '${stats.$2}',
-            accent: const Color(0xFF3B82F6),
-            icon: Icons.timer_outlined,
+            label: 'Joined',
+            value: counts == null ? '—' : '${counts.joined}',
+            accent: const Color(0xFF10B981),
+            icon: Icons.call_received_rounded,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _StatCard(
+            label: 'Total',
+            value: counts == null ? '—' : '${counts.total}',
+            accent: const Color(0xFFF59E0B),
+            icon: Icons.bar_chart_rounded,
           ),
         ),
       ],
@@ -466,20 +530,22 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 3-up layout — slightly tighter padding so each card stays
+    // readable on narrow screens.
     return MizdahCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 32,
-            height: 32,
+            width: 30,
+            height: 30,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Icon(icon, color: accent, size: 18),
+            child: Icon(icon, color: accent, size: 17),
           ),
           const SizedBox(height: 10),
           Text(
@@ -491,6 +557,7 @@ class _StatCard extends StatelessWidget {
               letterSpacing: -0.4,
             ),
           ),
+          const SizedBox(height: 1),
           Text(
             label,
             style: TextStyle(
@@ -542,115 +609,101 @@ class _Section extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────────
-//  Theme card — uses RadioGroup (no deprecated API)
+//  Compact theme pill — replaces the old "Appearance" section card.
+//  Three-segment switcher (sun / moon / auto) that lives in the
+//  page header next to the title. Premium placement: visible at a
+//  glance, single-tap to switch, no scrolling required, doesn't
+//  take a full-width row of vertical real estate.
 // ────────────────────────────────────────────────────────────────────
 
-class _ThemeCard extends StatelessWidget {
+class _ThemePill extends StatelessWidget {
   final ThemeMode current;
   final ValueChanged<ThemeMode> onChanged;
-  const _ThemeCard({required this.current, required this.onChanged});
+  const _ThemePill({required this.current, required this.onChanged});
+
+  static const _modes = <ThemeMode, IconData>{
+    ThemeMode.light: Icons.light_mode_rounded,
+    ThemeMode.dark: Icons.dark_mode_rounded,
+    ThemeMode.system: Icons.brightness_auto_rounded,
+  };
+
+  static const _tooltips = <ThemeMode, String>{
+    ThemeMode.light: 'Light theme',
+    ThemeMode.dark: 'Dark theme',
+    ThemeMode.system: 'Follow system',
+  };
 
   @override
   Widget build(BuildContext context) {
-    return MizdahCard(
-      padding: EdgeInsets.zero,
-      child: RadioGroup<ThemeMode>(
-        groupValue: current,
-        onChanged: (v) {
-          if (v != null) onChanged(v);
-        },
-        child: Column(
-          children: const [
-            _ThemeRow(
-              mode: ThemeMode.light,
-              icon: Icons.light_mode_rounded,
-              label: 'Light',
-              sublabel: 'Bright canvas, vivid colours',
-            ),
-            _Divider(),
-            _ThemeRow(
-              mode: ThemeMode.dark,
-              icon: Icons.dark_mode_rounded,
-              label: 'Dark',
-              sublabel: 'Easy on the eyes after hours',
-            ),
-            _Divider(),
-            _ThemeRow(
-              mode: ThemeMode.system,
-              icon: Icons.brightness_auto_rounded,
-              label: 'System',
-              sublabel: 'Follow your device setting',
-            ),
-          ],
+    final modes = _modes.keys.toList();
+    final activeIndex = modes.indexOf(current);
+    return SizedBox(
+      width: 132,
+      height: 38,
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: MizdahTokens.surface(context),
+          borderRadius: BorderRadius.circular(20),
+          border:
+              Border.all(color: MizdahTokens.border(context), width: 1),
+          boxShadow: MizdahTokens.shadow(context, elevation: 0.4),
         ),
-      ),
-    );
-  }
-}
-
-class _ThemeRow extends StatelessWidget {
-  final ThemeMode mode;
-  final IconData icon;
-  final String label;
-  final String sublabel;
-  const _ThemeRow({
-    required this.mode,
-    required this.icon,
-    required this.label,
-    required this.sublabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: MizdahTokens.iconTileBg(context),
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Icon(icon, color: MizdahTokens.primary, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      color: MizdahTokens.inkOf(context),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
+        child: LayoutBuilder(builder: (ctx, c) {
+          final pillW = c.maxWidth / modes.length;
+          return Stack(
+            children: [
+              // Animated indicator — slides between the three slots
+              // with a 240ms ease, staying premium-looking on tap.
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                left: activeIndex * pillW,
+                top: 0,
+                bottom: 0,
+                width: pillW,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: MizdahTokens.heroGradient,
+                    borderRadius: BorderRadius.circular(17),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            MizdahTokens.primary.withValues(alpha: 0.32),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    sublabel,
-                    style: TextStyle(
-                      color: MizdahTokens.mutedOf(context),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+              ),
+              Row(
+                children: [
+                  for (final mode in modes)
+                    SizedBox(
+                      width: pillW,
+                      child: Tooltip(
+                        message: _tooltips[mode]!,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => onChanged(mode),
+                          child: Center(
+                            child: Icon(
+                              _modes[mode],
+                              size: 17,
+                              color: current == mode
+                                  ? Colors.white
+                                  : MizdahTokens.mutedOf(context),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Radio<ThemeMode>(
-            value: mode,
-            activeColor: MizdahTokens.primary,
-          ),
-        ],
+                ],
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
