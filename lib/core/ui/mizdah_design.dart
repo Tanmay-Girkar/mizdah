@@ -273,8 +273,9 @@ class MizdahGradientText extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 
 class MizdahTabScaffold extends StatelessWidget {
-  /// Index of the active tab (0 = Home, 1 = Meetings, 2 = Call,
-  /// 3 = People, 4 = Settings). Drives the floating-nav highlight.
+  /// `activeIndex` is now a no-op — kept on the API only so older
+  /// call-sites compile while the shell route is being rolled out.
+  /// The floating nav itself lives in `MizdahTabsShell`.
   final int activeIndex;
   final Widget body;
   const MizdahTabScaffold({
@@ -288,14 +289,11 @@ class MizdahTabScaffold extends StatelessWidget {
     final navInset = MizdahTokens.navBarBottomInset(context);
     return Scaffold(
       backgroundColor: MizdahTokens.bg(context),
-      // We don't use the Material `bottomNavigationBar` slot — the
-      // nav is a floating glass pill we draw inside the Stack.
-      // `extendBody` is moot in that setup.
       body: Stack(
         children: [
           // 1. Full-screen background gradient — flows underneath
-          //    the floating nav too so the BackdropFilter has
-          //    something to frost.
+          //    the (shell-level) floating nav too so its
+          //    BackdropFilter has something to frost.
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -325,14 +323,11 @@ class MizdahTabScaffold extends StatelessWidget {
               ),
             ),
           ),
-          // 3. Body — explicitly constrained ABOVE the floating
-          //    nav. With `bottom: navInset` the body's clip rect
-          //    ends above the nav, so any ListView/CustomScroll
-          //    inside this body physically cannot render in the
-          //    nav zone (WhatsApp-/Telegram-style behaviour).
-          //
-          //    The screen's own ListView no longer needs a bottom
-          //    padding for the nav — its parent box does the work.
+          // 3. Body — constrained ABOVE the floating nav. The shell
+          //    paints the nav over THIS scaffold, so the content
+          //    must clip above where the nav floats. Any ListView
+          //    inside `body` therefore physically cannot render
+          //    in the nav zone.
           Positioned(
             top: 0,
             left: 0,
@@ -340,17 +335,72 @@ class MizdahTabScaffold extends StatelessWidget {
             bottom: navInset,
             child: body,
           ),
-          // 4. Floating bottom nav — sits in the strip we reserved
-          //    above. The nav respects the system safe-area inset
-          //    so it never collides with the iOS home indicator or
-          //    the Android gesture pill.
+          // The floating nav is no longer rendered here — the
+          // shell route owns a single shared instance so it never
+          // rebuilds on tab change.
+        ],
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Tabs shell — host for go_router's StatefulShellRoute.indexedStack
+//  ────────────────────────────────────────────────────────────────────
+//  Premium tab pattern: all five tabs stay mounted, switching is an
+//  instant IndexedStack toggle (no fade / no rebuild / no flicker).
+//  The floating nav lives here at the shell level so it never
+//  rebuilds on tab change — only its `activeIndex` updates.
+//
+//  Each tab's own scaffold (Home or `MizdahTabScaffold`) keeps
+//  rendering its gradient + content; IndexedStack stores them once
+//  and re-shows them without rebuilding. Scroll position, in-flight
+//  search query, animation controllers — all preserved between tabs.
+// ────────────────────────────────────────────────────────────────────
+
+class MizdahTabsShell extends StatelessWidget {
+  /// The shell-route's navigation handle. Tells us which branch is
+  /// active and how to switch to another (`goBranch(index)`).
+  final StatefulNavigationShell navigationShell;
+
+  const MizdahTabsShell({super.key, required this.navigationShell});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      // Background lives at the tab level (each tab paints its own
+      // gradient via MizdahTabScaffold or HomeScreen's own scaffold);
+      // we just need the shell to be transparent so the tab body
+      // shows through.
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // 1. The IndexedStack of branches. Mounted once, never
+          //    rebuilt on tab change. Each branch keeps its own
+          //    Navigator and state.
+          navigationShell,
+          // 2. Floating nav — single instance for the whole app.
+          //    Tapping a tab calls `goBranch` which flips the
+          //    visible child of the IndexedStack instantly.
           Align(
             alignment: Alignment.bottomCenter,
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: MizdahFloatingNav(activeIndex: activeIndex),
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: MizdahFloatingNav(
+                  activeIndex: navigationShell.currentIndex,
+                  onTabTap: (i) {
+                    navigationShell.goBranch(
+                      i,
+                      // Re-tapping the active tab → reset to its
+                      // initial location (mirrors iOS / WhatsApp
+                      // behaviour where the active tab "scrolls to
+                      // top" on re-tap if it has nested routes).
+                      initialLocation: i == navigationShell.currentIndex,
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -367,7 +417,22 @@ class MizdahTabScaffold extends StatelessWidget {
 class MizdahFloatingNav extends StatefulWidget {
   /// 0 = Home, 1 = Meetings, 2 = Call, 3 = People, 4 = Settings.
   final int activeIndex;
-  const MizdahFloatingNav({super.key, required this.activeIndex});
+
+  /// Optional tap handler. When supplied, this is called instead of
+  /// `GoRouter.of(context).go(...)`. The shell route uses this to
+  /// switch branches via `navigationShell.goBranch(index)`, which
+  /// preserves each tab's scroll + state (no flicker on switch).
+  final void Function(int index)? onTabTap;
+
+  /// Tab → route map, exposed so the shell route can keep the same
+  /// list as the in-widget fallback.
+  static const tabRoutes = ['/', '/meetings', '/call-hub', '/people', '/settings'];
+
+  const MizdahFloatingNav({
+    super.key,
+    required this.activeIndex,
+    this.onTabTap,
+  });
 
   @override
   State<MizdahFloatingNav> createState() => _MizdahFloatingNavState();
@@ -395,9 +460,16 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
   }
 
   void _go(int index) {
+    // Hand off to the shell when present (preserves tab state via
+    // navigationShell.goBranch). Otherwise fall back to a plain
+    // route push so the nav still works in any non-shell context
+    // (legacy callers, previews, etc.).
+    if (widget.onTabTap != null) {
+      widget.onTabTap!(index);
+      return;
+    }
     if (index == widget.activeIndex) return;
-    final routes = ['/', '/meetings', '/call-hub', '/people', '/settings'];
-    GoRouter.of(context).go(routes[index]);
+    GoRouter.of(context).go(MizdahFloatingNav.tabRoutes[index]);
   }
 
   @override

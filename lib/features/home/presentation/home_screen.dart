@@ -170,19 +170,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             ),
           ),
 
-          // Floating bottom navigation — sits in the strip we
-          // reserved above. SafeArea guarantees the nav clears the
-          // iOS home indicator and the Android gesture pill.
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: const md.MizdahFloatingNav(activeIndex: 0),
-              ),
-            ),
-          ),
+          // The floating nav is rendered by the shell route
+          // (`MizdahTabsShell`) so it never rebuilds on tab change
+          // — switching between Home / Meetings / Call / People /
+          // Settings is an instant IndexedStack swap with no
+          // flicker.
         ],
       ),
     );
