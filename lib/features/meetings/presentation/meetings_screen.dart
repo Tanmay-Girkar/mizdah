@@ -21,7 +21,12 @@ import '../../home/presentation/home_screen.dart' show
     callHistoryProvider;
 
 class MeetingsScreen extends ConsumerStatefulWidget {
-  const MeetingsScreen({super.key});
+  /// Optional initial segment — `0` for Upcoming, `1` for Recent.
+  /// The router populates this from `?tab=recent` so the home
+  /// screen's "View all" link can drop the user straight onto the
+  /// recent list.
+  final int initialSegment;
+  const MeetingsScreen({super.key, this.initialSegment = 0});
 
   @override
   ConsumerState<MeetingsScreen> createState() => _MeetingsScreenState();
@@ -31,11 +36,12 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _entryCtrl;
   // 0 = Upcoming, 1 = Recent. Local UI state only.
-  int _segment = 0;
+  late int _segment;
 
   @override
   void initState() {
     super.initState();
+    _segment = widget.initialSegment.clamp(0, 1);
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,

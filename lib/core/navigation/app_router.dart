@@ -35,7 +35,17 @@ final appRouter = GoRouter(
     GoRoute(path: '/start-call', builder: (context, state) => const StartCallScreen()),
     GoRoute(path: '/schedule', builder: (context, state) => const ScheduleScreen()),
     // New premium tabs reachable from the floating bottom nav.
-    GoRoute(path: '/meetings', builder: (context, state) => const MeetingsScreen()),
+    GoRoute(
+      path: '/meetings',
+      builder: (context, state) {
+        // `?tab=recent` deep-links the Recent segment, used by the
+        // home screen's "View all" link on the Recent Activity card.
+        final tab = state.uri.queryParameters['tab'];
+        return MeetingsScreen(
+          initialSegment: tab == 'recent' ? 1 : 0,
+        );
+      },
+    ),
     GoRoute(path: '/call-hub', builder: (context, state) => const CallHubScreen()),
     GoRoute(path: '/p2p-call', builder: (context, state) => const P2PCallScreen()),
     GoRoute(path: '/people', builder: (context, state) => const PeopleScreen()),
