@@ -5,16 +5,28 @@ class ApiConfig {
   // exposes the same `/signaling-fresh` and `/media-fresh` engine.io
   // paths as production, so only the host:port needs to change.
   //
-  // Requires `android:usesCleartextTraffic="true"` in
-  // AndroidManifest.xml (already set) since this is plain HTTP. iOS
-  // Info.plist also needs `NSAllowsArbitraryLoads` if testing on iOS.
+  // Now using HTTPS — if the dev server presents a self-signed
+  // certificate, Android will reject it by default. To accept
+  // self-signed certs in dev:
+  //   1. Either install the cert as a user CA on the test device
+  //      (Settings → Security → Encryption & credentials → Install
+  //      a certificate), OR
+  //   2. Add a network_security_config.xml that trusts user CAs in
+  //      debug builds (we already declare usesCleartextTraffic=true
+  //      so this needs a tiny extra config — say the word and I'll
+  //      wire it up).
+  // iOS: ATS is happy with valid certs; for self-signed, add
+  // `NSAllowsArbitraryLoads` exception in Info.plist.
   //
   // To switch back to production, replace `_devHost` with the
   // production URL: `https://mizdah-backend.ogoul.cloud`.
-  static const String _devHost = 'http://192.168.1.117:3001';
+  static const String _devHost = 'https://192.168.1.48:3001';
 
   // ── Production (kept for easy revert) ───────────────────────────
   // static const String _devHost = 'https://mizdah-backend.ogoul.cloud';
+
+  // ── Previous local dev (cleartext HTTP) ────────────────────────
+  // static const String _devHost = 'http://192.168.1.117:3001';
 
   static const String baseUrl = _devHost;
   static const String signalingUrl = _devHost;
