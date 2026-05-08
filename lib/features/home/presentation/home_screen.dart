@@ -157,11 +157,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 children: [
                   _Header(entryCtrl: _entryCtrl),
                   _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   _ActionCardsRow(entryCtrl: _entryCtrl),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
                   _UpcomingSection(entryCtrl: _entryCtrl),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   _RecentActivityCard(entryCtrl: _entryCtrl),
                   const SizedBox(height: 16),
                 ],
@@ -367,9 +367,9 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 6, 0, 16),
+      padding: const EdgeInsets.fromLTRB(20, 4, 0, 4),
       child: SizedBox(
-        height: 280,
+        height: 210,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
