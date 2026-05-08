@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/navigation/app_router.dart';
+import 'core/ui/mizdah_design.dart' show MizdahScrollBehavior;
 import 'features/call/presentation/p2p_incoming_overlay.dart';
 
 void main() async {
@@ -87,6 +88,11 @@ class MizdahApp extends ConsumerWidget {
       theme: MizdahTheme.lightTheme,
       darkTheme: MizdahTheme.darkTheme,
       routerConfig: appRouter,
+      // App-wide rigid scrolling — kills iOS bounce + Android
+      // stretch overscroll. Every ListView / SingleChildScrollView
+      // anywhere in the app inherits this unless it explicitly
+      // overrides `physics:`.
+      scrollBehavior: const MizdahScrollBehavior(),
       // Wrap every route in:
       //   1) An `AnnotatedRegion` that forces the OS system bars
       //      transparent so the app's gradient flows behind them.

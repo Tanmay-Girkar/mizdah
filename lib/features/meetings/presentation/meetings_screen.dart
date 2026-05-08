@@ -96,9 +96,7 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
                 displacement: 24,
                 edgeOffset: 0,
                 child: ListView(
-                  physics: const BouncingScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics(),
-                  ),
+                  physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
                   padding: const EdgeInsets.only(bottom: 8),
                   children: [
                     MizdahFadeUp(

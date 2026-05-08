@@ -131,9 +131,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // ── Scrollable body ─────────────────────────────────
             Expanded(
               child: ListView(
-                physics: const BouncingScrollPhysics(
-                  parent: AlwaysScrollableScrollPhysics(),
-                ),
+                physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
                 padding: const EdgeInsets.only(bottom: 8),
                 children: [
 

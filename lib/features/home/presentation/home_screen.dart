@@ -165,12 +165,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       },
                       child: ListView(
                         padding: const EdgeInsets.only(bottom: 8),
-                        // BouncingScrollPhysics → native iOS feel,
-                        // ClampingScrollPhysics fallback on Android
-                        // via ScrollBehavior. The header is now
-                        // outside this widget so the bounce stays
-                        // contained to the list area.
-                        physics: const BouncingScrollPhysics(
+                        // Rigid Telegram / WhatsApp-style scroll —
+                        // ClampingScrollPhysics removes the iOS
+                        // bounce entirely; AlwaysScrollableScrollPhysics
+                        // wrapper keeps RefreshIndicator working on
+                        // short content. App-wide MizdahScrollBehavior
+                        // additionally suppresses Android's stretch
+                        // overscroll glow.
+                        physics: const ClampingScrollPhysics(
                           parent: AlwaysScrollableScrollPhysics(),
                         ),
                         children: [

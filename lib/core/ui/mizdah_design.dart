@@ -345,6 +345,57 @@ class MizdahTabScaffold extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────────
+//  App-wide scroll behaviour
+//  ────────────────────────────────────────────────────────────────────
+//  Locks every scrollable in the app to "rigid" Telegram / WhatsApp-
+//  Web-style scrolling:
+//
+//    • ClampingScrollPhysics on every platform — no iOS rubber-band
+//      bounce, no scrolling past the content extent, no white gap
+//      revealed at the top when the user pulls down.
+//    • Stripped overscroll indicator — Android 12+ ships a stretch
+//      effect by default; we suppress it so the page never visibly
+//      deforms during a drag.
+//    • Drag accepted from any pointer device (touch / mouse /
+//      trackpad), which Material's default already does, but we
+//      reaffirm it here for explicitness.
+//
+//  Apply via `MaterialApp.scrollBehavior: const MizdahScrollBehavior()`
+//  Individual lists can still override `physics:` if they need
+//  scroll-on-short-content (e.g. RefreshIndicator wrappers wrap the
+//  same physics with `AlwaysScrollableScrollPhysics`).
+// ────────────────────────────────────────────────────────────────────
+
+class MizdahScrollBehavior extends MaterialScrollBehavior {
+  const MizdahScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      };
+
+  /// Disable both overscroll affordances — iOS bounce is killed by
+  /// the physics override below; Android's stretch glow is killed by
+  /// returning the child unchanged here (instead of wrapping it in a
+  /// `StretchingOverscrollIndicator` / `GlowingOverscrollIndicator`).
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const ClampingScrollPhysics();
+}
+
+// ────────────────────────────────────────────────────────────────────
 //  Tabs shell — host for go_router's StatefulShellRoute.indexedStack
 //  ────────────────────────────────────────────────────────────────────
 //  Premium tab pattern: all five tabs stay mounted, switching is an

@@ -108,9 +108,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
             const SizedBox(height: 18),
             Expanded(
               child: ListView(
-                physics: const BouncingScrollPhysics(
-                  parent: AlwaysScrollableScrollPhysics(),
-                ),
+                physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
                 padding: const EdgeInsets.only(bottom: 8),
                 children: [
                   MizdahFadeUp(
