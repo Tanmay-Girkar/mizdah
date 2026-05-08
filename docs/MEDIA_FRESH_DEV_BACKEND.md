@@ -72,16 +72,11 @@ Likely outcomes:
 - Empty response / connection closed → engine.io is half-mounted
   (returns 101 then drops) — that's what the mobile client sees
 
-### 3. Compare with production (which works)
-
-```bash
-curl -sS -i --max-time 5 \
-  'https://mizdah-backend.ogoul.cloud/media-fresh/?EIO=4&transport=polling' \
-  | head -20
-```
-
-Expected: same 200 OK + engine.io payload as `/signaling-fresh`
-above. The dev server should match this.
+The expected response on a healthy `/media-fresh` mount is the
+same shape as `/signaling-fresh`: `HTTP/1.1 200 OK` + a body
+starting with `0{"sid":"...","upgrades":["websocket"],...}`.
+That's what the mobile client needs in order to upgrade to the
+WebSocket transport and run the mediasoup handshake.
 
 ---
 
