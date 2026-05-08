@@ -112,10 +112,10 @@ class MizdahTokens {
 
   /// Bottom padding every tab screen's ListView should reserve so
   /// content never slides under the floating nav. Equals the nav
-  /// pill height (68) + its bottom inset (12) + system safe-area
+  /// pill height (72) + its bottom inset (12) + system safe-area
   /// gesture pill + 28px breathing room.
   static double navBarBottomInset(BuildContext c) =>
-      68 + 12 + MediaQuery.of(c).padding.bottom + 28;
+      72 + 12 + MediaQuery.of(c).padding.bottom + 28;
 
   /// Soft, layered shadow system — never use one harsh shadow. The
   /// purple-tinted ambient shadow gives the floating-card look used
@@ -379,24 +379,39 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
   @override
   Widget build(BuildContext context) {
     final isDark = MizdahTokens.isDark(context);
-    // Glassmorphism panel — light mode uses a translucent white
-    // gradient; dark mode uses a translucent slate so the bar still
-    // reads as a separate floating surface above the dark backdrop.
-    final panelTop =
-        (isDark ? const Color(0xFF1B2236) : Colors.white).withValues(alpha: 0.92);
-    final panelBot =
-        (isDark ? const Color(0xFF131929) : Colors.white).withValues(alpha: 0.70);
-    final panelBorder = (isDark ? Colors.white : Colors.white)
-        .withValues(alpha: isDark ? 0.10 : 0.6);
-    final highlightLine =
-        (isDark ? Colors.white : Colors.white).withValues(alpha: isDark ? 0.06 : 0.6);
+    // ── Glassmorphism panel ──────────────────────────────────────
+    // The bar reads as frosted glass: lower fill alpha so the
+    // background gradient blurs through, a strong specular sheen
+    // along the top edge, and a thin inner stroke that catches the
+    // light. Layering recipe (back-to-front):
+    //   1) BackdropFilter blur (sigma 36)
+    //   2) Translucent fill gradient — lighter at top, darker at
+    //      bottom, like a tilted glass plate.
+    //   3) Diagonal sheen overlay — fades from a brighter highlight
+    //      in the top-left corner to nothing.
+    //   4) Hairline outer border (≈40 % white)
+    //   5) Soft purple-tinted ambient shadow
+    //   6) Inner 1-px highlight on the top edge
+
+    // Fill — much more transparent than before so the underlying
+    // gradient bleeds through the blur.
+    final panelTop = (isDark ? const Color(0xFF1B2236) : Colors.white)
+        .withValues(alpha: isDark ? 0.55 : 0.55);
+    final panelBot = (isDark ? const Color(0xFF131929) : Colors.white)
+        .withValues(alpha: isDark ? 0.30 : 0.28);
+
+    // Border — bright enough to catch light without looking solid.
+    final panelBorder =
+        Colors.white.withValues(alpha: isDark ? 0.14 : 0.55);
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
+      borderRadius: BorderRadius.circular(30),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+        // Stronger blur than the old 30 — pushes the underlying
+        // background into a softer, more "glass" wash.
+        filter: ImageFilter.blur(sigmaX: 36, sigmaY: 36),
         child: Container(
-          height: 68,
+          height: 72,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -404,27 +419,49 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
             ),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: panelBorder, width: 1.2),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(color: panelBorder, width: 1.0),
             boxShadow: [
+              // Outer purple ambient halo so the glass appears to
+              // float above the page.
               BoxShadow(
                 color: const Color(0xFF6C63FF)
-                    .withValues(alpha: isDark ? 0.22 : 0.16),
-                blurRadius: 36,
-                offset: const Offset(0, 18),
+                    .withValues(alpha: isDark ? 0.26 : 0.20),
+                blurRadius: 44,
+                offset: const Offset(0, 22),
               ),
+              // Mid-distance neutral shadow for grounding.
               BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.40 : 0.05),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.06),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
+              // 1-px specular highlight at the very top of the panel.
               BoxShadow(
-                color: highlightLine,
+                color: Colors.white
+                    .withValues(alpha: isDark ? 0.10 : 0.85),
                 blurRadius: 0,
                 offset: const Offset(0, 1),
                 spreadRadius: -0.5,
               ),
             ],
+          ),
+          // Diagonal sheen overlay — paints OVER the children too,
+          // so the alpha at the brightest point is kept low (≤ 15 %)
+          // so nav icons stay legible. Gives the glass a "catching
+          // light from above-left" highlight without hazing the row.
+          foregroundDecoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(30),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white.withValues(alpha: isDark ? 0.07 : 0.14),
+                Colors.white.withValues(alpha: 0.0),
+                Colors.white.withValues(alpha: 0.0),
+              ],
+              stops: const [0.0, 0.40, 1.0],
+            ),
           ),
           child: Row(
             children: [
