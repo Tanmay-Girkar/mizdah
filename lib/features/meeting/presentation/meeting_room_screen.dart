@@ -51,16 +51,26 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
     with WidgetsBindingObserver {
   bool _isRecording = false;
 
+  /// Captured-once reference to the meeting notifier. We can't call
+  /// `ref.read(...)` from `dispose()` — Riverpod throws
+  /// `Bad state: Cannot use "ref" after the widget was disposed`
+  /// because the element is already unmounting by the time dispose
+  /// runs. Caching the notifier here lets us call `leaveMeeting()`
+  /// directly without going through the now-invalid ref.
+  MeetingNotifier? _notifier;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PipController.instance.wire();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final authState = ref.read(authProvider);
       final user = authState.user;
       final jwtToken = authState.token ?? '';
-      ref.read(meetingProvider(widget.meetingId).notifier).joinMeeting(
+      _notifier = ref.read(meetingProvider(widget.meetingId).notifier);
+      _notifier!.joinMeeting(
         widget.meetingId,
         user?.id ?? 'guest',
         user?.name ?? 'Guest',
@@ -86,8 +96,16 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Note: Provider might handle this, but explicit leave is safer
-    ref.read(meetingProvider(widget.meetingId).notifier).leaveMeeting();
+    // Use the cached notifier reference — `ref.read` here would crash
+    // with "Cannot use ref after the widget was disposed" because the
+    // ConsumerStatefulElement is already unmounting.
+    try {
+      _notifier?.leaveMeeting();
+    } catch (e) {
+      // The provider may have already auto-disposed if the route
+      // was popped before initState's post-frame fired. Swallow —
+      // there's nothing to clean up in that case.
+    }
     super.dispose();
   }
   @override
