@@ -453,6 +453,93 @@ class _HomeDesignsEntry extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
+        // ── Featured: V4 Mizdah Premium (matches reference image) ──
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6), Color(0xFFA78BFA)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6C63FF).withValues(alpha: 0.30),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.all(1.2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF111727) : Colors.white,
+              borderRadius: BorderRadius.circular(19),
+            ),
+            child: ListTile(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [
+                      Color(0xFF6C63FF),
+                      Color(0xFF8B5CF6),
+                      Color(0xFFA78BFA),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF6C63FF).withValues(alpha: 0.4),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.auto_awesome_rounded,
+                    color: Colors.white, size: 20),
+              ),
+              title: Text(
+                'Mizdah Premium',
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black87,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              subtitle: Text(
+                'Reference design · glass blobs, gradient hero, '
+                'timeline list, floating nav',
+                style: TextStyle(
+                  color: isDark ? Colors.white54 : Colors.black54,
+                  fontSize: 12,
+                ),
+              ),
+              trailing: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'NEW',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+              onTap: () => context.push('/home-designs-v4'),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
         GlassCard(
           child: ListTile(
             leading: const Icon(Icons.dashboard_customize_rounded,
