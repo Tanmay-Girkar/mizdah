@@ -365,7 +365,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
   static const String _kBuildStamp =
-      'sfu-v15 2026-05-08 (toList-snapshot + recreate-renderer)';
+      'sfu-v16 2026-05-08 (fresh-stream-on-video-rebind)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -1088,25 +1088,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
                   r2.srcObject = null;
                 }
               }
-              // Sweep stale video tracks out of the cached streams
-              // (both signaling-keyed and media-keyed entries).
-              //
-              // CRITICAL: snapshot the track list with `.toList()`
-              // BEFORE iterating. `removeTrack` mutates the underlying
-              // `_GrowableList` synchronously on flutter_webrtc 0.12.7
-              // and throws `Concurrent modification during iteration`
-              // mid-loop otherwise (sfu-v14 regression).
-              for (final key in [from, mediaSid]) {
-                if (key == null) continue;
-                final s = _remoteStreams[key];
-                if (s == null) continue;
-                for (final t in s.getVideoTracks().toList()) {
-                  try {
-                    // ignore: unawaited_futures
-                    s.removeTrack(t);
-                  } catch (_) {}
-                }
-              }
+              // We deliberately DON'T sweep the cached stream's
+              // tracks here. flutter_webrtc 0.12.7's
+              // `MediaStream.removeTrack` throws
+              // `mediaStreamRemoveTrack ... track is null` when the
+              // native side already considers the track gone, and
+              // because that throw is async it bypasses our
+              // try/catch and surfaces as an unhandled exception.
+              // More importantly, the Dart-side stream KEEPS the
+              // failed track in its internal list, so the next
+              // sweep returns it again as a ghost. The fix lives
+              // in `_handleSfuRemoteTrack`'s video-rebind path —
+              // when video resumes we allocate a brand-new
+              // MediaStream and never touch the wedged one.
             } else if (data['videoEnabled'] == true) {
               // OFF → ON. Don't try to reattach a stale stream — the
               // server is about to fire a fresh `newProducer` for
@@ -3024,38 +3018,35 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     }
 
     final isNewStream = !_remoteStreams.containsKey(remoteSocketId);
-    var stream = _remoteStreams[remoteSocketId];
-    stream ??= await createLocalMediaStream('sfu-remote-$remoteSocketId');
+    final isVideoRebind = !isNewStream && track.kind == 'video';
 
-    // DEFENSIVE: when a fresh VIDEO track arrives for an existing
-    // stream (peer toggled camera off→on), the previous video track
-    // was disposed when their producer closed. Adding the new track
-    // alongside the disposed one and rebinding makes the renderer
-    // throw `tryAddRendererToVideoTrack ... MediaStreamTrack has
-    // been disposed`. Sweep stale video tracks BEFORE addTrack so
-    // the renderer only sees the live one.
+    // sfu-v16 — video off→on: the cached MediaStream is poisoned.
     //
-    // We only sweep on `kind=video` to preserve the active audio
-    // track. Mediasoup's audio consumer doesn't get torn down on a
-    // camera toggle, so audio stays healthy.
-    if (track.kind == 'video' && !isNewStream) {
-      // Snapshot with `.toList()` — `removeTrack` mutates the live
-      // list and would otherwise raise `Concurrent modification
-      // during iteration`. The native side may also already consider
-      // the track null/disposed and throw a benign PlatformException
-      // we swallow.
-      final stale = stream.getVideoTracks().toList();
-      for (final t in stale) {
-        try {
-          await stream.removeTrack(t);
-        } catch (e) {
-          _log('[SFU] removeTrack(stale video) failed: $e');
-        }
-      }
-      if (stale.isNotEmpty) {
-        _log('[SFU] swept ${stale.length} stale video track(s) from '
-            'stream $remoteSocketId before adding fresh track');
-      }
+    // When the peer's previous video producer closed, mediasoup
+    // disposes the consumer's track. The native side correctly
+    // marks it null, but flutter_webrtc 0.12.7 has a Dart-side
+    // bug where `MediaStream.removeTrack(disposed)` throws BEFORE
+    // updating its internal track list. The result: the disposed
+    // track lives forever in `stream.getVideoTracks()` as a ghost
+    // we cannot evict. Setting any renderer's `srcObject` to that
+    // stream makes Android iterate both tracks and throw
+    // `tryAddRendererToVideoTrack ... MediaStreamTrack has been
+    // disposed` on the ghost.
+    //
+    // Sidestep: on a video rebind, allocate a BRAND-NEW MediaStream
+    // containing only the fresh track. The old (poisoned) stream
+    // is orphaned in the GC's hands. flutter_webrtc plays remote
+    // audio independently of stream attachment, so the peer's
+    // mic stays audible through the orphaned stream's audio track
+    // until the next renderer recreate.
+    final MediaStream stream;
+    if (isVideoRebind) {
+      stream = await createLocalMediaStream(
+        'sfu-remote-$remoteSocketId-v${DateTime.now().millisecondsSinceEpoch}',
+      );
+    } else {
+      stream = _remoteStreams[remoteSocketId] ??
+          await createLocalMediaStream('sfu-remote-$remoteSocketId');
     }
 
     try {
@@ -3067,42 +3058,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (isNewStream) {
       // First track for this peer — normal attachment.
       await _attachRemoteStream(remoteSocketId, stream);
-    } else {
-      // Adding ANOTHER track (typically video after audio, OR a fresh
-      // camera track after the peer toggled video off→on) to a stream
-      // the renderer is already displaying.
-      //
-      // Until sfu-v14 we tried to rebind in place by clearing
-      // `renderer.srcObject` and reassigning. That works for the
-      // audio-after-video case but BREAKS on the off→on rebind:
-      // Android's native RTCVideoRenderer keeps a strong ref to the
-      // last track it adopted and on the next assignment throws
-      // `tryAddRendererToVideoTrack ... MediaStreamTrack has been
-      // disposed`. The previous track was disposed when the peer's
-      // producer closed, so the renderer is wedged.
-      //
-      // Fix in sfu-v15: for video tracks on an EXISTING stream, throw
-      // the old renderer away and create a brand-new one. We update
-      // state.remoteRenderers (and any aliased keys pointing at the
-      // same instance) BEFORE disposing the old one, so the widget
-      // tree rebinds to the fresh renderer on the next frame and the
-      // old native renderer can be torn down without anyone holding
-      // a stale reference.
-      //
-      // Audio-only rebinds keep the cheap srcObject-swap path —
-      // there's no disposed-track risk for audio.
-      final renderer = state.remoteRenderers[remoteSocketId];
-      if (renderer == null) {
+    } else if (isVideoRebind) {
+      // Adding a fresh camera track after the peer toggled video
+      // off→on. The OLD renderer is wedged (its native side still
+      // references the now-disposed prior track). Throw it away
+      // and install a brand-new RTCVideoRenderer pointed at the
+      // fresh stream. We update state.remoteRenderers (and every
+      // aliased key pointing at the same instance) BEFORE disposing
+      // the old renderer, so the widget tree rebinds on the next
+      // frame and nobody holds a stale reference at teardown time.
+      final oldRenderer = state.remoteRenderers[remoteSocketId];
+      _log('[SFU] re-creating renderer + stream for $remoteSocketId '
+          '(video rebind — old stream orphaned to dodge ghost-track wedge)');
+      _remoteStreams[remoteSocketId] = stream;
+
+      if (oldRenderer == null) {
         // Renderer was disposed since the first track. Re-create.
-        _remoteStreams[remoteSocketId] = stream;
         await _attachRemoteStream(remoteSocketId, stream);
-      } else if (track.kind == 'video') {
-        _log('[SFU] re-creating renderer for $remoteSocketId '
-            '(video rebind path — sidesteps disposed-track wedge)');
-        // Snapshot every key currently aliased to this same renderer
-        // instance so we can point them all at the fresh one.
+      } else {
         final aliasKeys = state.remoteRenderers.entries
-            .where((e) => identical(e.value, renderer))
+            .where((e) => identical(e.value, oldRenderer))
             .map((e) => e.key)
             .toList();
         final fresh = RTCVideoRenderer();
@@ -3112,7 +3087,6 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           return;
         }
         fresh.srcObject = stream;
-        _remoteStreams[remoteSocketId] = stream;
         final newMap =
             Map<String, RTCVideoRenderer>.from(state.remoteRenderers);
         for (final k in aliasKeys) {
@@ -3123,19 +3097,28 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         }
         state = state.copyWith(remoteRenderers: newMap);
         // Dispose the old renderer AFTER the widget tree has had a
-        // chance to unbind from it. Without this gap Android's native
-        // renderer is still attached to the (now-disposed) prior
-        // track and throws on teardown.
+        // chance to unbind from it. Without this gap Android's
+        // native renderer is still attached to the (now-disposed)
+        // prior track and throws on teardown.
         Future<void>.delayed(const Duration(milliseconds: 100), () async {
-          try { renderer.srcObject = null; } catch (_) {}
+          try { oldRenderer.srcObject = null; } catch (_) {}
           try {
-            await renderer.dispose();
+            await oldRenderer.dispose();
           } catch (e) {
             _log('[SFU] old renderer dispose failed: $e');
           }
         });
+      }
+    } else {
+      // Audio-after-video on an existing stream — cheap path is
+      // fine. Audio doesn't have the disposed-track problem because
+      // mediasoup's audio consumer doesn't get torn down on a camera
+      // toggle, so the only audio track in flight is always live.
+      final renderer = state.remoteRenderers[remoteSocketId];
+      if (renderer == null) {
+        _remoteStreams[remoteSocketId] = stream;
+        await _attachRemoteStream(remoteSocketId, stream);
       } else {
-        // Audio-after-video on an existing stream — cheap path is fine.
         _log('[SFU] re-binding renderer for $remoteSocketId to pick up '
             'new ${track.kind} track');
         renderer.srcObject = null;
