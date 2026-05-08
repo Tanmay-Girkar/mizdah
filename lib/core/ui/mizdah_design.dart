@@ -266,28 +266,25 @@ class MizdahTabScaffold extends StatelessWidget {
   /// 3 = People, 4 = Settings). Drives the floating-nav highlight.
   final int activeIndex;
   final Widget body;
-
-  /// When true, no SafeArea is applied to the body — let the screen
-  /// own its own scroll padding (so the lavender gradient extends
-  /// edge-to-edge while content respects insets).
-  final bool extendBodyBehindNav;
   const MizdahTabScaffold({
     super.key,
     required this.activeIndex,
     required this.body,
-    this.extendBodyBehindNav = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    final navInset = MizdahTokens.navBarBottomInset(context);
     return Scaffold(
       backgroundColor: MizdahTokens.bg(context),
-      extendBody: extendBodyBehindNav,
+      // We don't use the Material `bottomNavigationBar` slot — the
+      // nav is a floating glass pill we draw inside the Stack.
+      // `extendBody` is moot in that setup.
       body: Stack(
         children: [
-          // Diagonal gradient backdrop — same as home screen so all
-          // tabs feel like one continuous canvas. Adaptive: lavender
-          // in light mode, deep navy in dark mode.
+          // 1. Full-screen background gradient — flows underneath
+          //    the floating nav too so the BackdropFilter has
+          //    something to frost.
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -295,8 +292,7 @@ class MizdahTabScaffold extends StatelessWidget {
               ),
             ),
           ),
-          // Subtle radial highlight at top-left for depth — slightly
-          // brighter in dark mode so it's actually visible.
+          // 2. Subtle radial highlight at top-left for depth.
           Positioned(
             top: -120,
             left: -80,
@@ -318,8 +314,25 @@ class MizdahTabScaffold extends StatelessWidget {
               ),
             ),
           ),
-          body,
-          // Floating bottom nav — pinned with safe-area inset.
+          // 3. Body — explicitly constrained ABOVE the floating
+          //    nav. With `bottom: navInset` the body's clip rect
+          //    ends above the nav, so any ListView/CustomScroll
+          //    inside this body physically cannot render in the
+          //    nav zone (WhatsApp-/Telegram-style behaviour).
+          //
+          //    The screen's own ListView no longer needs a bottom
+          //    padding for the nav — its parent box does the work.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: navInset,
+            child: body,
+          ),
+          // 4. Floating bottom nav — sits in the strip we reserved
+          //    above. The nav respects the system safe-area inset
+          //    so it never collides with the iOS home indicator or
+          //    the Android gesture pill.
           Align(
             alignment: Alignment.bottomCenter,
             child: SafeArea(

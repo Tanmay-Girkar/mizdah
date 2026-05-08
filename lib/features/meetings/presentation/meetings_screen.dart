@@ -70,7 +70,9 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(
                 parent: BouncingScrollPhysics()),
-            padding: EdgeInsets.only(bottom: MizdahTokens.navBarBottomInset(context)),
+            // Bottom space for the floating nav is reserved by
+            // MizdahTabScaffold so the ListView clip ends above it.
+            padding: const EdgeInsets.only(bottom: 8),
             children: [
               MizdahFadeUp(
                 controller: _entryCtrl,

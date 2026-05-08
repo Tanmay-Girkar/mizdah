@@ -58,7 +58,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         bottom: false,
         child: ListView(
           physics: const BouncingScrollPhysics(),
-          padding: EdgeInsets.only(bottom: MizdahTokens.navBarBottomInset(context)),
+          // Bottom space for the floating nav is reserved by
+            // MizdahTabScaffold so the ListView clip ends above it.
+            padding: const EdgeInsets.only(bottom: 8),
           children: [
             MizdahFadeUp(
               controller: _entryCtrl,

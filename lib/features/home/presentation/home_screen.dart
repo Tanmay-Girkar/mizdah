@@ -109,6 +109,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final navInset = md.MizdahTokens.navBarBottomInset(context);
     return Scaffold(
       drawer: const MizdahDrawer(),
       endDrawer: const NotificationsDrawer(),
@@ -117,6 +118,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         children: [
           // Faint background gradient wash — adaptive: lavender →
           // off-white in light mode, deep navy in dark mode.
+          // Spans the FULL window (under the floating nav too) so the
+          // BackdropFilter has something to frost.
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -125,43 +128,60 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             ),
           ),
 
-          // Scrollable content
-          SafeArea(
-            bottom: false,
-            child: RefreshIndicator(
-              color: _Tokens.primary,
-              onRefresh: () async {
-                ref.invalidate(callHistoryProvider);
-                ref.invalidate(schedulesProvider);
-              },
-              child: ListView(
-                padding: EdgeInsets.fromLTRB(
-                    0, 0, 0, md.MizdahTokens.navBarBottomInset(context)),
-                physics: const BouncingScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics()),
-                children: [
-                  _Header(entryCtrl: _entryCtrl),
-                  _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
-                  const SizedBox(height: 8),
-                  _ActionCardsRow(entryCtrl: _entryCtrl),
-                  const SizedBox(height: 24),
-                  _UpcomingSection(entryCtrl: _entryCtrl),
-                  const SizedBox(height: 14),
-                  _RecentActivityCard(entryCtrl: _entryCtrl),
-                  const SizedBox(height: 16),
-                ],
+          // Scroll area — explicitly bounded ABOVE the floating nav
+          // (`bottom: navInset`). With this constraint the ListView's
+          // clip rect ends above the nav, so scrolling content can
+          // never render underneath it (WhatsApp / Telegram / Zoom-
+          // style behaviour). Items physically disappear at the edge
+          // of the box rather than being covered by an opaque pill.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: navInset,
+            child: SafeArea(
+              bottom: false,
+              child: RefreshIndicator(
+                color: _Tokens.primary,
+                onRefresh: () async {
+                  ref.invalidate(callHistoryProvider);
+                  ref.invalidate(schedulesProvider);
+                },
+                child: ListView(
+                  // Tiny inner padding for breathing room at the
+                  // last item — the bulk of the bottom inset is
+                  // already reserved by the parent Positioned.
+                  padding: const EdgeInsets.only(bottom: 8),
+                  physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
+                  children: [
+                    _Header(entryCtrl: _entryCtrl),
+                    _Hero(floatCtrl: _floatCtrl, entryCtrl: _entryCtrl),
+                    const SizedBox(height: 8),
+                    _ActionCardsRow(entryCtrl: _entryCtrl),
+                    const SizedBox(height: 24),
+                    _UpcomingSection(entryCtrl: _entryCtrl),
+                    const SizedBox(height: 14),
+                    _RecentActivityCard(entryCtrl: _entryCtrl),
+                    const SizedBox(height: 16),
+                  ],
+                ),
               ),
             ),
           ),
 
-          // Floating bottom navigation — shared 5-tab nav (Home /
-          // Meetings / Call / People / Settings) so every tab page
-          // looks identical. activeIndex=0 because this IS the home.
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: MediaQuery.of(context).padding.bottom + 10,
-            child: const md.MizdahFloatingNav(activeIndex: 0),
+          // Floating bottom navigation — sits in the strip we
+          // reserved above. SafeArea guarantees the nav clears the
+          // iOS home indicator and the Android gesture pill.
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: const md.MizdahFloatingNav(activeIndex: 0),
+              ),
+            ),
           ),
         ],
       ),
