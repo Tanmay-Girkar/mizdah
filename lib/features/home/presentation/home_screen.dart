@@ -367,13 +367,31 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 12, 14),
+      padding: const EdgeInsets.fromLTRB(20, 8, 4, 14),
       child: SizedBox(
-        height: 220,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+        height: 270,
+        child: Stack(
+          clipBehavior: Clip.none,
           children: [
-            Expanded(
+            // Hero illustration positioned on the right, allowed to
+            // be wider than a Row's Expanded sibling would allow. The
+            // illustration is mostly translucent at the edges so any
+            // overlap with the text column reads as soft layering
+            // rather than a collision.
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: 230,
+              child: _BlobIllustration(floatCtrl: floatCtrl),
+            ),
+            // Text column on the left — fixed-width SizedBox so the
+            // heading wraps the same way regardless of screen width,
+            // and the illustration can take the remainder.
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
               child: _FadeUp(
                 controller: entryCtrl,
                 delay: 0.05,
@@ -382,7 +400,7 @@ class _Hero extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: const [
                     _HeroHeading(),
-                    SizedBox(height: 12),
+                    SizedBox(height: 14),
                     Text(
                       'Collaborate · Meet · Achieve',
                       style: TextStyle(
@@ -395,12 +413,6 @@ class _Hero extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
-            // Hero illustration — sized up for more presence
-            SizedBox(
-              width: 170,
-              height: 220,
-              child: _BlobIllustration(floatCtrl: floatCtrl),
             ),
           ],
         ),
