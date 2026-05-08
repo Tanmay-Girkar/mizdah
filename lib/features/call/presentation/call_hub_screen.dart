@@ -1,24 +1,35 @@
 // ════════════════════════════════════════════════════════════════════
-//  Call hub — premium "what kind of call?" landing page
+//  Call hub — the "Call" tab
 //  ────────────────────────────────────────────────────────────────────
-//  Reachable from the floating bottom-nav center "Call" tab. Three
-//  primary actions:
-//    • Start instant meeting (gradient hero card)
-//    • Join with code         (input card)
-//    • Schedule for later     (secondary card)
-//  Plus a "Recent" preview row below — same data as home_screen's
-//  callHistoryProvider — so the hub doubles as a quick redial.
+//  Stripped down to two features per UX spec:
+//
+//    1. Search bar — type an email or name to find a Mizdah user.
+//       Live-debounced lookup against
+//       `GET /api/auth/users/search?q=...`. Each result row exposes
+//       audio + video call buttons.
+//
+//    2. Recent contacts — the people you've spoken with before
+//       (derived from `callHistoryProvider`). Same call buttons
+//       inline so the row doubles as a quick-redial.
+//
+//  Tapping audio / video on either list fires
+//  `p2pCallProvider.startCall(...)` which kicks off the signaling
+//  handshake. Phase transitions are handled by the provider; this
+//  screen just navigates to `/p2p-call` once `outgoing` is active.
 // ════════════════════════════════════════════════════════════════════
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/ui/mizdah_design.dart';
-import '../../../core/utils/meeting_utils.dart';
-import '../../../data/repositories/meeting_repository.dart';
+import '../../../data/models/models.dart';
+import '../../../data/repositories/auth_repository.dart';
+import '../../../data/repositories/participant_repository.dart';
 import '../../auth/auth_provider.dart';
-import '../../home/presentation/home_screen.dart' show callHistoryProvider;
+import '../p2p_call_provider.dart';
 
 class CallHubScreen extends ConsumerStatefulWidget {
   const CallHubScreen({super.key});
@@ -30,8 +41,14 @@ class CallHubScreen extends ConsumerStatefulWidget {
 class _CallHubScreenState extends ConsumerState<CallHubScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _entryCtrl;
-  final TextEditingController _codeCtrl = TextEditingController();
-  bool _busy = false;
+  final AuthRepository _authRepo = AuthRepository();
+  final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  Timer? _debounceTimer;
+  String _query = '';
+  bool _searching = false;
+  List<User> _results = const [];
 
   @override
   void initState() {
@@ -44,56 +61,47 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _entryCtrl.dispose();
-    _codeCtrl.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _startInstantMeeting() async {
-    if (_busy) return;
-    final auth = ref.read(authProvider);
-    if (auth.user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text('Sign in first to start a meeting.'),
-        ),
-      );
+  void _onQueryChanged(String value) {
+    _debounceTimer?.cancel();
+    final trimmed = value.trim();
+    setState(() => _query = trimmed);
+    if (trimmed.isEmpty) {
+      setState(() {
+        _results = const [];
+        _searching = false;
+      });
       return;
     }
-    setState(() => _busy = true);
-    try {
-      final repo = ref.read(meetingRepositoryProvider);
-      final meeting = await repo.createMeeting(hostId: auth.user!.id);
-      if (!mounted) return;
-      context.push('/pre-join/${meeting.code}?host=true');
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text('Could not start meeting: $e'),
-          backgroundColor: const Color(0xFFB42318),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    _debounceTimer = Timer(const Duration(milliseconds: 320), _runSearch);
   }
 
-  void _joinWithCode() {
-    final raw = _codeCtrl.text.trim();
-    if (raw.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text('Enter a meeting code to continue.'),
-        ),
-      );
-      return;
-    }
-    final code = MeetingUtils.extractCode(raw);
-    context.push('/pre-join/$code');
+  Future<void> _runSearch() async {
+    if (_query.isEmpty) return;
+    final me = ref.read(authProvider).user?.id;
+    setState(() => _searching = true);
+    final users = await _authRepo.searchUsers(_query);
+    if (!mounted) return;
+    // Filter ourselves out — calling yourself is silly.
+    final filtered = users.where((u) => u.id != me).toList();
+    setState(() {
+      _searching = false;
+      _results = filtered;
+    });
+  }
+
+  void _placeCall(User target, {required bool withVideo}) {
+    FocusScope.of(context).unfocus();
+    ref
+        .read(p2pCallProvider.notifier)
+        .startCall(target, withVideo: withVideo);
+    context.push('/p2p-call');
   }
 
   @override
@@ -110,511 +118,479 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
               controller: _entryCtrl,
               delay: 0.0,
               child: const MizdahPageHeader(
-                leading: 'Start a',
+                leading: 'Find &',
                 accent: 'call',
-                subtitle: 'Instant · Scheduled · Join with code',
+                subtitle: 'Search anyone, ring instantly',
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
 
-            // Hero gradient — instant meeting CTA
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.10,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: _InstantMeetingHero(
-                  busy: _busy,
-                  onTap: _startInstantMeeting,
+                child: _SearchField(
+                  controller: _searchCtrl,
+                  focusNode: _searchFocus,
+                  onChanged: _onQueryChanged,
+                  busy: _searching,
                 ),
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 18),
 
-            // Join with code card
+            // Body — search results win when there's a query, else
+            // the recent-contacts list.
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.18,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: _JoinCodeCard(
-                  controller: _codeCtrl,
-                  onSubmit: _joinWithCode,
+              child: _query.isEmpty
+                  ? _RecentContactsSection(onCall: _placeCall)
+                  : _SearchResultsSection(
+                      results: _results,
+                      busy: _searching,
+                      query: _query,
+                      onCall: _placeCall,
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Search field — premium pill with live debouncing
+// ────────────────────────────────────────────────────────────────────
+
+class _SearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final bool busy;
+  const _SearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.busy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: MizdahTokens.surface(context),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: MizdahTokens.border(context), width: 1),
+        boxShadow: MizdahTokens.shadow(context, elevation: 0.6),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 14),
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              gradient: MizdahTokens.heroGradient,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: MizdahTokens.primary.withValues(alpha: 0.30),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.search_rounded,
+                color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              onChanged: onChanged,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              textCapitalization: TextCapitalization.none,
+              style: TextStyle(
+                color: MizdahTokens.inkOf(context),
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+              decoration: InputDecoration(
+                isCollapsed: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                border: InputBorder.none,
+                hintText: 'Search by email or name',
+                hintStyle: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),
-            const SizedBox(height: 14),
+          ),
+          if (busy)
+            const Padding(
+              padding: EdgeInsets.only(right: 14),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor:
+                      AlwaysStoppedAnimation(MizdahTokens.primary),
+                ),
+              ),
+            )
+          else if (controller.text.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                tooltip: 'Clear',
+                onPressed: () {
+                  controller.clear();
+                  onChanged('');
+                },
+                icon: Icon(Icons.close_rounded,
+                    color: MizdahTokens.mutedOf(context), size: 18),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
-            // Schedule + Add People (compact 2-column row)
-            MizdahFadeUp(
-              controller: _entryCtrl,
-              delay: 0.24,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+// ────────────────────────────────────────────────────────────────────
+//  Search results
+// ────────────────────────────────────────────────────────────────────
+
+class _SearchResultsSection extends StatelessWidget {
+  final List<User> results;
+  final bool busy;
+  final String query;
+  final void Function(User, {required bool withVideo}) onCall;
+  const _SearchResultsSection({
+    required this.results,
+    required this.busy,
+    required this.query,
+    required this.onCall,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (busy && results.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 60),
+        child: Center(
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.4,
+              valueColor: AlwaysStoppedAnimation(MizdahTokens.primary),
+            ),
+          ),
+        ),
+      );
+    }
+    if (results.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 18),
+        child: MizdahCard(
+          padding: EdgeInsets.zero,
+          child: MizdahEmptyState(
+            icon: Icons.person_search_rounded,
+            title: 'No matches',
+            subtitle: 'Try a different name or email.',
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              '${results.length} ${results.length == 1 ? 'match' : 'matches'} '
+              'for "$query"',
+              style: TextStyle(
+                color: MizdahTokens.mutedOf(context),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+          for (final u in results)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _UserRow(user: u, onCall: onCall),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Recent contacts — derived from callHistoryProvider
+// ────────────────────────────────────────────────────────────────────
+
+class _RecentContactsSection extends ConsumerWidget {
+  final void Function(User, {required bool withVideo}) onCall;
+  const _RecentContactsSection({required this.onCall});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Build a stable list from call-history. Each entry becomes a
+    // `User`-shaped row so the same _UserRow widget renders both
+    // search hits and contacts.
+    final history = ref.watch(_recentContactsProvider);
+
+    return history.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 60),
+        child: Center(
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.4,
+              valueColor: AlwaysStoppedAnimation(MizdahTokens.primary),
+            ),
+          ),
+        ),
+      ),
+      error: (_, __) => const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 18),
+        child: MizdahCard(
+          padding: EdgeInsets.zero,
+          child: MizdahEmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Could not load contacts',
+            subtitle: 'Pull down to retry',
+          ),
+        ),
+      ),
+      data: (contacts) {
+        if (contacts.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18),
+            child: MizdahCard(
+              padding: EdgeInsets.zero,
+              child: MizdahEmptyState(
+                icon: Icons.contacts_rounded,
+                title: 'No contacts yet',
+                subtitle:
+                    'Search anyone above to start a call. People you call show up here for quick redial.',
+              ),
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: 8),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: _ActionTile(
-                        icon: Icons.event_note_rounded,
-                        label: 'Schedule',
-                        sublabel: 'For later',
-                        onTap: () => context.push('/schedule'),
+                    Text(
+                      'Contacts',
+                      style: TextStyle(
+                        color: MizdahTokens.inkOf(context),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _ActionTile(
-                        icon: Icons.group_add_rounded,
-                        label: 'Add people',
-                        sublabel: 'From contacts',
-                        onTap: () => context.go('/people'),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        gradient: MizdahTokens.heroGradient,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '${contacts.length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 26),
-
-            // Recent calls — quick redial
-            MizdahFadeUp(
-              controller: _entryCtrl,
-              delay: 0.30,
-              child: const _RecentCallsStrip(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  Hero CTA — full-width gradient card with a phone-call icon
-// ────────────────────────────────────────────────────────────────────
-
-class _InstantMeetingHero extends StatelessWidget {
-  final bool busy;
-  final VoidCallback onTap;
-  const _InstantMeetingHero({required this.busy, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return MizdahPressScale(
-      scaleTo: 0.985,
-      onTap: busy ? () {} : onTap,
-      child: Container(
-        height: 200,
-        decoration: BoxDecoration(
-          gradient: MizdahTokens.heroGradient,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: MizdahTokens.primary.withValues(alpha: 0.35),
-              blurRadius: 24,
-              offset: const Offset(0, 14),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Decorative curved overlays
-            Positioned(
-              right: -60,
-              top: -40,
-              child: Container(
-                width: 220,
-                height: 220,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.10),
+              for (final u in contacts)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _UserRow(user: u, onCall: onCall),
                 ),
-              ),
-            ),
-            Positioned(
-              right: 30,
-              bottom: -40,
-              child: Container(
-                width: 140,
-                height: 140,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.06),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.20),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.30)),
-                    ),
-                    child: const Text(
-                      'INSTANT',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        letterSpacing: 1.4,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  const Text(
-                    'Start a meeting',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.4,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Spin up a room and share the link',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.18),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.30)),
-                        ),
-                        child: const Icon(Icons.videocam_rounded,
-                            color: Colors.white, size: 20),
-                      ),
-                      const Spacer(),
-                      Container(
-                        width: 44,
-                        height: 44,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.10),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: busy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation(
-                                      MizdahTokens.primary),
-                                ),
-                              )
-                            : const Icon(
-                                Icons.arrow_forward_rounded,
-                                color: MizdahTokens.primary,
-                                size: 20,
-                              ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  Join with code
-// ────────────────────────────────────────────────────────────────────
-
-class _JoinCodeCard extends StatelessWidget {
-  final TextEditingController controller;
-  final VoidCallback onSubmit;
-  const _JoinCodeCard({required this.controller, required this.onSubmit});
-
-  @override
-  Widget build(BuildContext context) {
-    return MizdahCard(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Join with',
-            style: TextStyle(
-              color: MizdahTokens.mutedOf(context),
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Meeting code',
-            style: TextStyle(
-              color: MizdahTokens.inkOf(context),
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 46,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: MizdahTokens.softPillBg(context),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.link_rounded,
-                          color: MizdahTokens.mutedOf(context), size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: controller,
-                          textCapitalization: TextCapitalization.none,
-                          style: TextStyle(
-                            color: MizdahTokens.inkOf(context),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.3,
-                          ),
-                          decoration: InputDecoration(
-                            isCollapsed: true,
-                            border: InputBorder.none,
-                            hintText: 'Enter code or link',
-                            hintStyle: TextStyle(
-                              color: MizdahTokens.mutedOf(context),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          onSubmitted: (_) => onSubmit(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              MizdahPressScale(
-                scaleTo: 0.92,
-                onTap: onSubmit,
-                child: Container(
-                  width: 46,
-                  height: 46,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    gradient: MizdahTokens.heroGradient,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color:
-                            MizdahTokens.primary.withValues(alpha: 0.40),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.white, size: 20),
-                ),
-              ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  Compact action tile — used for Schedule + Add People
-// ────────────────────────────────────────────────────────────────────
-
-class _ActionTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String sublabel;
-  final VoidCallback onTap;
-  const _ActionTile({
-    required this.icon,
-    required this.label,
-    required this.sublabel,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return MizdahCard(
-      padding: const EdgeInsets.all(14),
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: MizdahTokens.iconTileBg(context),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: MizdahTokens.primary, size: 20),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: MizdahTokens.inkOf(context),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.1,
-                  ),
-                ),
-                Text(
-                  sublabel,
-                  style: TextStyle(
-                    color: MizdahTokens.mutedOf(context),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  Recent calls — horizontal strip below the actions
-// ────────────────────────────────────────────────────────────────────
-
-class _RecentCallsStrip extends ConsumerWidget {
-  const _RecentCallsStrip();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(callHistoryProvider);
-    return async.when(
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (history) {
-        if (history.isEmpty) return const SizedBox.shrink();
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Text(
-                'Recent',
-                style: TextStyle(
-                  color: MizdahTokens.inkOf(context),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3,
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 116,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                itemCount: history.length.clamp(0, 8),
-                itemBuilder: (ctx, i) {
-                  final c = history[i];
-                  final code = c.meetingCode?.isNotEmpty == true
-                      ? MeetingUtils.extractCode(c.meetingCode!)
-                      : null;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: MizdahPressScale(
-                      scaleTo: 0.95,
-                      onTap: code == null
-                          ? null
-                          : () => context.push('/pre-join/$code'),
-                      child: Container(
-                        width: 102,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: MizdahTokens.surface(context),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                              color: MizdahTokens.border(context), width: 1),
-                          boxShadow:
-                              MizdahTokens.shadow(context, elevation: 0.5),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            MizdahAvatar(name: c.title, size: 36),
-                            const Spacer(),
-                            Text(
-                              c.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: MizdahTokens.inkOf(context),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              code ?? 'No code',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: MizdahTokens.mutedOf(context),
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
         );
       },
     );
   }
 }
+
+// Local provider — derives a deduped contacts list from the
+// participant history. We don't have a dedicated "people I've met
+// with" endpoint yet, so this is the closest approximation. Each
+// history row becomes a synthetic `User` so the same `_UserRow`
+// widget renders both search hits and contacts.
+final _recentContactsProvider = FutureProvider<List<User>>((ref) async {
+  final auth = ref.watch(authProvider);
+  if (auth.user == null) return const [];
+  final repo = ref.read(participantRepositoryProvider);
+  final history = await repo.getUserHistory(auth.user!.id);
+  final seen = <String>{};
+  final out = <User>[];
+  for (final h in history) {
+    final key = h.title.trim().toLowerCase();
+    if (key.isEmpty || seen.contains(key)) continue;
+    seen.add(key);
+    out.add(User(
+      id: h.id,
+      name: h.title.trim(),
+      email: h.meetingCode ?? '',
+    ));
+  }
+  return out;
+});
+
+// ────────────────────────────────────────────────────────────────────
+
+class _UserRow extends StatelessWidget {
+  final User user;
+  final void Function(User, {required bool withVideo}) onCall;
+  const _UserRow({required this.user, required this.onCall});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasEmail = user.email.isNotEmpty;
+    return MizdahCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          MizdahAvatar(name: user.name, size: 46),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  user.name.isEmpty ? 'Unknown' : user.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                if (hasEmail) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    user.email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Audio call
+          _CallActionButton(
+            icon: Icons.call_rounded,
+            tone: _CallTone.audio,
+            tooltip: 'Audio call',
+            onTap: () => onCall(user, withVideo: false),
+          ),
+          const SizedBox(width: 8),
+          // Video call
+          _CallActionButton(
+            icon: Icons.videocam_rounded,
+            tone: _CallTone.video,
+            tooltip: 'Video call',
+            onTap: () => onCall(user, withVideo: true),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _CallTone { audio, video }
+
+class _CallActionButton extends StatelessWidget {
+  final IconData icon;
+  final _CallTone tone;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _CallActionButton({
+    required this.icon,
+    required this.tone,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final gradient = tone == _CallTone.video
+        ? MizdahTokens.heroGradient
+        : const LinearGradient(
+            colors: [Color(0xFF10B981), Color(0xFF059669)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          );
+    final glow = tone == _CallTone.video
+        ? MizdahTokens.primary
+        : const Color(0xFF10B981);
+    return Tooltip(
+      message: tooltip,
+      child: MizdahPressScale(
+        scaleTo: 0.90,
+        onTap: onTap,
+        child: Container(
+          width: 42,
+          height: 42,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            gradient: gradient,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: glow.withValues(alpha: 0.36),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: Icon(icon, color: Colors.white, size: 19),
+        ),
+      ),
+    );
+  }
+}
+

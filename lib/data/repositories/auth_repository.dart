@@ -89,4 +89,35 @@ class AuthRepository {
       rethrow;
     }
   }
+
+  /// Search the directory for users matching `q` (name or email
+  /// substring). Backed by `GET /api/auth/users/search?q=<q>`.
+  /// Returns an empty list on network errors so the UI can stay
+  /// interactive instead of throwing on every keystroke.
+  Future<List<User>> searchUsers(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    try {
+      final response = await _apiClient.get(
+        '${ApiConfig.baseUrl}/api/auth/users/search',
+        queryParameters: {'q': q},
+      );
+      final dynamic data = response.data;
+      final List<dynamic> rawList;
+      if (data is Map && data['users'] is List) {
+        rawList = data['users'] as List<dynamic>;
+      } else if (data is List) {
+        rawList = data;
+      } else {
+        return const [];
+      }
+      return rawList
+          .whereType<Map>()
+          .map((m) => User.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+    } catch (e) {
+      debugPrint('searchUsers failed: $e');
+      return const [];
+    }
+  }
 }

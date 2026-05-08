@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/navigation/app_router.dart';
+import 'features/call/presentation/p2p_incoming_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,6 +74,12 @@ class MizdahApp extends ConsumerWidget {
       theme: MizdahTheme.lightTheme,
       darkTheme: MizdahTheme.darkTheme,
       routerConfig: appRouter,
+      // Wrap every route in the incoming-call overlay so a ringing
+      // P2P call can interrupt the user from anywhere — Home,
+      // Meetings, even a settings sheet.
+      builder: (context, child) => P2PIncomingOverlay(
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }
