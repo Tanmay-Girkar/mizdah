@@ -110,12 +110,23 @@ class MizdahTokens {
   static Color iconTileBg(BuildContext c) =>
       isDark(c) ? const Color(0xFF2A2342) : const Color(0xFFEEF2FF);
 
-  /// Bottom padding every tab screen's ListView should reserve so
-  /// content never slides under the floating nav. Equals the nav
-  /// pill height (72) + its bottom inset (12) + system safe-area
-  /// gesture pill + 28px breathing room.
+  /// Bottom padding every tab screen's scroll area should reserve so
+  /// content stops cleanly above the floating nav without leaving a
+  /// big empty band between them.
+  ///
+  /// Recipe (matches WhatsApp / Telegram / iOS bottom-nav spacing):
+  ///   12 px  — nav outer margin from the screen edge
+  /// + 72 px  — nav pill height
+  /// +  6 px  — minimal visual gap between content and nav top
+  /// + system safe-area inset (iOS home indicator / Android
+  ///            gesture pill)
+  ///
+  /// The 6 px gap is intentionally tight — the nav's drop shadow
+  /// (blur 44) extends well above its visible edge, so the last
+  /// item naturally sits under the nav's halo. Anything more turns
+  /// into wasted empty space.
   static double navBarBottomInset(BuildContext c) =>
-      72 + 12 + MediaQuery.of(c).padding.bottom + 28;
+      12 + 72 + 6 + MediaQuery.of(c).padding.bottom;
 
   /// Soft, layered shadow system — never use one harsh shadow. The
   /// purple-tinted ambient shadow gives the floating-card look used
