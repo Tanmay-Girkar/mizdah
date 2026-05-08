@@ -453,10 +453,14 @@ class _HeroHeading extends StatelessWidget {
   }
 }
 
-/// Translucent blobs + orbit lines + floating icon cards — the
-/// signature illustration in the hero. Drives subtle vertical
-/// motion on the icons via the supplied float controller's
-/// sin-wave value so the scene feels alive without being noisy.
+/// Hero illustration — uses the user-supplied `bg_image.png` from
+/// `assets/images/`. Subtle vertical bob driven by the float
+/// controller's sin-wave so the image feels alive without
+/// distracting motion.
+///
+/// If the asset is missing the errorBuilder shows a soft lavender
+/// blob fallback so a missing-file deploy doesn't crash the
+/// home screen.
 class _BlobIllustration extends StatelessWidget {
   final AnimationController floatCtrl;
   const _BlobIllustration({required this.floatCtrl});
@@ -467,190 +471,31 @@ class _BlobIllustration extends StatelessWidget {
       animation: floatCtrl,
       builder: (context, _) {
         final t = math.sin(floatCtrl.value * math.pi * 2);
-        return Stack(
-          children: [
-            // Big purple blob
-            Positioned(
-              top: 20 + t * 4,
-              left: 10,
-              child: _Blob(
-                size: 90,
-                colors: const [Color(0xFFB6A8FF), Color(0xFF8B5CF6)],
-                opacity: 0.28,
-                blur: 14,
-              ),
-            ),
-            // Smaller indigo blob
-            Positioned(
-              top: 70 - t * 6,
-              right: 0,
-              child: _Blob(
-                size: 70,
-                colors: const [Color(0xFF6C63FF), Color(0xFF3B82F6)],
-                opacity: 0.22,
-                blur: 18,
-              ),
-            ),
-            // Soft white wash blob
-            Positioned(
-              bottom: 0,
-              left: 30 + t * 3,
-              child: _Blob(
-                size: 60,
-                colors: const [Colors.white, Color(0xFFEEF2FF)],
-                opacity: 0.55,
-                blur: 10,
-              ),
-            ),
-            // Orbit ring
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _OrbitPainter(progress: floatCtrl.value),
-              ),
-            ),
-            // Floating icon — video (top right)
-            Positioned(
-              top: 14 + t * -3,
-              right: 8,
-              child: const _FloatIconCard(
-                icon: Icons.videocam_rounded,
-                colors: [Color(0xFF8B5CF6), Color(0xFF6C63FF)],
-                size: 38,
-              ),
-            ),
-            // Floating icon — team (right middle)
-            Positioned(
-              top: 70 + t * 2,
-              right: 30,
-              child: const _FloatIconCard(
-                icon: Icons.groups_rounded,
-                colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
-                size: 32,
-              ),
-            ),
-            // Floating icon — chat (bottom)
-            Positioned(
-              bottom: 24 + t * -2,
-              right: 50,
-              child: const _FloatIconCard(
-                icon: Icons.chat_bubble_rounded,
-                colors: [Color(0xFFA78BFA), Color(0xFF8B5CF6)],
-                size: 26,
-              ),
-            ),
-          ],
+        return Transform.translate(
+          offset: Offset(0, t * 4),
+          child: Image.asset(
+            'assets/images/bg_image.png',
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: const RadialGradient(
+                    colors: [Color(0xFFE0DDFF), Color(0xFFF5F3FF)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.image_outlined,
+                    color: Color(0xFFA78BFA),
+                    size: 32,
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
-    );
-  }
-}
-
-class _Blob extends StatelessWidget {
-  final double size;
-  final List<Color> colors;
-  final double opacity;
-  final double blur;
-  const _Blob({
-    required this.size,
-    required this.colors,
-    required this.opacity,
-    required this.blur,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              colors: [
-                colors[0].withValues(alpha: opacity),
-                colors[1].withValues(alpha: opacity * 0.4),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _OrbitPainter extends CustomPainter {
-  final double progress;
-  _OrbitPainter({required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2 + 6, size.height / 2 + 4);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..color = const Color(0xFF8B5CF6).withValues(alpha: 0.20);
-
-    final r1 = math.min(size.width, size.height) * 0.55;
-    final r2 = math.min(size.width, size.height) * 0.40;
-
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-    canvas.rotate(progress * math.pi * 0.1);
-    canvas.drawOval(
-      Rect.fromCenter(
-          center: Offset.zero, width: r1 * 2, height: r1 * 1.4),
-      paint,
-    );
-    paint.color = const Color(0xFF6C63FF).withValues(alpha: 0.15);
-    canvas.drawOval(
-      Rect.fromCenter(
-          center: Offset.zero, width: r2 * 2, height: r2 * 1.6),
-      paint,
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_OrbitPainter old) => old.progress != progress;
-}
-
-class _FloatIconCard extends StatelessWidget {
-  final IconData icon;
-  final List<Color> colors;
-  final double size;
-  const _FloatIconCard({
-    required this.icon,
-    required this.colors,
-    required this.size,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: colors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(size * 0.28),
-        boxShadow: [
-          BoxShadow(
-            color: colors[0].withValues(alpha: 0.45),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.35),
-          width: 1,
-        ),
-      ),
-      child: Icon(icon, color: Colors.white, size: size * 0.45),
     );
   }
 }

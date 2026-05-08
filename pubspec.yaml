@@ -111,8 +111,11 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
+  # Registering the whole `assets/images/` directory so any image
+  # dropped in (bg_image.png, future hero illustrations, etc.) is
+  # picked up without having to edit pubspec each time.
   assets:
-    - assets/images/mizdahlogo.png
+    - assets/images/
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
