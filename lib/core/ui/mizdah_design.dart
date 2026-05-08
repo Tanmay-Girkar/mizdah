@@ -110,6 +110,13 @@ class MizdahTokens {
   static Color iconTileBg(BuildContext c) =>
       isDark(c) ? const Color(0xFF2A2342) : const Color(0xFFEEF2FF);
 
+  /// Bottom padding every tab screen's ListView should reserve so
+  /// content never slides under the floating nav. Equals the nav
+  /// pill height (68) + its bottom inset (12) + system safe-area
+  /// gesture pill + 28px breathing room.
+  static double navBarBottomInset(BuildContext c) =>
+      68 + 12 + MediaQuery.of(c).padding.bottom + 28;
+
   /// Soft, layered shadow system — never use one harsh shadow. The
   /// purple-tinted ambient shadow gives the floating-card look used
   /// across the design without going dark/heavy. In dark mode we

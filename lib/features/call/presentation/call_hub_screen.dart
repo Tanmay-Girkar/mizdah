@@ -112,7 +112,7 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
         bottom: false,
         child: ListView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 110),
+          padding: EdgeInsets.only(bottom: MizdahTokens.navBarBottomInset(context)),
           children: [
             MizdahFadeUp(
               controller: _entryCtrl,

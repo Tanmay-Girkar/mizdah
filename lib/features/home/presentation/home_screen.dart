@@ -135,7 +135,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ref.invalidate(schedulesProvider);
               },
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(0, 0, 0, 96),
+                padding: EdgeInsets.fromLTRB(
+                    0, 0, 0, md.MizdahTokens.navBarBottomInset(context)),
                 physics: const BouncingScrollPhysics(
                     parent: AlwaysScrollableScrollPhysics()),
                 children: [
