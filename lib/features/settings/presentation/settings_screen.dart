@@ -83,14 +83,22 @@ class _GeneralSettings extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         GlassCard(
-          child: Column(
-            children: [
-              _ThemeTile(title: 'Light', mode: ThemeMode.light, current: themeMode, ref: ref, isDark: isDark),
-              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
-              _ThemeTile(title: 'Dark', mode: ThemeMode.dark, current: themeMode, ref: ref, isDark: isDark),
-              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
-              _ThemeTile(title: 'System Default', mode: ThemeMode.system, current: themeMode, ref: ref, isDark: isDark),
-            ],
+          child: RadioGroup<ThemeMode>(
+            groupValue: themeMode,
+            onChanged: (val) {
+              if (val != null) {
+                ref.read(themeProvider.notifier).setTheme(val);
+              }
+            },
+            child: Column(
+              children: [
+                _ThemeTile(title: 'Light', mode: ThemeMode.light, ref: ref, isDark: isDark),
+                Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
+                _ThemeTile(title: 'Dark', mode: ThemeMode.dark, ref: ref, isDark: isDark),
+                Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
+                _ThemeTile(title: 'System Default', mode: ThemeMode.system, ref: ref, isDark: isDark),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 32),
@@ -395,11 +403,15 @@ class _SupportSection extends ConsumerWidget {
 class _ThemeTile extends StatelessWidget {
   final String title;
   final ThemeMode mode;
-  final ThemeMode current;
   final WidgetRef ref;
   final bool isDark;
 
-  const _ThemeTile({required this.title, required this.mode, required this.current, required this.ref, this.isDark = true});
+  const _ThemeTile({
+    required this.title,
+    required this.mode,
+    required this.ref,
+    this.isDark = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -407,9 +419,7 @@ class _ThemeTile extends StatelessWidget {
       title: Text(title, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
       leading: Radio<ThemeMode>(
         value: mode,
-        groupValue: current,
         activeColor: MizdahTheme.primaryBlue,
-        onChanged: (val) => ref.read(themeProvider.notifier).setTheme(val!),
       ),
       onTap: () => ref.read(themeProvider.notifier).setTheme(mode),
     );

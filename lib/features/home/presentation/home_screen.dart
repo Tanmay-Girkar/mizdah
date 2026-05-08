@@ -2574,9 +2574,11 @@ class _ShareLinkModal extends StatelessWidget {
               onTap: () {
                 final link =
                     MeetingUtils.generateMeetingLink(meeting.code);
-                Share.share(
-                  'Join my Mizdah meeting: $link',
-                  subject: 'Mizdah Meeting Invite',
+                SharePlus.instance.share(
+                  ShareParams(
+                    text: 'Join my Mizdah meeting: $link',
+                    subject: 'Mizdah Meeting Invite',
+                  ),
                 );
               },
             ),
