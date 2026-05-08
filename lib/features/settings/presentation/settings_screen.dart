@@ -161,7 +161,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             const SizedBox(height: 22),
 
-            // ── Account ──────────────────────────────────────────
+            // ── Account (Sign out moved to its own card at the
+            //    bottom — feels less destructive when separated). ──
             MizdahFadeUp(
               controller: _entryCtrl,
               delay: 0.22,
@@ -182,17 +183,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                         icon: Icons.tune_rounded,
                         label: 'Meeting preferences',
                         sublabel:
-                            'Default mic / camera, layout, max tiles',
-                        onTap: () => _comingSoon(
-                            context, 'Meeting preferences'),
-                      ),
-                      const _Divider(),
-                      _SettingRow(
-                        icon: Icons.logout_rounded,
-                        label: 'Sign out',
-                        sublabel: 'End your current session',
-                        destructive: true,
-                        onTap: () => _confirmSignOut(context, ref),
+                            'Default layout, max tiles, tile visibility',
+                        onTap: () => context.push('/meeting-preferences'),
                       ),
                     ],
                   ),
@@ -248,6 +240,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                         onTap: () {},
                       ),
                     ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 22),
+
+            // ── Sign out — pinned at the very bottom of the
+            //    page so it's intentionally far from accidentally-
+            //    tapped items. The dedicated card visually
+            //    separates it from the regular nav rows.
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.40,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: MizdahCard(
+                  padding: EdgeInsets.zero,
+                  child: _SettingRow(
+                    icon: Icons.logout_rounded,
+                    label: 'Sign out',
+                    sublabel: 'End your current session',
+                    destructive: true,
+                    onTap: () => _confirmSignOut(context, ref),
                   ),
                 ),
               ),

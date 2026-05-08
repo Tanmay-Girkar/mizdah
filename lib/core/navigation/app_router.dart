@@ -13,6 +13,7 @@ import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/settings/presentation/privacy_screen.dart';
 import '../../features/settings/presentation/report_screen.dart';
 import '../../features/settings/presentation/meeting_settings_screen.dart';
+import '../../features/settings/presentation/meeting_preferences_screen.dart';
 import '../../features/meeting/presentation/meeting_room_screen.dart';
 import '../../features/meeting/presentation/pre_join_screen.dart';
 import '../../features/meeting/presentation/meeting_designs_preview.dart';
@@ -130,6 +131,10 @@ final appRouter = GoRouter(
     ),
     GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
     GoRoute(path: '/privacy', builder: (context, state) => const PrivacyScreen()),
+    GoRoute(
+      path: '/meeting-preferences',
+      builder: (context, state) => const MeetingPreferencesScreen(),
+    ),
     GoRoute(
       path: '/pre-join',
       builder: (context, state) => const PreJoinScreen(),
