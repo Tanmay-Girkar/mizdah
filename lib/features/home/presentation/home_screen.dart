@@ -1490,32 +1490,106 @@ class _DiagonalPattern extends CustomPainter {
 //  Floating bottom navigation
 // ────────────────────────────────────────────────────────────────────
 
-class _FloatingNav extends StatelessWidget {
+class _FloatingNav extends StatefulWidget {
   const _FloatingNav();
+
+  @override
+  State<_FloatingNav> createState() => _FloatingNavState();
+}
+
+class _FloatingNavState extends State<_FloatingNav>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseCtrl;
+  // Currently-active tab index. Home is the only one that "stays"
+  // active (this IS the home screen); Meetings/People/Settings are
+  // momentary highlights that bounce back to Home after their action
+  // fires, so the pill indicator does a satisfying slide animation
+  // even when the route doesn't actually change.
+  int _activeIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Subtle 1.6s breathe loop on the active pill indicator. Auto-
+    // reverses so it fades up/down without snapping.
+    _pulseCtrl = AnimationController(
+      duration: const Duration(milliseconds: 1600),
+      vsync: this,
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  void _activate(int index) {
+    if (_activeIndex == index) return;
+    setState(() => _activeIndex = index);
+    // Briefly highlight the tapped tab, then snap back to Home —
+    // since none of the secondary tabs actually change the screen
+    // permanently, having Home "win" again after ~280ms keeps the
+    // visual state honest with where the user actually is.
+    if (index != 0) {
+      Future.delayed(const Duration(milliseconds: 280), () {
+        if (!mounted) return;
+        setState(() => _activeIndex = 0);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        // Stronger blur (30 from 22) for a more pronounced frosted-
+        // glass read on busy backgrounds, especially when scrolling
+        // colourful card content underneath.
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: Container(
           height: 64,
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.85),
+            // Vertical white→translucent gradient adds depth that a
+            // flat fill can't — the top of the bar reads brighter
+            // (specular highlight) and the bottom reads softer.
+            gradient: LinearGradient(
+              colors: [
+                Colors.white.withValues(alpha: 0.92),
+                Colors.white.withValues(alpha: 0.70),
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: _Tokens.cardBorder, width: 1),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.6),
+              width: 1.2,
+            ),
             boxShadow: [
+              // Stronger purple-tinted ambient glow for the
+              // floating-glass effect.
               BoxShadow(
-                color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
-                blurRadius: 28,
-                offset: const Offset(0, 12),
+                color: const Color(0xFF6C63FF).withValues(alpha: 0.16),
+                blurRadius: 36,
+                offset: const Offset(0, 18),
               ),
+              // Mid-distance neutral shadow so the bar doesn't look
+              // weightless on light backgrounds.
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+              // Tiny inner-edge highlight (mimics an inset 1px white
+              // line) — sits at the top of the bar.
+              BoxShadow(
+                color: Colors.white.withValues(alpha: 0.6),
+                blurRadius: 0,
+                offset: const Offset(0, 1),
+                spreadRadius: -0.5,
               ),
             ],
           ),
@@ -1523,17 +1597,23 @@ class _FloatingNav extends StatelessWidget {
             children: [
               Expanded(
                 child: _NavItem(
+                  index: 0,
+                  activeIndex: _activeIndex,
+                  pulseCtrl: _pulseCtrl,
                   icon: Icons.home_rounded,
                   label: 'Home',
-                  active: true,
-                  onTap: () {},
+                  onTap: () => _activate(0),
                 ),
               ),
               Expanded(
                 child: _NavItem(
+                  index: 1,
+                  activeIndex: _activeIndex,
+                  pulseCtrl: _pulseCtrl,
                   icon: Icons.calendar_month_rounded,
                   label: 'Meetings',
                   onTap: () {
+                    _activate(1);
                     // No dedicated meetings page yet — fall back to
                     // the schedule-creation sheet which is the natural
                     // next-step from "look at my calendar" intent.
@@ -1552,9 +1632,13 @@ class _FloatingNav extends StatelessWidget {
               ),
               Expanded(
                 child: _NavItem(
+                  index: 2,
+                  activeIndex: _activeIndex,
+                  pulseCtrl: _pulseCtrl,
                   icon: Icons.people_outline_rounded,
                   label: 'People',
                   onTap: () {
+                    _activate(2);
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         behavior: SnackBarBehavior.floating,
@@ -1566,9 +1650,15 @@ class _FloatingNav extends StatelessWidget {
               ),
               Expanded(
                 child: _NavItem(
+                  index: 3,
+                  activeIndex: _activeIndex,
+                  pulseCtrl: _pulseCtrl,
                   icon: Icons.settings_outlined,
                   label: 'Settings',
-                  onTap: () => context.push('/settings'),
+                  onTap: () {
+                    _activate(3);
+                    context.push('/settings');
+                  },
                 ),
               ),
             ],
@@ -1601,82 +1691,173 @@ class _ContainerWidgetRefShim implements WidgetRef {
       throw UnsupportedError('Only read() / invalidate() are supported');
 }
 
-class _NavItem extends StatelessWidget {
+/// One tab in the floating bottom nav. Animates between the
+/// inactive grey state and the active gradient state via a 240ms
+/// AnimatedSwitcher, plus a subtle press-scale on tap. The active
+/// pill indicator pulses softly via the shared pulseCtrl.
+class _NavItem extends StatefulWidget {
+  final int index;
+  final int activeIndex;
+  final AnimationController pulseCtrl;
   final IconData icon;
   final String label;
-  final bool active;
   final VoidCallback onTap;
   const _NavItem({
+    required this.index,
+    required this.activeIndex,
+    required this.pulseCtrl,
     required this.icon,
     required this.label,
     required this.onTap,
-    this.active = false,
+  });
+
+  @override
+  State<_NavItem> createState() => _NavItemState();
+}
+
+class _NavItemState extends State<_NavItem> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.index == widget.activeIndex;
+    // No Expanded here — `Expanded` must be a direct child of the
+    // parent Row, not nested inside _NavItem. The parent _FloatingNav
+    // wraps each _NavItem with Expanded itself.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOut,
+        scale: _pressed ? 0.92 : 1.0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 240),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.85, end: 1.0).animate(anim),
+                child: child,
+              ),
+            ),
+            child: active
+                ? _ActiveContent(
+                    key: const ValueKey('active'),
+                    icon: widget.icon,
+                    label: widget.label,
+                    pulseCtrl: widget.pulseCtrl,
+                  )
+                : _InactiveContent(
+                    key: const ValueKey('inactive'),
+                    icon: widget.icon,
+                    label: widget.label,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveContent extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final AnimationController pulseCtrl;
+  const _ActiveContent({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.pulseCtrl,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: active
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ShaderMask(
-                    shaderCallback: (r) =>
-                        _Tokens.heroGradient.createShader(r),
-                    child: Icon(icon, color: Colors.white, size: 22),
-                  ),
-                  const SizedBox(height: 3),
-                  ShaderMask(
-                    shaderCallback: (r) =>
-                        _Tokens.heroGradient.createShader(r),
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Container(
-                    margin: const EdgeInsets.only(top: 3),
-                    width: 16,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      gradient: _Tokens.heroGradient,
-                      borderRadius: BorderRadius.circular(2),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF6C63FF)
-                              .withValues(alpha: 0.5),
-                          blurRadius: 6,
-                          offset: const Offset(0, 1),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, color: const Color(0xFF8A8FA0), size: 22),
-                  const SizedBox(height: 6),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Color(0xFF8A8FA0),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                    ),
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        ShaderMask(
+          shaderCallback: (r) => _Tokens.heroGradient.createShader(r),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+        const SizedBox(height: 3),
+        ShaderMask(
+          shaderCallback: (r) => _Tokens.heroGradient.createShader(r),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        // Pulsing pill indicator — the pulseCtrl is shared across
+        // every nav item so they all breathe in sync (only the
+        // active one is visible at any time).
+        AnimatedBuilder(
+          animation: pulseCtrl,
+          builder: (context, _) {
+            // pulseCtrl reverses, so .value is naturally a 0→1→0
+            // wave we can drive opacity + glow radius off.
+            final t = pulseCtrl.value;
+            return Container(
+              margin: const EdgeInsets.only(top: 3),
+              width: 16 + t * 2, // 16 → 18 → 16
+              height: 3,
+              decoration: BoxDecoration(
+                gradient: _Tokens.heroGradient,
+                borderRadius: BorderRadius.circular(2),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF6C63FF)
+                        .withValues(alpha: 0.4 + t * 0.3),
+                    blurRadius: 6 + t * 6,
+                    offset: const Offset(0, 1),
                   ),
                 ],
               ),
-      ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _InactiveContent extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _InactiveContent({
+    super.key,
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: const Color(0xFF8A8FA0), size: 22),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF8A8FA0),
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 }
