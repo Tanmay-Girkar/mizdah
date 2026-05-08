@@ -283,6 +283,12 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// publishes the normalised audio level into `state.audioLevels`
   /// so the per-tile voice-wave widget can animate.
   Timer? _audioLevelTimer;
+  /// Diagnostic-dump timer. Fires every 5 seconds while in a meeting
+  /// and writes a snapshot of every state slot the video pipeline
+  /// depends on (participants, renderers, alias maps, streams). When
+  /// the user reports "video not displaying" this is the first thing
+  /// we read in their log to pinpoint where the chain breaks.
+  Timer? _diagTimer;
   bool _hasJoinedRoom = false;
   bool _disposed = false;
   String? _userName;
@@ -358,7 +364,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v10 2026-05-08 (alias-on-rebind)';
+  static const String _kBuildStamp = 'sfu-v11 2026-05-08 (heavy-diag)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -925,6 +931,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
         case 'MEDIA_TOGGLE':
         default:
+          // [DIAG] Show whether the `from` sid matches any
+          // participant we know about — if not, the videoEnabled /
+          // audioEnabled flags don't get applied and the UI shows
+          // stale state.
+          final matchedParticipant = state.participants.firstWhere(
+            (p) => p is Map && p['socketId'] == from,
+            orElse: () => null,
+          );
+          _log('[DIAG-TOGGLE] from=$from name=${data['name']} '
+              'video=${data['videoEnabled']} audio=${data['audioEnabled']} '
+              '→ matched participant: '
+              '${matchedParticipant != null ? "yes" : "NO — flags will be ignored"}');
+          if (matchedParticipant == null) {
+            _log('[DIAG-TOGGLE] participants known: '
+                '${state.participants.map((p) => "${p is Map ? p['name'] : '?'}@${p is Map ? p['socketId'] : '?'}").toList()}');
+          }
           // Detect the share-stop transition so we can flush the
           // frozen last screen frame from the remote renderer. The
           // web client typically doesn't replaceTrack(camera) when
@@ -1423,6 +1445,71 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       const Duration(milliseconds: 250),
       (_) => _pollAudioLevels(),
     );
+    _startDiagnosticDump();
+  }
+
+  /// Dumps a snapshot of every state slot the video pipeline depends
+  /// on every 5 seconds. Reads at-a-glance like:
+  ///
+  ///   [DIAG] ────── pipeline snapshot ──────
+  ///   [DIAG] participants(2):
+  ///         · gtr@g9--TeCV6...  videoEnabled=true  hasAlias=true
+  ///         · self@bn-m0wuvb2t...
+  ///   [DIAG] remoteRenderers(2): [GMSL..., g9--Te...]
+  ///   [DIAG] aliasMap: {g9--Te... → GMSL...}
+  ///   [DIAG] streams(2): [GMSL..., g9--Te...]
+  ///   [DIAG] sfuProducers: audio=ID, video=ID, screen=NONE
+  ///   [DIAG] ─────────────────────────────────
+  ///
+  /// When the user reports "video not displaying" this is the first
+  /// thing we read in their log. It tells us at a glance:
+  ///   • whether the remote producer reached us (renderer + stream)
+  ///   • whether the cross-channel alias landed (hasAlias)
+  ///   • whether videoEnabled flag is correct on the participant
+  ///   • whether OUR producer ids exist (mobile→web direction)
+  void _startDiagnosticDump() {
+    _diagTimer?.cancel();
+    _diagTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || _disposed) return;
+      final selfSid = _socket?.id ?? '<no-sid>';
+      _log('[DIAG] ────── pipeline snapshot ──────');
+      _log('[DIAG] self signaling-sid = $selfSid '
+          'isHost=${state.isHost} isSfuMode=${state.isSfuMode}');
+      _log('[DIAG] participants(${state.participants.length}):');
+      for (final p in state.participants) {
+        if (p is! Map) continue;
+        final sid = p['socketId']?.toString();
+        final name = p['name']?.toString();
+        final ve = p['videoEnabled'];
+        final ae = p['audioEnabled'];
+        final hasRenderer =
+            sid != null && state.remoteRenderers.containsKey(sid);
+        final hasAlias = sid != null &&
+            _mediaSidBySignalingSid.containsKey(sid);
+        _log('[DIAG]   · $name@$sid  video=$ve audio=$ae  '
+            'renderer=$hasRenderer alias=$hasAlias');
+      }
+      _log('[DIAG] waiting(${state.waitingParticipants.length}): '
+          '${state.waitingParticipants.map((w) => w is Map ? w['name'] : '?').toList()}');
+      _log('[DIAG] remoteRenderers keys = '
+          '${state.remoteRenderers.keys.toList()}');
+      _log('[DIAG] mediaSidBySignalingSid = $_mediaSidBySignalingSid');
+      _log('[DIAG] signalingSidByMediaSid = $_signalingSidByMediaSid');
+      _log('[DIAG] _remoteStreams keys = ${_remoteStreams.keys.toList()}');
+      final svc = _sfuService;
+      _log('[DIAG] sfu: ready=${svc?.isReady} '
+          'audio=${svc?.audioProducer?.id ?? "<none>"} '
+          'video=${svc?.videoProducer?.id ?? "<none>"} '
+          'screen=${svc?.screenProducer?.id ?? "<none>"}');
+      // For each video producer we own, dump the local track health.
+      final vp = svc?.videoProducer;
+      if (vp != null) {
+        final t = vp.track;
+        _log('[DIAG] outbound video: trackId=${t.id ?? "<none>"} '
+            'enabled=${t.enabled} muted=${t.muted}');
+      }
+      _log('[DIAG] ───────────────────────────────');
+    });
   }
 
   Future<void> _pollAudioLevels() async {
@@ -2359,6 +2446,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _log('leaveMeeting ← $caller');
     _waitingListTimer?.cancel();
     _audioLevelTimer?.cancel();
+    _diagTimer?.cancel();
     _socket?.disconnect();
     _chatSocket?.disconnect();
     _mediaSocket?.disconnect();
@@ -2726,6 +2814,16 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         : null;
     _log('[SFU] _produceLocalTracksToSfu — '
         'audio=${audio?.id ?? "<none>"} video=${video?.id ?? "<none>"}');
+    // [DIAG] Outbound appData visibility — this is exactly what web
+    // peers see when they receive OUR producer. If web doesn't show
+    // mobile's video, check this log line: socketId must be a real
+    // signaling sid (not empty) and name must be the local user.
+    _log('[DIAG-PRODUCE] outbound appData = '
+        '{socketId: "${_socket?.id ?? ""}", '
+        'name: "${_userName ?? ""}", isScreen: false}');
+    _log('[DIAG-PRODUCE] outbound tracks: '
+        'audio.enabled=${audio?.enabled} audio.muted=${audio?.muted} '
+        'video.enabled=${video?.enabled} video.muted=${video?.muted}');
     if (audio != null) {
       try {
         await svc.produceAudio(audio, stream);
@@ -2763,6 +2861,24 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final isScreen = appData['isScreen'] == true;
     _log('[SFU] 🎬 remote track ← $remoteSocketId kind=${track.kind} '
         'isScreen=$isScreen');
+    // [DIAG] Dump everything we know at the moment a producer lands
+    // — this is the most common point where the cross-channel link
+    // either succeeds or silently fails. If you ever see "the alias
+    // never landed", inspect the `participants(N)` line below: was
+    // the matched peer in the list at this instant? If not, the
+    // peer's user-joined event hadn't fired yet and the heuristic
+    // had nothing to match.
+    _log('[DIAG-TRACK] appData = $appData');
+    _log('[DIAG-TRACK] participants(${state.participants.length}) at '
+        'track-arrival:');
+    for (final p in state.participants) {
+      if (p is! Map) continue;
+      _log('[DIAG-TRACK]   · ${p['name']}@${p['socketId']}  '
+          'userId=${p['userId']}  videoEnabled=${p['videoEnabled']}');
+    }
+    _log('[DIAG-TRACK] existing remoteRenderers keys = '
+        '${state.remoteRenderers.keys.toList()}');
+    _log('[DIAG-TRACK] existing aliasMap = $_mediaSidBySignalingSid');
 
     // ─────────────────────────────────────────────────────────────
     // CROSS-CHANNEL SID LINK
