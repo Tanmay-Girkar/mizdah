@@ -115,18 +115,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-              child: Text(
-                'Profile · Stats · Privacy',
-                style: TextStyle(
-                  color: MizdahTokens.mutedOf(context),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
 
             // ── Scrollable body ─────────────────────────────────
             Expanded(
