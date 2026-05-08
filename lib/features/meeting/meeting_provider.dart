@@ -358,7 +358,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v9 2026-05-08 (alias-cleanup)';
+  static const String _kBuildStamp = 'sfu-v10 2026-05-08 (alias-on-rebind)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2854,57 +2854,84 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (isNewStream) {
       // First track for this peer — normal attachment.
       await _attachRemoteStream(remoteSocketId, stream);
-      // Alias the renderer at the participant's signaling sid so the
-      // existing rendering loop + media-toggle handler (both keyed
-      // on signaling sid) find it. See the cross-channel-sid-link
-      // comment block above for why this is necessary.
-      if (linkedSignalingSid != null &&
-          linkedSignalingSid != remoteSocketId &&
-          mounted &&
-          !_disposed) {
-        final r = state.remoteRenderers[remoteSocketId];
-        if (r != null) {
-          // Record the bidirectional mapping FIRST so the teardown
-          // path knows about both map keys when it runs.
-          _mediaSidBySignalingSid[linkedSignalingSid] = remoteSocketId;
-          _signalingSidByMediaSid[remoteSocketId] = linkedSignalingSid;
-          state = state.copyWith(
-            remoteRenderers: {
-              ...state.remoteRenderers,
-              linkedSignalingSid: r,
-            },
-          );
-          // Also alias the underlying stream so srcObject look-ups in
-          // the media-toggle handler can detach/reattach via either key.
-          _remoteStreams[linkedSignalingSid] = stream;
-        }
+    } else {
+      // Adding ANOTHER track (typically video after audio) to a stream
+      // the renderer is already displaying. RTCVideoRenderer enumerates
+      // its srcObject's tracks at assignment time and does NOT pick up
+      // tracks added later — so without re-binding, audio plays but
+      // remote video stays black even though `🎬 remote track` fired.
+      // Clearing srcObject and reassigning forces the renderer to
+      // re-enumerate, and the late-added video track starts rendering.
+      final renderer = state.remoteRenderers[remoteSocketId];
+      if (renderer == null) {
+        // Renderer was disposed since the first track. Re-create.
+        _remoteStreams[remoteSocketId] = stream;
+        await _attachRemoteStream(remoteSocketId, stream);
+      } else {
+        _log('[SFU] re-binding renderer for $remoteSocketId to pick up '
+            'new ${track.kind} track');
+        renderer.srcObject = null;
+        // Yield a frame so the platform-side renderer fully detaches
+        // before we re-attach. Without the delay some flutter_webrtc
+        // platforms drop the second assignment as a no-op.
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        if (!mounted || _disposed) return;
+        renderer.srcObject = stream;
       }
-      return;
     }
 
-    // Adding ANOTHER track (typically video after audio) to a stream
-    // the renderer is already displaying. RTCVideoRenderer enumerates
-    // its srcObject's tracks at assignment time and does NOT pick up
-    // tracks added later — so without re-binding, audio plays but
-    // remote video stays black even though `🎬 remote track` fired.
-    // Clearing srcObject and reassigning forces the renderer to
-    // re-enumerate, and the late-added video track starts rendering.
-    final renderer = state.remoteRenderers[remoteSocketId];
-    if (renderer == null) {
-      // Renderer was disposed since the first track. Re-create.
-      _remoteStreams[remoteSocketId] = stream;
-      await _attachRemoteStream(remoteSocketId, stream);
+    // ───────────── ALIAS THE RENDERER (BOTH PATHS) ─────────────
+    // Run on every track — not just the first — so we catch the
+    // common case where the audio track arrives before the matching
+    // participant entry exists (peer is still in waiting room) and
+    // the video track arrives AFTER user-joined adds them. With the
+    // alias only in the `isNewStream` branch, the video path missed
+    // it: the renderer stayed at remoteRenderers[mediaSid] only,
+    // and the rendering loop (which keys by participant signaling
+    // sid) found null and fell through to the avatar fallback.
+    // That's the "user video screen is not displaying in my side"
+    // bug the user reported in the latest log.
+    //
+    // Idempotent: if the alias is already in place we skip without
+    // touching state.
+    _maybeAliasRendererToParticipant(
+      remoteSocketId: remoteSocketId,
+      linkedSignalingSid: linkedSignalingSid,
+      stream: stream,
+    );
+  }
+
+  /// Adds an alias entry pointing the renderer at the participant's
+  /// signaling sid in addition to the producer's media sid. Both keys
+  /// reference the same RTCVideoRenderer instance — _teardownPeer
+  /// uses the bidirectional `_mediaSidBySignalingSid` /
+  /// `_signalingSidByMediaSid` maps to clean up both safely.
+  void _maybeAliasRendererToParticipant({
+    required String remoteSocketId,
+    required String? linkedSignalingSid,
+    required MediaStream stream,
+  }) {
+    if (linkedSignalingSid == null) return;
+    if (linkedSignalingSid == remoteSocketId) return;
+    if (!mounted || _disposed) return;
+    // Already aliased to the right key — nothing to do.
+    if (state.remoteRenderers[linkedSignalingSid] ==
+        state.remoteRenderers[remoteSocketId]) {
       return;
     }
-    _log('[SFU] re-binding renderer for $remoteSocketId to pick up '
-        'new ${track.kind} track');
-    renderer.srcObject = null;
-    // Yield a frame so the platform-side renderer fully detaches
-    // before we re-attach. Without the delay some flutter_webrtc
-    // platforms drop the second assignment as a no-op.
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    if (!mounted || _disposed) return;
-    renderer.srcObject = stream;
+    final r = state.remoteRenderers[remoteSocketId];
+    if (r == null) return;
+    _log('[SFU] 🪪 applying alias remoteRenderers[$linkedSignalingSid] = '
+        'renderer-of[$remoteSocketId]');
+    _mediaSidBySignalingSid[linkedSignalingSid] = remoteSocketId;
+    _signalingSidByMediaSid[remoteSocketId] = linkedSignalingSid;
+    state = state.copyWith(
+      remoteRenderers: {
+        ...state.remoteRenderers,
+        linkedSignalingSid: r,
+      },
+    );
+    _remoteStreams[linkedSignalingSid] = stream;
   }
 
   /// Attach a remote SCREEN-SHARE track (`appData.isScreen == true`)
