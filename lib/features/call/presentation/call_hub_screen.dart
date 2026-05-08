@@ -361,20 +361,20 @@ class _JoinCodeCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Join with',
             style: TextStyle(
-              color: MizdahTokens.muted,
+              color: MizdahTokens.mutedOf(context),
               fontSize: 12,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.3,
             ),
           ),
           const SizedBox(height: 2),
-          const Text(
+          Text(
             'Meeting code',
             style: TextStyle(
-              color: MizdahTokens.ink,
+              color: MizdahTokens.inkOf(context),
               fontSize: 18,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.2,
@@ -388,30 +388,30 @@ class _JoinCodeCard extends StatelessWidget {
                   height: 46,
                   padding: const EdgeInsets.symmetric(horizontal: 14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F8),
+                    color: MizdahTokens.softPillBg(context),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Row(
                     children: [
                       Icon(Icons.link_rounded,
-                          color: MizdahTokens.muted, size: 18),
+                          color: MizdahTokens.mutedOf(context), size: 18),
                       const SizedBox(width: 8),
                       Expanded(
                         child: TextField(
                           controller: controller,
                           textCapitalization: TextCapitalization.none,
-                          style: const TextStyle(
-                            color: MizdahTokens.ink,
+                          style: TextStyle(
+                            color: MizdahTokens.inkOf(context),
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             letterSpacing: 0.3,
                           ),
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             isCollapsed: true,
                             border: InputBorder.none,
                             hintText: 'Enter code or link',
                             hintStyle: TextStyle(
-                              color: MizdahTokens.muted,
+                              color: MizdahTokens.mutedOf(context),
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -482,7 +482,7 @@ class _ActionTile extends StatelessWidget {
             height: 40,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: const Color(0xFFEEF2FF),
+              color: MizdahTokens.iconTileBg(context),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: MizdahTokens.primary, size: 20),
@@ -494,8 +494,8 @@ class _ActionTile extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
-                    color: MizdahTokens.ink,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.1,
@@ -503,8 +503,8 @@ class _ActionTile extends StatelessWidget {
                 ),
                 Text(
                   sublabel,
-                  style: const TextStyle(
-                    color: MizdahTokens.muted,
+                  style: TextStyle(
+                    color: MizdahTokens.mutedOf(context),
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
                   ),
@@ -536,12 +536,12 @@ class _RecentCallsStrip extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
               child: Text(
                 'Recent',
                 style: TextStyle(
-                  color: MizdahTokens.ink,
+                  color: MizdahTokens.inkOf(context),
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.3,
@@ -570,12 +570,12 @@ class _RecentCallsStrip extends ConsumerWidget {
                         width: 102,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: MizdahTokens.surface(context),
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
-                              color: MizdahTokens.cardBorder, width: 1),
+                              color: MizdahTokens.border(context), width: 1),
                           boxShadow:
-                              MizdahTokens.softShadow(elevation: 0.5),
+                              MizdahTokens.shadow(context, elevation: 0.5),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -586,8 +586,8 @@ class _RecentCallsStrip extends ConsumerWidget {
                               c.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: MizdahTokens.ink,
+                              style: TextStyle(
+                                color: MizdahTokens.inkOf(context),
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -597,8 +597,8 @@ class _RecentCallsStrip extends ConsumerWidget {
                               code ?? 'No code',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: MizdahTokens.muted,
+                              style: TextStyle(
+                                color: MizdahTokens.mutedOf(context),
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                                 letterSpacing: 0.2,

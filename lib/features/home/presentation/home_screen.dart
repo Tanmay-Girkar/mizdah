@@ -24,20 +24,19 @@ import '../notification_provider.dart';
 //  one-edit affairs instead of grep-and-replace.
 // ════════════════════════════════════════════════════════════════════
 
+/// Lightweight private alias kept so any remaining references to
+/// `_Tokens.primary`, `.heroGradient`, `.softShadow()` resolve without
+/// touching every line. The brightness-aware palette lives in
+/// `md.MizdahTokens` (see `lib/core/ui/mizdah_design.dart`); the
+/// hardcoded light-mode tokens (lavenderBg / ink / muted / etc.) were
+/// removed because all callers now go through the adaptive accessors
+/// (`md.MizdahTokens.bg(context)`, `.inkOf(context)`, …).
 class _Tokens {
   static const primary = Color(0xFF6C63FF);
-  // Spec-required palette tokens — referenced in heroGradient and
-  // kept named for future ports. Suppressed since they're not used
-  // standalone (only via the gradient).
   // ignore: unused_field
   static const secondary = Color(0xFF8B5CF6);
   // ignore: unused_field
   static const tertiary = Color(0xFFA78BFA);
-  static const lavenderBg = Color(0xFFF6F7FB);
-  static const cardBorder = Color(0xFFEEF0F7);
-  static const ink = Color(0xFF0F1322);
-  static const muted = Color(0xFF6B7180);
-  static const subtleStroke = Color(0xFFE7E9F2);
 
   static const heroGradient = LinearGradient(
     colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6), Color(0xFFA78BFA)],
@@ -45,21 +44,8 @@ class _Tokens {
     end: Alignment.bottomRight,
   );
 
-  /// Soft, layered shadow system — never use one harsh shadow. The
-  /// purple-tinted inner shadow gives the floating-card look used
-  /// across the design without going dark/heavy.
-  static List<BoxShadow> softShadow({double elevation = 1}) => [
-        BoxShadow(
-          color: const Color(0xFF6C63FF).withValues(alpha: 0.06 * elevation),
-          blurRadius: 32 * elevation,
-          offset: Offset(0, 12 * elevation),
-        ),
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.03 * elevation),
-          blurRadius: 8 * elevation,
-          offset: Offset(0, 2 * elevation),
-        ),
-      ];
+  // softShadow() removed — every callsite now uses the adaptive
+  // `md.MizdahTokens.shadow(context)` which handles light + dark.
 }
 
 // Color palette for timeline dots — rotates per row index so each
@@ -126,18 +112,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     return Scaffold(
       drawer: const MizdahDrawer(),
       endDrawer: const NotificationsDrawer(),
-      backgroundColor: _Tokens.lavenderBg,
+      backgroundColor: md.MizdahTokens.bg(context),
       body: Stack(
         children: [
-          // Faint background gradient wash (lavender → off-white)
+          // Faint background gradient wash — adaptive: lavender →
+          // off-white in light mode, deep navy in dark mode.
           Positioned.fill(
             child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topRight,
-                  end: Alignment.bottomLeft,
-                  colors: [Color(0xFFF1EEFF), Color(0xFFFAFBFE)],
-                ),
+              decoration: BoxDecoration(
+                gradient: md.MizdahTokens.pageGradient(context),
               ),
             ),
           ),
@@ -219,9 +202,9 @@ class _Header extends ConsumerWidget {
             _IconTap(
               onTap: () => Scaffold.of(context).openDrawer(),
               tooltip: 'Menu',
-              child: const Icon(
+              child: Icon(
                 Icons.menu_rounded,
-                color: _Tokens.ink,
+                color: md.MizdahTokens.inkOf(context),
                 size: 22,
               ),
             ),
@@ -251,10 +234,10 @@ class _Header extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text(
+                Text(
                   'MIZDAH',
                   style: TextStyle(
-                    color: _Tokens.ink,
+                    color: md.MizdahTokens.inkOf(context),
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 3.5,
@@ -273,9 +256,9 @@ class _Header extends ConsumerWidget {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.notifications_none_rounded,
-                      color: _Tokens.ink,
+                      color: md.MizdahTokens.inkOf(context),
                       size: 22,
                     ),
                     if (hasNotifications)
@@ -289,7 +272,7 @@ class _Header extends ConsumerWidget {
                             gradient: _Tokens.heroGradient,
                             shape: BoxShape.circle,
                             border: Border.all(
-                                color: _Tokens.lavenderBg, width: 1.2),
+                                color: md.MizdahTokens.bg(context), width: 1.2),
                           ),
                         ),
                       ),
@@ -307,7 +290,7 @@ class _Header extends ConsumerWidget {
                 decoration: BoxDecoration(
                   gradient: _Tokens.heroGradient,
                   shape: BoxShape.circle,
-                  boxShadow: _Tokens.softShadow(elevation: 0.6),
+                  boxShadow: md.MizdahTokens.shadow(context, elevation: 0.6),
                 ),
                 child: Center(
                   child: Text(
@@ -401,13 +384,13 @@ class _Hero extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    _HeroHeading(),
-                    SizedBox(height: 14),
+                  children: [
+                    const _HeroHeading(),
+                    const SizedBox(height: 14),
                     Text(
                       'Collaborate · Meet · Achieve',
                       style: TextStyle(
-                        color: _Tokens.muted,
+                        color: md.MizdahTokens.mutedOf(context),
                         fontSize: 15,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 0.2,
@@ -434,8 +417,8 @@ class _HeroHeading extends StatelessWidget {
   Widget build(BuildContext context) {
     return RichText(
       text: TextSpan(
-        style: const TextStyle(
-          color: _Tokens.ink,
+        style: TextStyle(
+          color: md.MizdahTokens.inkOf(context),
           fontSize: 30,
           fontWeight: FontWeight.w800,
           height: 1.15,
@@ -755,35 +738,35 @@ class _JoinCodeCardState extends ConsumerState<_JoinCodeCard> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _Tokens.cardBorder, width: 1),
-        boxShadow: _Tokens.softShadow(),
+        border: Border.all(color: md.MizdahTokens.border(context), width: 1),
+        boxShadow: md.MizdahTokens.shadow(context),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Join with',
             style: TextStyle(
-              color: _Tokens.muted,
+              color: md.MizdahTokens.mutedOf(context),
               fontSize: 13,
               fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(height: 2),
-          const Text(
+          Text(
             'Meeting Code',
             style: TextStyle(
-              color: _Tokens.ink,
+              color: md.MizdahTokens.inkOf(context),
               fontSize: 17,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.4,
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'Enter the code and\njoin the meeting',
             style: TextStyle(
-              color: _Tokens.muted,
+              color: md.MizdahTokens.mutedOf(context),
               fontSize: 11,
               height: 1.35,
             ),
@@ -802,26 +785,26 @@ class _JoinCodeCardState extends ConsumerState<_JoinCodeCard> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.link_rounded,
-                          color: _Tokens.muted, size: 14),
+                      Icon(Icons.link_rounded,
+                          color: md.MizdahTokens.mutedOf(context), size: 14),
                       const SizedBox(width: 6),
                       Expanded(
                         child: TextField(
                           controller: _controller,
                           textInputAction: TextInputAction.go,
                           onSubmitted: (_) => _join(),
-                          style: const TextStyle(
-                            color: _Tokens.ink,
+                          style: TextStyle(
+                            color: md.MizdahTokens.inkOf(context),
                             fontSize: 11.5,
                             fontWeight: FontWeight.w600,
                             letterSpacing: 0.2,
                           ),
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             isCollapsed: true,
                             border: InputBorder.none,
                             hintText: 'Enter code',
                             hintStyle: TextStyle(
-                              color: _Tokens.muted,
+                              color: md.MizdahTokens.mutedOf(context),
                               fontSize: 11.5,
                               fontWeight: FontWeight.w500,
                             ),
@@ -895,10 +878,10 @@ class _UpcomingSection extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
             child: Row(
               children: [
-                const Text(
+                Text(
                   'Upcoming Meetings',
                   style: TextStyle(
-                    color: _Tokens.ink,
+                    color: md.MizdahTokens.inkOf(context),
                     fontSize: 16,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.3,
@@ -944,8 +927,8 @@ class _UpcomingSection extends ConsumerWidget {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: _Tokens.cardBorder, width: 1),
-                boxShadow: _Tokens.softShadow(elevation: 0.7),
+                border: Border.all(color: md.MizdahTokens.border(context), width: 1),
+                boxShadow: md.MizdahTokens.shadow(context, elevation: 0.7),
               ),
               child: schedulesAsync.when(
                 loading: () => const Padding(
@@ -1029,8 +1012,8 @@ class _UpcomingEmpty extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: const TextStyle(
-                  color: _Tokens.ink,
+                style: TextStyle(
+                  color: md.MizdahTokens.inkOf(context),
                   fontSize: 13.5,
                   fontWeight: FontWeight.w800,
                 ),
@@ -1038,8 +1021,8 @@ class _UpcomingEmpty extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(
-                  color: _Tokens.muted,
+                style: TextStyle(
+                  color: md.MizdahTokens.mutedOf(context),
                   fontSize: 11.5,
                 ),
               ),
@@ -1181,7 +1164,7 @@ class _MeetingRow extends StatelessWidget {
                       child: Center(
                         child: Container(
                           width: 1.2,
-                          color: _Tokens.subtleStroke,
+                          color: md.MizdahTokens.subtle(context),
                         ),
                       ),
                     ),
@@ -1212,8 +1195,8 @@ class _MeetingRow extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
-                      color: _Tokens.ink,
+                    style: TextStyle(
+                      color: md.MizdahTokens.inkOf(context),
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.2,
@@ -1227,22 +1210,22 @@ class _MeetingRow extends StatelessWidget {
                       Flexible(
                         child: Text(
                           timeRange,
-                          style: const TextStyle(
-                            color: _Tokens.muted,
+                          style: TextStyle(
+                            color: md.MizdahTokens.mutedOf(context),
                             fontSize: 10.5,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      const Text(
+                      Text(
                         ' · ',
                         style: TextStyle(
-                            color: _Tokens.muted, fontSize: 10.5),
+                            color: md.MizdahTokens.mutedOf(context), fontSize: 10.5),
                       ),
                       Text(
                         duration,
-                        style: const TextStyle(
-                          color: _Tokens.muted,
+                        style: TextStyle(
+                          color: md.MizdahTokens.mutedOf(context),
                           fontSize: 10.5,
                         ),
                       ),
@@ -1335,8 +1318,8 @@ class _RecentActivityCard extends ConsumerWidget {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _Tokens.cardBorder, width: 1),
-              boxShadow: _Tokens.softShadow(elevation: 0.5),
+              border: Border.all(color: md.MizdahTokens.border(context), width: 1),
+              boxShadow: md.MizdahTokens.shadow(context, elevation: 0.5),
             ),
             child: Stack(
               children: [
@@ -1348,11 +1331,13 @@ class _RecentActivityCard extends ConsumerWidget {
                 ),
                 historyAsync.when(
                   loading: () => _activityRow(
+                    context: context,
                     title: 'Loading…',
                     subtitle: '',
                     timestamp: '',
                   ),
                   error: (_, __) => _activityRow(
+                    context: context,
                     title: 'Recent activity',
                     subtitle: 'Could not load — pull to retry',
                     timestamp: '',
@@ -1360,6 +1345,7 @@ class _RecentActivityCard extends ConsumerWidget {
                   data: (items) {
                     if (items.isEmpty) {
                       return _activityRow(
+                        context: context,
                         title: 'No recent activity',
                         subtitle: 'Your past meetings will show here',
                         timestamp: '',
@@ -1375,6 +1361,7 @@ class _RecentActivityCard extends ConsumerWidget {
                             ? (item.meetingCode ?? 'Meeting')
                             : item.title;
                     return _activityRow(
+                      context: context,
                       title: isHost
                           ? 'You hosted a meeting'
                           : 'You joined a meeting',
@@ -1393,6 +1380,7 @@ class _RecentActivityCard extends ConsumerWidget {
   }
 
   Widget _activityRow({
+    required BuildContext context,
     required String title,
     required String subtitle,
     required String timestamp,
@@ -1417,10 +1405,10 @@ class _RecentActivityCard extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Recent Activity',
                 style: TextStyle(
-                  color: _Tokens.muted,
+                  color: md.MizdahTokens.mutedOf(context),
                   fontSize: 10.5,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.3,
@@ -1429,8 +1417,8 @@ class _RecentActivityCard extends ConsumerWidget {
               const SizedBox(height: 2),
               Text(
                 title,
-                style: const TextStyle(
-                  color: _Tokens.ink,
+                style: TextStyle(
+                  color: md.MizdahTokens.inkOf(context),
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
                 ),
@@ -1441,8 +1429,8 @@ class _RecentActivityCard extends ConsumerWidget {
                 const SizedBox(height: 1),
                 Text(
                   subtitle,
-                  style: const TextStyle(
-                    color: _Tokens.muted,
+                  style: TextStyle(
+                    color: md.MizdahTokens.mutedOf(context),
                     fontSize: 11,
                   ),
                   maxLines: 1,
@@ -1456,8 +1444,8 @@ class _RecentActivityCard extends ConsumerWidget {
           const SizedBox(width: 6),
           Text(
             timestamp,
-            style: const TextStyle(
-              color: _Tokens.muted,
+            style: TextStyle(
+              color: md.MizdahTokens.mutedOf(context),
               fontSize: 10.5,
               fontWeight: FontWeight.w500,
             ),

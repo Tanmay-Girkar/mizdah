@@ -183,8 +183,8 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen>
                           padding: const EdgeInsets.only(left: 4, bottom: 8),
                           child: Text(
                             '${filtered.length} ${filtered.length == 1 ? 'person' : 'people'}',
-                            style: const TextStyle(
-                              color: MizdahTokens.muted,
+                            style: TextStyle(
+                              color: MizdahTokens.mutedOf(context),
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                               letterSpacing: 0.2,
@@ -219,29 +219,29 @@ class _SearchBar extends StatelessWidget {
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: MizdahTokens.surface(context),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MizdahTokens.cardBorder, width: 1),
-        boxShadow: MizdahTokens.softShadow(elevation: 0.4),
+        border: Border.all(color: MizdahTokens.border(context), width: 1),
+        boxShadow: MizdahTokens.shadow(context, elevation: 0.4),
       ),
       child: Row(
         children: [
-          Icon(Icons.search_rounded, color: MizdahTokens.muted, size: 18),
+          Icon(Icons.search_rounded, color: MizdahTokens.mutedOf(context), size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(
               onChanged: onChanged,
-              style: const TextStyle(
-                color: MizdahTokens.ink,
+              style: TextStyle(
+                color: MizdahTokens.inkOf(context),
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isCollapsed: true,
                 border: InputBorder.none,
                 hintText: 'Search people',
                 hintStyle: TextStyle(
-                  color: MizdahTokens.muted,
+                  color: MizdahTokens.mutedOf(context),
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -287,8 +287,8 @@ class _PersonCard extends StatelessWidget {
                   person.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: MizdahTokens.ink,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.2,
@@ -298,12 +298,12 @@ class _PersonCard extends StatelessWidget {
                 Row(
                   children: [
                     Icon(Icons.schedule_rounded,
-                        color: MizdahTokens.muted, size: 12),
+                        color: MizdahTokens.mutedOf(context), size: 12),
                     const SizedBox(width: 4),
                     Text(
                       _formatRelative(person.lastSeen),
-                      style: const TextStyle(
-                        color: MizdahTokens.muted,
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -355,7 +355,7 @@ class _PersonCard extends StatelessWidget {
             ),
             child: Icon(
               Icons.videocam_rounded,
-              color: code == null ? MizdahTokens.muted : Colors.white,
+              color: code == null ? MizdahTokens.mutedOf(context) : Colors.white,
               size: 18,
             ),
           ),

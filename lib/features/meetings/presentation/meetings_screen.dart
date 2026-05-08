@@ -117,10 +117,10 @@ class _SegmentSwitcher extends StatelessWidget {
         height: 48,
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: MizdahTokens.surface(context),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: MizdahTokens.cardBorder, width: 1),
-          boxShadow: MizdahTokens.softShadow(elevation: 0.4),
+          border: Border.all(color: MizdahTokens.border(context), width: 1),
+          boxShadow: MizdahTokens.shadow(context, elevation: 0.4),
         ),
         child: LayoutBuilder(builder: (ctx, c) {
           final pillW = (c.maxWidth - 8) / 2;
@@ -192,7 +192,9 @@ class _SegmentLabel extends StatelessWidget {
         child: AnimatedDefaultTextStyle(
           duration: const Duration(milliseconds: 200),
           style: TextStyle(
-            color: active ? Colors.white : MizdahTokens.muted,
+            color: active
+                ? Colors.white
+                : MizdahTokens.mutedOf(context),
             fontSize: 13,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.1,
@@ -379,8 +381,8 @@ class _UpcomingMeetingCard extends StatelessWidget {
                   title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: MizdahTokens.ink,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.2,
@@ -390,14 +392,14 @@ class _UpcomingMeetingCard extends StatelessWidget {
                 Row(
                   children: [
                     Icon(Icons.schedule_rounded,
-                        color: MizdahTokens.muted, size: 13),
+                        color: MizdahTokens.mutedOf(context), size: 13),
                     const SizedBox(width: 4),
                     Flexible(
                       child: Text(
                         timeRange,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: MizdahTokens.muted,
+                        style: TextStyle(
+                          color: MizdahTokens.mutedOf(context),
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -427,7 +429,7 @@ class _UpcomingMeetingCard extends StatelessWidget {
                   Row(
                     children: [
                       Icon(Icons.link_rounded,
-                          color: MizdahTokens.muted, size: 12),
+                          color: MizdahTokens.mutedOf(context), size: 12),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
@@ -584,8 +586,8 @@ class _RecentCard extends StatelessWidget {
                   item.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: MizdahTokens.ink,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.2,
@@ -595,12 +597,12 @@ class _RecentCard extends StatelessWidget {
                 Row(
                   children: [
                     Icon(Icons.schedule_rounded,
-                        color: MizdahTokens.muted, size: 12),
+                        color: MizdahTokens.mutedOf(context), size: 12),
                     const SizedBox(width: 4),
                     Text(
                       _formatRelative(item.timestamp),
-                      style: const TextStyle(
-                        color: MizdahTokens.muted,
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -608,12 +610,12 @@ class _RecentCard extends StatelessWidget {
                     const SizedBox(width: 10),
                     if (item.duration > Duration.zero) ...[
                       Icon(Icons.timer_outlined,
-                          color: MizdahTokens.muted, size: 12),
+                          color: MizdahTokens.mutedOf(context), size: 12),
                       const SizedBox(width: 4),
                       Text(
                         _formatDuration(item.duration),
-                        style: const TextStyle(
-                          color: MizdahTokens.muted,
+                        style: TextStyle(
+                          color: MizdahTokens.mutedOf(context),
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -626,7 +628,7 @@ class _RecentCard extends StatelessWidget {
           ),
           if (code != null)
             Icon(Icons.chevron_right_rounded,
-                color: MizdahTokens.muted, size: 22),
+                color: MizdahTokens.mutedOf(context), size: 22),
         ],
       ),
     );

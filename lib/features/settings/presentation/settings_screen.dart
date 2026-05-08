@@ -208,7 +208,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               child: Text(
                 'Made with care · Mizdah',
                 style: TextStyle(
-                  color: MizdahTokens.muted.withValues(alpha: 0.8),
+                  color: MizdahTokens.mutedOf(context).withValues(alpha: 0.8),
                   fontSize: 11,
                   fontWeight: FontWeight.w500,
                   letterSpacing: 0.4,
@@ -235,19 +235,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
+        backgroundColor: MizdahTokens.surface(ctx),
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22)),
-        title: const Text('Sign out?'),
-        content: const Text(
+        title: Text(
+          'Sign out?',
+          style: TextStyle(color: MizdahTokens.inkOf(ctx)),
+        ),
+        content: Text(
           'You\'ll need to sign in again to start or join meetings.',
-          style: TextStyle(color: MizdahTokens.muted),
+          style: TextStyle(color: MizdahTokens.mutedOf(ctx)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel',
-                style: TextStyle(color: MizdahTokens.muted)),
+            child: Text('Cancel',
+                style: TextStyle(color: MizdahTokens.mutedOf(ctx))),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -479,8 +482,8 @@ class _StatCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             value,
-            style: const TextStyle(
-              color: MizdahTokens.ink,
+            style: TextStyle(
+              color: MizdahTokens.inkOf(context),
               fontSize: 22,
               fontWeight: FontWeight.w800,
               letterSpacing: -0.4,
@@ -488,8 +491,8 @@ class _StatCard extends StatelessWidget {
           ),
           Text(
             label,
-            style: const TextStyle(
-              color: MizdahTokens.muted,
+            style: TextStyle(
+              color: MizdahTokens.mutedOf(context),
               fontSize: 11,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.2,
@@ -521,8 +524,8 @@ class _Section extends StatelessWidget {
             padding: const EdgeInsets.only(left: 4, bottom: 10),
             child: Text(
               title,
-              style: const TextStyle(
-                color: MizdahTokens.ink,
+              style: TextStyle(
+                color: MizdahTokens.inkOf(context),
                 fontSize: 16,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.3,
@@ -606,7 +609,7 @@ class _ThemeRow extends StatelessWidget {
             height: 38,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: const Color(0xFFEEF2FF),
+              color: MizdahTokens.iconTileBg(context),
               borderRadius: BorderRadius.circular(11),
             ),
             child: Icon(icon, color: MizdahTokens.primary, size: 18),
@@ -620,8 +623,8 @@ class _ThemeRow extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     label,
-                    style: const TextStyle(
-                      color: MizdahTokens.ink,
+                    style: TextStyle(
+                      color: MizdahTokens.inkOf(context),
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
@@ -631,8 +634,8 @@ class _ThemeRow extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
                     sublabel,
-                    style: const TextStyle(
-                      color: MizdahTokens.muted,
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
@@ -674,7 +677,7 @@ class _SettingRow extends StatelessWidget {
     final accent =
         destructive ? const Color(0xFFB42318) : MizdahTokens.primary;
     final accentBg =
-        destructive ? const Color(0xFFFEE4E2) : const Color(0xFFEEF2FF);
+        destructive ? const Color(0xFFFEE4E2) : MizdahTokens.iconTileBg(context);
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -701,7 +704,7 @@ class _SettingRow extends StatelessWidget {
                     style: TextStyle(
                       color: destructive
                           ? const Color(0xFFB42318)
-                          : MizdahTokens.ink,
+                          : MizdahTokens.inkOf(context),
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
@@ -709,8 +712,8 @@ class _SettingRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     sublabel,
-                    style: const TextStyle(
-                      color: MizdahTokens.muted,
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
@@ -719,7 +722,7 @@ class _SettingRow extends StatelessWidget {
               ),
             ),
             Icon(Icons.chevron_right_rounded,
-                color: MizdahTokens.muted, size: 20),
+                color: MizdahTokens.mutedOf(context), size: 20),
           ],
         ),
       ),
@@ -733,6 +736,6 @@ class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Container(height: 1, color: MizdahTokens.cardBorder),
+        child: Container(height: 1, color: MizdahTokens.border(context)),
       );
 }

@@ -15,30 +15,106 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 class MizdahTokens {
+  // ── Brand accents — identical in both modes ─────────────────────
   static const primary = Color(0xFF6C63FF);
   static const secondary = Color(0xFF8B5CF6);
   static const tertiary = Color(0xFFA78BFA);
-  static const lavenderBg = Color(0xFFF6F7FB);
-  static const cardBorder = Color(0xFFEEF0F7);
-  static const ink = Color(0xFF0F1322);
-  static const muted = Color(0xFF6B7180);
-  static const subtleStroke = Color(0xFFE7E9F2);
-
   static const heroGradient = LinearGradient(
     colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6), Color(0xFFA78BFA)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
 
+  /// Color rotation for timeline dots / row icons — each row gets
+  /// a distinct (background, foreground) pair from this palette.
+  /// Same in both modes — the tints are bright enough to read on
+  /// dark backgrounds too.
+  static const List<List<Color>> rowColors = [
+    [Color(0xFFEDE9FE), Color(0xFF8B5CF6)], // violet
+    [Color(0xFFDBEAFE), Color(0xFF3B82F6)], // blue
+    [Color(0xFFD1FAE5), Color(0xFF10B981)], // emerald
+    [Color(0xFFFEF3C7), Color(0xFFF59E0B)], // amber
+    [Color(0xFFFCE7F3), Color(0xFFEC4899)], // pink
+  ];
+
+  // ── Light-mode raw values (legacy const tokens kept so existing
+  //    callers still resolve) ────────────────────────────────────
+  static const lavenderBg = Color(0xFFF6F7FB);
+  static const cardBorder = Color(0xFFEEF0F7);
+  static const ink = Color(0xFF0F1322);
+  static const muted = Color(0xFF6B7180);
+  static const subtleStroke = Color(0xFFE7E9F2);
   static const screenBgGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [Color(0xFFF1EEFF), Color(0xFFFAFBFE)],
   );
 
+  // ── Dark-mode raw values ──────────────────────────────────────
+  static const darkBg = Color(0xFF0B0F1A);
+  static const darkSurface = Color(0xFF161B2A);
+  static const darkInk = Color(0xFFF1F5FF);
+  static const darkMuted = Color(0xFF8893A8);
+  static const darkCardBorder = Color(0xFF252B3D);
+  static const darkSubtleStroke = Color(0xFF1F2535);
+  static const darkScreenBgGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF131A2E), Color(0xFF0B0F1A)],
+  );
+
+  // ── Adaptive accessors — read the active brightness off context
+  //    and return the right value. Use these in widgets instead of
+  //    the raw consts so the screen flips automatically when the
+  //    user toggles theme. ────────────────────────────────────────
+
+  static bool isDark(BuildContext c) =>
+      Theme.of(c).brightness == Brightness.dark;
+
+  /// Page-level background. Lavender wash in light mode, deep navy
+  /// in dark mode.
+  static Color bg(BuildContext c) => isDark(c) ? darkBg : lavenderBg;
+
+  /// Card / sheet surface fill. White in light mode, raised navy
+  /// surface in dark mode.
+  static Color surface(BuildContext c) =>
+      isDark(c) ? darkSurface : Colors.white;
+
+  /// Primary text colour — high contrast against `bg`.
+  static Color inkOf(BuildContext c) => isDark(c) ? darkInk : ink;
+
+  /// Secondary / muted text colour.
+  static Color mutedOf(BuildContext c) => isDark(c) ? darkMuted : muted;
+
+  /// 1px stroke around cards.
+  static Color border(BuildContext c) =>
+      isDark(c) ? darkCardBorder : cardBorder;
+
+  /// Even fainter divider used between rows.
+  static Color subtle(BuildContext c) =>
+      isDark(c) ? darkSubtleStroke : subtleStroke;
+
+  /// Page background gradient — light lavender or dark navy.
+  static LinearGradient pageGradient(BuildContext c) =>
+      isDark(c) ? darkScreenBgGradient : screenBgGradient;
+
+  /// Subtle inset pill — used for text inputs and similar inner
+  /// surfaces sitting INSIDE a card. Lighter grey in light mode,
+  /// raised navy in dark mode.
+  static Color softPillBg(BuildContext c) =>
+      isDark(c) ? const Color(0xFF1E2438) : const Color(0xFFF3F4F8);
+
+  /// Tinted icon-tile background — the square fill behind setting-row
+  /// icons / feature icons. Light lavender in light mode, dim violet
+  /// in dark mode.
+  static Color iconTileBg(BuildContext c) =>
+      isDark(c) ? const Color(0xFF2A2342) : const Color(0xFFEEF2FF);
+
   /// Soft, layered shadow system — never use one harsh shadow. The
   /// purple-tinted ambient shadow gives the floating-card look used
-  /// across the design without going dark/heavy.
+  /// across the design without going dark/heavy. In dark mode we
+  /// drop the elevation impact and switch to a deep-black ambient
+  /// shadow for separation against the dark surface.
   static List<BoxShadow> softShadow({double elevation = 1}) => [
         BoxShadow(
           color: const Color(0xFF6C63FF).withValues(alpha: 0.06 * elevation),
@@ -52,15 +128,26 @@ class MizdahTokens {
         ),
       ];
 
-  /// Color rotation for timeline dots / row icons — each row gets
-  /// a distinct (background, foreground) pair from this palette.
-  static const List<List<Color>> rowColors = [
-    [Color(0xFFEDE9FE), Color(0xFF8B5CF6)], // violet
-    [Color(0xFFDBEAFE), Color(0xFF3B82F6)], // blue
-    [Color(0xFFD1FAE5), Color(0xFF10B981)], // emerald
-    [Color(0xFFFEF3C7), Color(0xFFF59E0B)], // amber
-    [Color(0xFFFCE7F3), Color(0xFFEC4899)], // pink
-  ];
+  /// Adaptive shadow — same recipe as `softShadow` in light mode,
+  /// deeper black halos in dark mode so cards still read as elevated
+  /// on the dark backdrop.
+  static List<BoxShadow> shadow(BuildContext c, {double elevation = 1}) {
+    if (isDark(c)) {
+      return [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.50 * elevation),
+          blurRadius: 24 * elevation,
+          offset: Offset(0, 10 * elevation),
+        ),
+        BoxShadow(
+          color: const Color(0xFF6C63FF).withValues(alpha: 0.08 * elevation),
+          blurRadius: 18 * elevation,
+          offset: Offset(0, 6 * elevation),
+        ),
+      ];
+    }
+    return softShadow(elevation: elevation);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -187,20 +274,22 @@ class MizdahTabScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: MizdahTokens.lavenderBg,
+      backgroundColor: MizdahTokens.bg(context),
       extendBody: extendBodyBehindNav,
       body: Stack(
         children: [
           // Diagonal gradient backdrop — same as home screen so all
-          // tabs feel like one continuous canvas.
+          // tabs feel like one continuous canvas. Adaptive: lavender
+          // in light mode, deep navy in dark mode.
           Positioned.fill(
             child: DecoratedBox(
-              decoration: const BoxDecoration(
-                gradient: MizdahTokens.screenBgGradient,
+              decoration: BoxDecoration(
+                gradient: MizdahTokens.pageGradient(context),
               ),
             ),
           ),
-          // Subtle radial highlight at top-left for depth.
+          // Subtle radial highlight at top-left for depth — slightly
+          // brighter in dark mode so it's actually visible.
           Positioned(
             top: -120,
             left: -80,
@@ -212,7 +301,9 @@ class MizdahTabScaffold extends StatelessWidget {
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      MizdahTokens.primary.withValues(alpha: 0.10),
+                      MizdahTokens.primary.withValues(
+                        alpha: MizdahTokens.isDark(context) ? 0.18 : 0.10,
+                      ),
                       Colors.transparent,
                     ],
                   ),
@@ -280,6 +371,19 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = MizdahTokens.isDark(context);
+    // Glassmorphism panel — light mode uses a translucent white
+    // gradient; dark mode uses a translucent slate so the bar still
+    // reads as a separate floating surface above the dark backdrop.
+    final panelTop =
+        (isDark ? const Color(0xFF1B2236) : Colors.white).withValues(alpha: 0.92);
+    final panelBot =
+        (isDark ? const Color(0xFF131929) : Colors.white).withValues(alpha: 0.70);
+    final panelBorder = (isDark ? Colors.white : Colors.white)
+        .withValues(alpha: isDark ? 0.10 : 0.6);
+    final highlightLine =
+        (isDark ? Colors.white : Colors.white).withValues(alpha: isDark ? 0.06 : 0.6);
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
@@ -289,31 +393,26 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
           padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                Colors.white.withValues(alpha: 0.92),
-                Colors.white.withValues(alpha: 0.70),
-              ],
+              colors: [panelTop, panelBot],
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
             ),
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.6),
-              width: 1.2,
-            ),
+            border: Border.all(color: panelBorder, width: 1.2),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF6C63FF).withValues(alpha: 0.16),
+                color: const Color(0xFF6C63FF)
+                    .withValues(alpha: isDark ? 0.22 : 0.16),
                 blurRadius: 36,
                 offset: const Offset(0, 18),
               ),
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
+                color: Colors.black.withValues(alpha: isDark ? 0.40 : 0.05),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
               BoxShadow(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: highlightLine,
                 blurRadius: 0,
                 offset: const Offset(0, 1),
                 spreadRadius: -0.5,
@@ -521,15 +620,20 @@ class _InactiveContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Slightly brighter grey in dark mode so the inactive icons
+    // still read as tappable affordances.
+    final c = MizdahTokens.isDark(context)
+        ? const Color(0xFFA0A8BD)
+        : const Color(0xFF8A8FA0);
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(icon, color: const Color(0xFF8A8FA0), size: 22),
+        Icon(icon, color: c, size: 22),
         const SizedBox(height: 6),
         Text(
           label,
-          style: const TextStyle(
-            color: Color(0xFF8A8FA0),
+          style: TextStyle(
+            color: c,
             fontSize: 10,
             fontWeight: FontWeight.w600,
           ),
@@ -622,10 +726,12 @@ class _CallNavItemState extends State<_CallNavItem> {
                       ),
                     )
                   else
-                    const Text(
+                    Text(
                       'Call',
                       style: TextStyle(
-                        color: Color(0xFF8A8FA0),
+                        color: MizdahTokens.isDark(context)
+                            ? const Color(0xFFA0A8BD)
+                            : const Color(0xFF8A8FA0),
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
                       ),
@@ -681,8 +787,8 @@ class MizdahPageHeader extends StatelessWidget {
                 child: RichText(
                   maxLines: 2,
                   text: TextSpan(
-                    style: const TextStyle(
-                      color: MizdahTokens.ink,
+                    style: TextStyle(
+                      color: MizdahTokens.inkOf(context),
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.6,
@@ -722,8 +828,8 @@ class MizdahPageHeader extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               subtitle!,
-              style: const TextStyle(
-                color: MizdahTokens.muted,
+              style: TextStyle(
+                color: MizdahTokens.mutedOf(context),
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),
@@ -759,10 +865,10 @@ class MizdahCard extends StatelessWidget {
     final box = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: MizdahTokens.surface(context),
         borderRadius: BorderRadius.circular(borderRadius),
-        border: Border.all(color: MizdahTokens.cardBorder, width: 1),
-        boxShadow: MizdahTokens.softShadow(elevation: 0.7),
+        border: Border.all(color: MizdahTokens.border(context), width: 1),
+        boxShadow: MizdahTokens.shadow(context, elevation: 0.7),
       ),
       child: child,
     );
@@ -796,6 +902,7 @@ class MizdahEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = MizdahTokens.isDark(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
       child: Column(
@@ -804,8 +911,16 @@ class MizdahEmptyState extends StatelessWidget {
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFEDE9FE), Color(0xFFF5F3FF)],
+              gradient: LinearGradient(
+                // Lighter pastel pair in light mode; dimmed
+                // translucent purple in dark mode so the icon halo
+                // doesn't glow too brightly against the navy bg.
+                colors: isDark
+                    ? [
+                        const Color(0xFF2D2547).withValues(alpha: 0.85),
+                        const Color(0xFF1F1A33).withValues(alpha: 0.85),
+                      ]
+                    : const [Color(0xFFEDE9FE), Color(0xFFF5F3FF)],
               ),
               borderRadius: BorderRadius.circular(18),
             ),
@@ -814,8 +929,8 @@ class MizdahEmptyState extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             title,
-            style: const TextStyle(
-              color: MizdahTokens.ink,
+            style: TextStyle(
+              color: MizdahTokens.inkOf(context),
               fontSize: 15,
               fontWeight: FontWeight.w700,
             ),
@@ -824,8 +939,8 @@ class MizdahEmptyState extends StatelessWidget {
           Text(
             subtitle,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: MizdahTokens.muted,
+            style: TextStyle(
+              color: MizdahTokens.mutedOf(context),
               fontSize: 13,
               fontWeight: FontWeight.w500,
             ),
