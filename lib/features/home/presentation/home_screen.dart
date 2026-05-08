@@ -367,9 +367,9 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 4, 14),
+      padding: const EdgeInsets.fromLTRB(20, 6, 0, 16),
       child: SizedBox(
-        height: 270,
+        height: 340,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -379,10 +379,10 @@ class _Hero extends StatelessWidget {
             // overlap with the text column reads as soft layering
             // rather than a collision.
             Positioned(
-              right: 0,
+              right: -10,
               top: 0,
               bottom: 0,
-              width: 230,
+              width: 300,
               child: _BlobIllustration(floatCtrl: floatCtrl),
             ),
             // Text column on the left — fixed-width SizedBox so the
