@@ -299,6 +299,18 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   final Map<String, RTCPeerConnection> _peerConnections = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
   final Map<String, MediaStream?> _remoteStreams = {};
+  // Cross-channel sid mapping for the SFU's split signaling/media
+  // sockets. Key: signaling sid (from `from:` in media-toggle events,
+  // and the canonical participant key). Value: media sid (from
+  // producer.appData.socketId — the original `remoteRenderers` key
+  // before we add the signaling-sid alias).
+  // Used during teardown so we can remove BOTH map entries when a
+  // peer leaves — without this, disposing the renderer at one key
+  // leaves a stale reference at the other and the next frame's
+  // build crashes with "use after dispose", which Flutter renders
+  // as a full-screen RED error widget.
+  final Map<String, String> _mediaSidBySignalingSid = {};
+  final Map<String, String> _signalingSidByMediaSid = {};
   // SocketIds of peers who stopped sharing — their renderer is
   // currently detached to avoid surfacing the cached screen frame.
   // Re-attached on the NEXT media-toggle from them with
@@ -346,7 +358,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v8 2026-05-08 (cross-sid-link)';
+  static const String _kBuildStamp = 'sfu-v9 2026-05-08 (alias-cleanup)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2255,27 +2267,70 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _peerConnections[socketId]?.close();
     _peerConnections.remove(socketId);
     _pendingIce.remove(socketId);
-    _remoteStreams.remove(socketId);
-    _remoteScreenStreams.remove(socketId);
-    final renderer = state.remoteRenderers[socketId];
-    final screenRenderer = state.remoteScreenRenderers[socketId];
-    if (renderer != null) {
-      renderer.srcObject = null;
-      renderer.dispose();
+
+    // The same renderer might be aliased at TWO keys (signaling sid
+    // + media sid) thanks to the cross-channel SID linking in
+    // _handleSfuRemoteTrack. We must dispose the renderer ONCE and
+    // remove BOTH keys, otherwise the leftover key points at a
+    // disposed renderer and the next frame crashes with a use-
+    // after-dispose error → Flutter paints the screen red.
+    final keysToRemove = <String>{socketId};
+    final altSid = _mediaSidBySignalingSid[socketId] ??
+        _signalingSidByMediaSid[socketId];
+    if (altSid != null) keysToRemove.add(altSid);
+
+    // Streams: remove every aliased entry so a future media-toggle
+    // re-attach doesn't grab a stale stream.
+    for (final k in keysToRemove) {
+      _remoteStreams.remove(k);
+      _remoteScreenStreams.remove(k);
     }
-    if (screenRenderer != null) {
-      screenRenderer.srcObject = null;
-      screenRenderer.dispose();
+
+    // Dispose renderers — using identity tracking to avoid a double-
+    // dispose when both keys point at the same instance.
+    final disposed = <RTCVideoRenderer>{};
+    final newRemote =
+        Map<String, RTCVideoRenderer>.from(state.remoteRenderers);
+    final newScreen = Map<String, RTCVideoRenderer>.from(
+        state.remoteScreenRenderers);
+    var anyChange = false;
+    for (final k in keysToRemove) {
+      final r = newRemote[k];
+      if (r != null) {
+        if (disposed.add(r)) {
+          try {
+            r.srcObject = null;
+            r.dispose();
+          } catch (_) {}
+        }
+        newRemote.remove(k);
+        anyChange = true;
+      }
+      final sr = newScreen[k];
+      if (sr != null) {
+        if (disposed.add(sr)) {
+          try {
+            sr.srcObject = null;
+            sr.dispose();
+          } catch (_) {}
+        }
+        newScreen.remove(k);
+        anyChange = true;
+      }
     }
-    if (renderer != null || screenRenderer != null) {
+    if (anyChange && mounted && !_disposed) {
       state = state.copyWith(
-        remoteRenderers: Map<String, RTCVideoRenderer>.from(
-            state.remoteRenderers)
-          ..remove(socketId),
-        remoteScreenRenderers: Map<String, RTCVideoRenderer>.from(
-            state.remoteScreenRenderers)
-          ..remove(socketId),
+        remoteRenderers: newRemote,
+        remoteScreenRenderers: newScreen,
       );
+    }
+
+    // Clear the cross-channel mapping for this peer.
+    _mediaSidBySignalingSid.remove(socketId);
+    _signalingSidByMediaSid.remove(socketId);
+    if (altSid != null) {
+      _mediaSidBySignalingSid.remove(altSid);
+      _signalingSidByMediaSid.remove(altSid);
     }
   }
 
@@ -2809,6 +2864,10 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           !_disposed) {
         final r = state.remoteRenderers[remoteSocketId];
         if (r != null) {
+          // Record the bidirectional mapping FIRST so the teardown
+          // path knows about both map keys when it runs.
+          _mediaSidBySignalingSid[linkedSignalingSid] = remoteSocketId;
+          _signalingSidByMediaSid[remoteSocketId] = linkedSignalingSid;
           state = state.copyWith(
             remoteRenderers: {
               ...state.remoteRenderers,
