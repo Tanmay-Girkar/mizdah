@@ -747,33 +747,16 @@ class _VideoGrid extends ConsumerWidget {
         ));
       }
     }
-    // Orphan-renderer fallback: a renderer exists for this socketId but
-    // no matching `participant` row arrived yet. We render it as a
-    // generic "Participant" tile so the user-joined→track-attached gap
-    // doesn't show a black grid.
-    //
-    // EXCEPT for users still in the waiting room. The mediasoup SFU
-    // starts forwarding the requesting user's audio/video producers to
-    // the room as soon as their media socket connects — that happens
-    // BEFORE the host clicks Admit. Without this guard a "Participant"
-    // tile pops into the grid alongside the admit/deny dialog, which
-    // is exactly the bug the user reported. Keep them invisible until
-    // they're actually admitted.
-    final waitingSocketIds = <String>{
-      for (final w in meetingState.waitingParticipants)
-        if (w is Map && w['socketId'] != null) w['socketId'].toString(),
-    };
-    for (final entry in meetingState.remoteRenderers.entries) {
-      if (waitingSocketIds.contains(entry.key)) continue;
-      final already = tiles.any((t) => t.renderer == entry.value);
-      if (!already) {
-        tiles.add(_ParticipantTileData(
-          name: 'Participant',
-          renderer: entry.value,
-          socketId: entry.key,
-        ));
-      }
-    }
+    // (Orphan-renderer fallback removed — the SFU's signaling-sid ↔
+    // media-sid mismatch made it fire constantly: the waiting-room
+    // filter used signaling sids while renderers were keyed by media
+    // sids, so admit-pending peers would surface as phantom
+    // "Participant" tiles alongside the request-to-join banner.
+    // The provider now aliases each producer's renderer to the
+    // matched participant's signaling sid in `_handleSfuRemoteTrack`,
+    // so the regular participant loop above finds renderers via the
+    // normal path. If a future bug ever leaves a renderer un-aliased
+    // we want the gap to show an empty grid, not a ghost tile.)
     // While the local user is presenting, show a STATIC placeholder
     // tile — never the live screen renderer. Rendering the screen
     // capture inside the same screen creates infinite mirror

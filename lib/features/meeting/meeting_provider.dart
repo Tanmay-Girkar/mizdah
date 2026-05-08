@@ -346,7 +346,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v7 2026-05-08 (toggle-reproduce)';
+  static const String _kBuildStamp = 'sfu-v8 2026-05-08 (cross-sid-link)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2556,6 +2556,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         mediaSocket: mediaSocket,
         meetingId: code,
         signalingSocketId: () => _socket?.id ?? '',
+        userName: () => _userName ?? '',
         onRemoteTrack: _handleSfuRemoteTrack,
         onRemoteTrackClosed: _handleSfuConsumerClosed,
         log: (m) => debugPrint('$_kLogTag $m'),
@@ -2708,11 +2709,81 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _log('[SFU] 🎬 remote track ← $remoteSocketId kind=${track.kind} '
         'isScreen=$isScreen');
 
+    // ─────────────────────────────────────────────────────────────
+    // CROSS-CHANNEL SID LINK
+    //
+    // The dev SFU uses TWO separate socket connections per peer
+    // (/signaling-fresh + /media-fresh) and each gets its own
+    // session id. So `remoteSocketId` here (= producer's
+    // appData.socketId) is the peer's MEDIA sid, but our
+    // `state.participants` and `media-toggle-remote` events are
+    // keyed by the peer's SIGNALING sid. The two never match, which
+    // is why:
+    //   • mobile saw a phantom "Participant" tile (the orphan
+    //     fallback fired with the media-keyed renderer)
+    //   • clearing the renderer on `videoEnabled:false` failed
+    //     (handler looked up by signaling sid)
+    //
+    // Fix: when a producer arrives with a name in appData, find the
+    // matching participant in state and ALIAS the renderer at the
+    // participant's signaling sid. The existing rendering loop +
+    // toggle handler (both keyed on signaling sid) then work
+    // correctly. The media-sid entry stays as a backup so screen
+    // tear-down via consumer-closed still works.
+    final remoteName = appData['name']?.toString().trim();
+    String? linkedSignalingSid;
+    if (remoteName != null && remoteName.isNotEmpty) {
+      // Match by name first — the most reliable cross-channel key.
+      for (final p in state.participants) {
+        if (p is! Map) continue;
+        if ((p['name']?.toString() ?? '') == remoteName) {
+          linkedSignalingSid = p['socketId']?.toString();
+          break;
+        }
+      }
+    }
+    if (linkedSignalingSid == null) {
+      // Fallback heuristic: if there's exactly ONE participant
+      // without a renderer aliased to their signaling sid yet,
+      // assume this producer is theirs. Works for the common 1:1
+      // and 2-3-person meetings the user is actually testing.
+      final unlinked = state.participants
+          .where((p) {
+            if (p is! Map) return false;
+            final sid = p['socketId']?.toString();
+            return sid != null &&
+                sid != _socket?.id &&
+                !state.remoteRenderers.containsKey(sid);
+          })
+          .toList();
+      if (unlinked.length == 1) {
+        linkedSignalingSid = unlinked.first['socketId']?.toString();
+      }
+    }
+    if (linkedSignalingSid != null && linkedSignalingSid != remoteSocketId) {
+      _log('[SFU] 🔗 linking media-sid $remoteSocketId → '
+          'signaling-sid $linkedSignalingSid (name=$remoteName)');
+    }
+
     // Screen-share tracks live on a SEPARATE stream + renderer from
     // the peer's camera. The grid renders them as a second tile
     // ("Name · Presenting") rather than overwriting the camera tile.
     if (isScreen) {
       await _attachRemoteScreenTrack(remoteSocketId, track);
+      // Also alias the screen renderer at the peer's signaling sid
+      // so the participant-row's "Presenting" tile finds it.
+      if (linkedSignalingSid != null &&
+          linkedSignalingSid != remoteSocketId) {
+        final r = state.remoteScreenRenderers[remoteSocketId];
+        if (r != null) {
+          state = state.copyWith(
+            remoteScreenRenderers: {
+              ...state.remoteScreenRenderers,
+              linkedSignalingSid: r,
+            },
+          );
+        }
+      }
       return;
     }
 
@@ -2728,6 +2799,27 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (isNewStream) {
       // First track for this peer — normal attachment.
       await _attachRemoteStream(remoteSocketId, stream);
+      // Alias the renderer at the participant's signaling sid so the
+      // existing rendering loop + media-toggle handler (both keyed
+      // on signaling sid) find it. See the cross-channel-sid-link
+      // comment block above for why this is necessary.
+      if (linkedSignalingSid != null &&
+          linkedSignalingSid != remoteSocketId &&
+          mounted &&
+          !_disposed) {
+        final r = state.remoteRenderers[remoteSocketId];
+        if (r != null) {
+          state = state.copyWith(
+            remoteRenderers: {
+              ...state.remoteRenderers,
+              linkedSignalingSid: r,
+            },
+          );
+          // Also alias the underlying stream so srcObject look-ups in
+          // the media-toggle handler can detach/reattach via either key.
+          _remoteStreams[linkedSignalingSid] = stream;
+        }
+      }
       return;
     }
 

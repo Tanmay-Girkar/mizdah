@@ -56,8 +56,10 @@ class SFUService {
     required this.signalingSocketId,
     required this.onRemoteTrack,
     required this.onRemoteTrackClosed,
+    String Function()? userName,
     void Function(String message)? log,
   })  : _socket = mediaSocket,
+        _userName = userName ?? (() => ''),
         _log = log ?? ((_) {});
 
   final socket_io.Socket _socket;
@@ -65,6 +67,12 @@ class SFUService {
   /// The CURRENT signaling socket id at produce time. Embedded in
   /// `appData.socketId` so remote peers can map a producer to a tile.
   final String Function() signalingSocketId;
+  /// Local user's display name. Embedded in producer `appData.name`
+  /// so remote peers can correlate this producer to their own copy
+  /// of the participants list when their signaling-sid ↔ media-sid
+  /// mapping doesn't line up (the dev SFU treats those as separate
+  /// IDs because mobile uses two distinct socket connections).
+  final String Function() _userName;
 
   /// Called when a remote producer becomes consumable. The track is a
   /// freshly-created remote track; the consumer holds it alive.
@@ -419,6 +427,7 @@ class SFUService {
         source: track.kind == 'audio' ? 'mic' : (isScreen ? 'screen' : 'webcam'),
         appData: <String, dynamic>{
           'socketId': signalingSocketId(),
+          'name': _userName(),
           'isScreen': isScreen,
         },
       );
