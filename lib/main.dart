@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/navigation/app_router.dart';
@@ -9,6 +10,18 @@ import 'features/call/presentation/p2p_incoming_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Edge-to-edge layout ────────────────────────────────────────
+  // Without this, Android draws opaque black bars behind the
+  // status bar and gesture-nav so the app never reaches the screen
+  // edges. `edgeToEdge` lets the lavender background flow under
+  // both system bars; `SafeArea` widgets inside each screen still
+  // protect interactive content from being clipped.
+  await SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.edgeToEdge,
+    // Empty overlays list = nothing forced visible; the OS still
+    // shows status bar + gesture pill, but on top of our content.
+  );
 
   // ── Dev-only: trust self-signed certs from local backend hosts ──
   // The local backend at https://192.168.1.48:3001 (and similar
@@ -74,12 +87,34 @@ class MizdahApp extends ConsumerWidget {
       theme: MizdahTheme.lightTheme,
       darkTheme: MizdahTheme.darkTheme,
       routerConfig: appRouter,
-      // Wrap every route in the incoming-call overlay so a ringing
-      // P2P call can interrupt the user from anywhere — Home,
-      // Meetings, even a settings sheet.
-      builder: (context, child) => P2PIncomingOverlay(
-        child: child ?? const SizedBox.shrink(),
-      ),
+      // Wrap every route in:
+      //   1) An `AnnotatedRegion` that forces the OS system bars
+      //      transparent so the app's gradient flows behind them.
+      //      The icon brightness is derived from the active theme.
+      //   2) The incoming-call overlay so a ringing P2P call can
+      //      interrupt the user from any screen.
+      builder: (context, child) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle(
+            // Status bar (top)
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness:
+                isDark ? Brightness.light : Brightness.dark,
+            statusBarBrightness:
+                isDark ? Brightness.dark : Brightness.light,
+            // Gesture nav bar (bottom)
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarIconBrightness:
+                isDark ? Brightness.light : Brightness.dark,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          ),
+          child: P2PIncomingOverlay(
+            child: child ?? const SizedBox.shrink(),
+          ),
+        );
+      },
     );
   }
 }
