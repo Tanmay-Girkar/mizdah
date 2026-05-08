@@ -827,6 +827,23 @@ class _VideoGrid extends ConsumerWidget {
       filtered = filtered.take(maxTiles).toList();
     }
 
+    // EMPTY-LIST GUARD — must come before the layout dispatch.
+    // _SpotlightStripGrid and _SpeakerSidebarGrid both call
+    // `tiles.first` in their build, which throws "Bad state: No
+    // element" when no remote peer is currently in the grid. Flutter
+    // catches the exception and paints its default ErrorWidget — a
+    // solid red Container — over the entire body. That's the red
+    // screen the user saw when receiving a join request: with
+    // `hideTilesWithoutVideo=true` (or new participant filter
+    // stripping everyone), the grid is empty. Render a friendly
+    // empty state instead.
+    if (filtered.isEmpty) {
+      return _EmptyGridPlaceholder(
+        isHost: meetingState.isHost,
+        hasWaiting: meetingState.waitingParticipants.isNotEmpty,
+      );
+    }
+
     // Resolve `auto` to a concrete layout based on participant count.
     var resolved = layout;
     if (resolved == MeetingLayout.auto) {
@@ -852,6 +869,73 @@ class _VideoGrid extends ConsumerWidget {
           MeetingLayout.premiumCards   => _PremiumCardsGrid(tiles: filtered),
           MeetingLayout.auto           => _EqualGridGrid(tiles: filtered),
         },
+      ),
+    );
+  }
+}
+
+/// Friendly empty state for the meeting grid. Shown when no remote
+/// peer is currently rendered — either because the user just joined
+/// and is alone, or because everyone toggled their video off, or
+/// because the only pending peer is still in the waiting room.
+///
+/// Critically: this also REPLACES what used to crash. The
+/// _SpotlightStripGrid / _SpeakerSidebarGrid widgets both do
+/// `tiles.first` unconditionally; with an empty list that throws
+/// and Flutter paints its default red ErrorWidget over the whole
+/// body. _VideoGrid now short-circuits to this placeholder before
+/// dispatching to any layout widget.
+class _EmptyGridPlaceholder extends StatelessWidget {
+  final bool isHost;
+  final bool hasWaiting;
+  const _EmptyGridPlaceholder({
+    required this.isHost,
+    required this.hasWaiting,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fg = isDark ? Colors.white70 : Colors.black54;
+    final fgMuted = isDark ? Colors.white38 : Colors.black38;
+    final title = hasWaiting && isHost
+        ? 'Someone\'s waiting to join'
+        : 'You\'re the only one here';
+    final subtitle = hasWaiting && isHost
+        ? 'Tap Admit to bring them in'
+        : 'Share your meeting link to invite others';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 80, 24, 120),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              hasWaiting
+                  ? Icons.person_add_rounded
+                  : Icons.groups_outlined,
+              size: 56,
+              color: fgMuted,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: TextStyle(
+                color: fg,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: TextStyle(color: fgMuted, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -885,6 +969,11 @@ class _SpotlightStripGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Defensive: _VideoGrid screens out empty lists, but if any
+    // future path dispatches here directly we still want to render
+    // a blank cell rather than throw and trigger Flutter's red
+    // ErrorWidget over the whole screen.
+    if (tiles.isEmpty) return const SizedBox.shrink();
     final speaker = tiles.first;
     final others = tiles.skip(1).toList();
     return Padding(
@@ -919,6 +1008,10 @@ class _SpeakerSidebarGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Defensive: see _SpotlightStripGrid. _VideoGrid guards against
+    // empty lists today, but a direct call would otherwise throw on
+    // tiles.first and Flutter would paint the red ErrorWidget.
+    if (tiles.isEmpty) return const SizedBox.shrink();
     final speaker = tiles.first;
     final others = tiles.skip(1).toList();
     return Padding(
