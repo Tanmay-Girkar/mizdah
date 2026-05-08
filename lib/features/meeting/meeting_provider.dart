@@ -364,7 +364,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v13 2026-05-08 (verify-nsp)';
+  static const String _kBuildStamp = 'sfu-v14 2026-05-08 (sweep-stale-track)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -1043,34 +1043,71 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             if (r != null && s != null) r.srcObject = s;
             _stoppedSharingPeers.remove(from);
           } else if (data.containsKey('videoEnabled')) {
-            // CAMERA TOGGLE (NOT a share-stop) — clear the renderer
-            // when the peer turned their camera off so we don't keep
-            // painting their last frame as a frozen tile, and re-
-            // attach when they turn it back on. Without this, the
-            // remote video on our screen "sticks" on the last frame
-            // even though the peer's videoEnabled is false. The
-            // renderer's GPU texture holds the previous frame
-            // because no new frames arrive — explicit detach forces
-            // it to clear.
-            final r = state.remoteRenderers[from];
-            final s = _remoteStreams[from];
-            if (r != null) {
-              if (data['videoEnabled'] == true && s != null) {
-                // Camera came back on. Reattach if we previously
-                // detached, no-op otherwise.
-                if (r.srcObject != s) {
-                  _log('🔌 reattaching camera stream for $from '
-                      '(videoEnabled=true)');
-                  r.srcObject = s;
-                }
-              } else if (data['videoEnabled'] == false) {
-                // Camera went off — flush the frozen frame.
-                if (r.srcObject != null) {
-                  _log('🧹 detaching camera stream for $from '
-                      '(videoEnabled=false) to clear stuck frame');
-                  r.srcObject = null;
+            // CAMERA TOGGLE (not a share-stop). The peer's previous
+            // video producer was closed by the SFU when they hit
+            // their camera-off button — that closes our consumer
+            // server-side too, and mediasoup-client disposes the
+            // local track reference. Our `_remoteStreams[from]` map
+            // still references that now-DISPOSED track.
+            //
+            // Two failure modes the user reported (visible in their
+            // log as `tryAddRendererToVideoTrack ... has been
+            // disposed`):
+            //   • videoEnabled:true  — used to reattach the stale
+            //     stream, which contains the disposed track →
+            //     renderer crashes during reattach.
+            //   • videoEnabled:false — left the stale track in the
+            //     stream. When the peer restarts video, the new
+            //     track gets added alongside the disposed one and
+            //     the next renderer rebind fails.
+            //
+            // Fix:
+            //   videoEnabled:false → drop the renderer + flush the
+            //                        old video tracks from the
+            //                        stream so it's clean for next
+            //                        time. AUDIO tracks are kept.
+            //   videoEnabled:true  → DO NOTHING with the renderer
+            //                        here. Wait for `newProducer`
+            //                        to fire — _handleSfuRemoteTrack
+            //                        will create a fresh consumer
+            //                        and attach the new track to a
+            //                        clean stream.
+            if (data['videoEnabled'] == false) {
+              final r = state.remoteRenderers[from];
+              if (r != null && r.srcObject != null) {
+                _log('🧹 detaching camera renderer for $from '
+                    '(videoEnabled=false)');
+                r.srcObject = null;
+              }
+              // Also alias-side renderer if mapping exists.
+              final mediaSid = _mediaSidBySignalingSid[from];
+              if (mediaSid != null) {
+                final r2 = state.remoteRenderers[mediaSid];
+                if (r2 != null && r2.srcObject != null) {
+                  r2.srcObject = null;
                 }
               }
+              // Sweep stale video tracks out of the cached streams
+              // (both signaling-keyed and media-keyed entries).
+              for (final key in [from, mediaSid]) {
+                if (key == null) continue;
+                final s = _remoteStreams[key];
+                if (s == null) continue;
+                for (final t in s.getVideoTracks()) {
+                  try {
+                    // ignore: unawaited_futures
+                    s.removeTrack(t);
+                  } catch (_) {}
+                }
+              }
+            } else if (data['videoEnabled'] == true) {
+              // OFF → ON. Don't try to reattach a stale stream — the
+              // server is about to fire a fresh `newProducer` for
+              // the peer's restarted camera, and _handleSfuRemoteTrack
+              // will pick it up cleanly. Touching the renderer here
+              // would race against the disposed-track teardown.
+              _log('📹 video ON for $from — awaiting newProducer for '
+                  'fresh track (no manual reattach)');
             }
           }
       }
@@ -2982,6 +3019,33 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     final isNewStream = !_remoteStreams.containsKey(remoteSocketId);
     var stream = _remoteStreams[remoteSocketId];
     stream ??= await createLocalMediaStream('sfu-remote-$remoteSocketId');
+
+    // DEFENSIVE: when a fresh VIDEO track arrives for an existing
+    // stream (peer toggled camera off→on), the previous video track
+    // was disposed when their producer closed. Adding the new track
+    // alongside the disposed one and rebinding makes the renderer
+    // throw `tryAddRendererToVideoTrack ... MediaStreamTrack has
+    // been disposed`. Sweep stale video tracks BEFORE addTrack so
+    // the renderer only sees the live one.
+    //
+    // We only sweep on `kind=video` to preserve the active audio
+    // track. Mediasoup's audio consumer doesn't get torn down on a
+    // camera toggle, so audio stays healthy.
+    if (track.kind == 'video' && !isNewStream) {
+      final stale = stream.getVideoTracks();
+      for (final t in stale) {
+        try {
+          await stream.removeTrack(t);
+        } catch (e) {
+          _log('[SFU] removeTrack(stale video) failed: $e');
+        }
+      }
+      if (stale.isNotEmpty) {
+        _log('[SFU] swept ${stale.length} stale video track(s) from '
+            'stream $remoteSocketId before adding fresh track');
+      }
+    }
+
     try {
       await stream.addTrack(track);
     } catch (e) {
