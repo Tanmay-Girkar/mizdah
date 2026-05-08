@@ -421,12 +421,32 @@ class SFUService {
     required bool isScreen,
   }) {
     try {
+      // appData.socketId — convention parity with the deployed web
+      // client. Web sends its MEDIA socket id (the /media-fresh
+      // session id) here, NOT its signaling socket id, because web's
+      // own grid is keyed by media sid (every consumer it creates
+      // for a peer producer also uses the producer's media sid as
+      // the key).
+      //
+      // Mobile previously sent `signalingSocketId()` — that's why
+      // web couldn't find mobile's producer in its grid: web looked
+      // up by media sid, mobile sent signaling sid, no match, the
+      // tile silently stayed empty even though mobile's video
+      // producer was healthy on the SFU. The user's "my video not
+      // displaying user side" symptom was this convention drift.
+      //
+      // We additionally include `signalingSocketId` and `name` as
+      // extra fields so any peer that DOES key by signaling sid can
+      // still correlate. Web will ignore the extras; mobile uses
+      // them on the receive side via the cross-channel-sid linker.
+      final mediaSid = _socket.id ?? '';
       _sendTransport!.produce(
         track: track,
         stream: stream,
         source: track.kind == 'audio' ? 'mic' : (isScreen ? 'screen' : 'webcam'),
         appData: <String, dynamic>{
-          'socketId': signalingSocketId(),
+          'socketId': mediaSid,
+          'signalingSocketId': signalingSocketId(),
           'name': _userName(),
           'isScreen': isScreen,
         },

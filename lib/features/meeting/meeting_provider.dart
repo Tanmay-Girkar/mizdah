@@ -364,7 +364,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v11 2026-05-08 (heavy-diag)';
+  static const String _kBuildStamp = 'sfu-v12 2026-05-08 (mediasid-appdata)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2815,11 +2815,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _log('[SFU] _produceLocalTracksToSfu — '
         'audio=${audio?.id ?? "<none>"} video=${video?.id ?? "<none>"}');
     // [DIAG] Outbound appData visibility — this is exactly what web
-    // peers see when they receive OUR producer. If web doesn't show
-    // mobile's video, check this log line: socketId must be a real
-    // signaling sid (not empty) and name must be the local user.
+    // peers see when they receive OUR producer. We now mirror web's
+    // own convention: socketId is our MEDIA-socket sid (matches what
+    // web sends in their producers, so peers' grid lookups work).
+    // The signaling sid + name go alongside as extras for receive-
+    // side cross-channel correlation.
     _log('[DIAG-PRODUCE] outbound appData = '
-        '{socketId: "${_socket?.id ?? ""}", '
+        '{socketId: "${_mediaSocket?.id ?? ""}" (mediaSid), '
+        'signalingSocketId: "${_socket?.id ?? ""}", '
         'name: "${_userName ?? ""}", isScreen: false}');
     _log('[DIAG-PRODUCE] outbound tracks: '
         'audio.enabled=${audio?.enabled} audio.muted=${audio?.muted} '
