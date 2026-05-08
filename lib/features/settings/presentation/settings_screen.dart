@@ -1,11 +1,25 @@
+// ════════════════════════════════════════════════════════════════════
+//  Settings — premium redesign
+//  ────────────────────────────────────────────────────────────────────
+//  Single-page scroll matching the home/meetings/people aesthetic:
+//    • Profile card (avatar + name + email + plan badge)
+//    • Quick stats grid (meetings hosted, hours)
+//    • Appearance (theme switcher with RadioGroup)
+//    • Account (edit profile, sign out)
+//    • Privacy & Security
+//    • About (privacy policy, terms, version)
+//  Replaces the legacy 4-tab AppBar version. The bottom-nav floats
+//  over this just like every other tab page.
+// ════════════════════════════════════════════════════════════════════
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
 import '../../../core/theme/theme_provider.dart';
-import '../../../core/widgets/glass_card.dart';
-import '../../../core/widgets/mizdah_button.dart';
+import '../../../core/ui/mizdah_design.dart';
 import '../../auth/auth_provider.dart';
-import '../../../data/repositories/settings_repository.dart';
-import '../meeting_layout_provider.dart';
+import '../../home/presentation/home_screen.dart' show callHistoryProvider;
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -14,221 +28,698 @@ class SettingsScreen extends ConsumerStatefulWidget {
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends ConsumerState<SettingsScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _SettingsScreenState extends ConsumerState<SettingsScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _entryCtrl;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _entryCtrl = AnimationController(
+      duration: const Duration(milliseconds: 700),
+      vsync: this,
+    )..forward();
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _entryCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final auth = ref.watch(authProvider);
+    final themeMode = ref.watch(themeProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: const [
-            Tab(text: 'General'),
-            Tab(text: 'Audio'),
-            Tab(text: 'Video'),
-            Tab(text: 'Notifications'),
-          ],
-        ),
-      ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: isDark ? MizdahTheme.darkGradient : null,
-          color: isDark ? null : MizdahTheme.lightBackground,
-        ),
-        child: TabBarView(
-          controller: _tabController,
+    return MizdahTabScaffold(
+      activeIndex: 4,
+      body: SafeArea(
+        bottom: false,
+        child: ListView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 110),
           children: [
-            _GeneralSettings(),
-            _AudioSettings(),
-            _VideoSettings(),
-            _NotificationSettings(),
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.0,
+              child: const MizdahPageHeader(
+                leading: 'Your',
+                accent: 'settings',
+                subtitle: 'Profile · Theme · Privacy',
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // Profile card
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.10,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: _ProfileCard(
+                  name: auth.user?.name ?? 'Guest',
+                  email: auth.user?.email ?? '—',
+                  role: auth.user?.role ?? 'USER',
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // Quick stats
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.16,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18),
+                child: _StatsRow(),
+              ),
+            ),
+            const SizedBox(height: 22),
+
+            // Appearance
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.22,
+              child: _Section(
+                title: 'Appearance',
+                child: _ThemeCard(
+                  current: themeMode,
+                  onChanged: (m) =>
+                      ref.read(themeProvider.notifier).setTheme(m),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            // Account
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.28,
+              child: _Section(
+                title: 'Account',
+                child: MizdahCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      _SettingRow(
+                        icon: Icons.account_circle_rounded,
+                        label: 'Edit profile',
+                        sublabel: 'Name, photo, display preferences',
+                        onTap: () => _comingSoon(context, 'Edit profile'),
+                      ),
+                      const _Divider(),
+                      _SettingRow(
+                        icon: Icons.tune_rounded,
+                        label: 'Meeting preferences',
+                        sublabel:
+                            'Default mic / camera, layout, max tiles',
+                        onTap: () => _comingSoon(
+                            context, 'Meeting preferences'),
+                      ),
+                      const _Divider(),
+                      _SettingRow(
+                        icon: Icons.logout_rounded,
+                        label: 'Sign out',
+                        sublabel: 'End your current session',
+                        destructive: true,
+                        onTap: () => _confirmSignOut(context, ref),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            // Privacy & Security
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.34,
+              child: _Section(
+                title: 'Privacy & Security',
+                child: MizdahCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      _SettingRow(
+                        icon: Icons.shield_outlined,
+                        label: 'Privacy policy',
+                        sublabel: 'How we handle your data',
+                        onTap: () => context.push('/privacy'),
+                      ),
+                      const _Divider(),
+                      _SettingRow(
+                        icon: Icons.flag_outlined,
+                        label: 'Report a problem',
+                        sublabel: 'Tell us what went wrong',
+                        onTap: () => context.push('/report'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            // About
+            MizdahFadeUp(
+              controller: _entryCtrl,
+              delay: 0.40,
+              child: _Section(
+                title: 'About',
+                child: MizdahCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      _SettingRow(
+                        icon: Icons.info_outline_rounded,
+                        label: 'About Mizdah',
+                        sublabel: 'Version 1.0 · Build 2026.05',
+                        onTap: () {},
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 22),
+            Center(
+              child: Text(
+                'Made with care · Mizdah',
+                style: TextStyle(
+                  color: MizdahTokens.muted.withValues(alpha: 0.8),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+
+  static void _comingSoon(BuildContext context, String label) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('$label · coming soon'),
+      ),
+    );
+  }
+
+  static Future<void> _confirmSignOut(
+      BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22)),
+        title: const Text('Sign out?'),
+        content: const Text(
+          'You\'ll need to sign in again to start or join meetings.',
+          style: TextStyle(color: MizdahTokens.muted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: MizdahTokens.muted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sign out',
+                style: TextStyle(color: Color(0xFFB42318))),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ref.read(authProvider.notifier).logout();
+    if (!context.mounted) return;
+    context.go('/login');
+  }
 }
 
-class _GeneralSettings extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final themeMode = ref.watch(themeProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+// ────────────────────────────────────────────────────────────────────
+//  Profile card — avatar + name + email + plan badge
+// ────────────────────────────────────────────────────────────────────
 
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        _ProfileSection(),
-        const SizedBox(height: 32),
-        Text(
-          'Appearance', 
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)
-        ),
-        const SizedBox(height: 16),
-        GlassCard(
-          child: RadioGroup<ThemeMode>(
-            groupValue: themeMode,
-            onChanged: (val) {
-              if (val != null) {
-                ref.read(themeProvider.notifier).setTheme(val);
-              }
-            },
-            child: Column(
-              children: [
-                _ThemeTile(title: 'Light', mode: ThemeMode.light, ref: ref, isDark: isDark),
-                Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
-                _ThemeTile(title: 'Dark', mode: ThemeMode.dark, ref: ref, isDark: isDark),
-                Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
-                _ThemeTile(title: 'System Default', mode: ThemeMode.system, ref: ref, isDark: isDark),
-              ],
+class _ProfileCard extends StatelessWidget {
+  final String name;
+  final String email;
+  final String role;
+  const _ProfileCard({
+    required this.name,
+    required this.email,
+    required this.role,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: MizdahTokens.heroGradient,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: MizdahTokens.primary.withValues(alpha: 0.30),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -40,
+            top: -40,
+            child: Container(
+              width: 160,
+              height: 160,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.10),
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 32),
-        Text(
-          'Meeting layout',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-            color: isDark ? Colors.white : Colors.black87,
+          Row(
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  _initials(name),
+                  style: const TextStyle(
+                    color: MizdahTokens.primary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.20),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Text(
+                        role.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _initials(String n) {
+    final parts = n.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Stats row — derived from callHistoryProvider
+// ────────────────────────────────────────────────────────────────────
+
+class _StatsRow extends ConsumerWidget {
+  const _StatsRow();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(callHistoryProvider);
+    final stats = async.when(
+      loading: () => null,
+      error: (_, __) => null,
+      data: (h) {
+        final total = h.length;
+        final mins = h.fold<int>(
+          0,
+          (acc, c) => acc + c.duration.inMinutes,
+        );
+        return (total, mins);
+      },
+    );
+
+    return Row(
+      children: [
+        Expanded(
+          child: _StatCard(
+            label: 'Meetings',
+            value: stats == null ? '—' : '${stats.$1}',
+            accent: const Color(0xFF8B5CF6),
+            icon: Icons.video_call_rounded,
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Default layout for the in-call video grid. Can be changed during a call too.',
-          style: TextStyle(
-            fontSize: 12,
-            color: isDark ? Colors.white54 : Colors.black54,
+        const SizedBox(width: 12),
+        Expanded(
+          child: _StatCard(
+            label: 'Total minutes',
+            value: stats == null ? '—' : '${stats.$2}',
+            accent: const Color(0xFF3B82F6),
+            icon: Icons.timer_outlined,
           ),
         ),
-        const SizedBox(height: 12),
-        _MeetingLayoutPicker(isDark: isDark),
-        const SizedBox(height: 32),
-        _SupportSection(),
       ],
     );
   }
 }
 
-class _MeetingLayoutPicker extends ConsumerWidget {
-  final bool isDark;
-  const _MeetingLayoutPicker({required this.isDark});
+class _StatCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color accent;
+  final IconData icon;
+  const _StatCard({
+    required this.label,
+    required this.value,
+    required this.accent,
+    required this.icon,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final current = ref.watch(meetingLayoutProvider);
-    final notifier = ref.read(meetingLayoutProvider.notifier);
-    final divider =
-        Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12);
-    return GlassCard(
+  Widget build(BuildContext context) {
+    return MizdahCard(
+      padding: const EdgeInsets.all(14),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (var i = 0; i < MeetingLayout.values.length; i++) ...[
-            _LayoutTile(
-              layout: MeetingLayout.values[i],
-              selected: current == MeetingLayout.values[i],
-              isDark: isDark,
-              onTap: () => notifier.set(MeetingLayout.values[i]),
+          Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
             ),
-            if (i != MeetingLayout.values.length - 1) divider,
-          ],
+            child: Icon(icon, color: accent, size: 18),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: const TextStyle(
+              color: MizdahTokens.ink,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(
+              color: MizdahTokens.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _LayoutTile extends StatelessWidget {
-  final MeetingLayout layout;
-  final bool selected;
-  final bool isDark;
-  final VoidCallback onTap;
-  const _LayoutTile({
-    required this.layout,
-    required this.selected,
-    required this.isDark,
-    required this.onTap,
+// ────────────────────────────────────────────────────────────────────
+//  Section wrapper — gradient title + child
+// ────────────────────────────────────────────────────────────────────
+
+class _Section extends StatelessWidget {
+  final String title;
+  final Widget child;
+  const _Section({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 10),
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: MizdahTokens.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.3,
+              ),
+            ),
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Theme card — uses RadioGroup (no deprecated API)
+// ────────────────────────────────────────────────────────────────────
+
+class _ThemeCard extends StatelessWidget {
+  final ThemeMode current;
+  final ValueChanged<ThemeMode> onChanged;
+  const _ThemeCard({required this.current, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return MizdahCard(
+      padding: EdgeInsets.zero,
+      child: RadioGroup<ThemeMode>(
+        groupValue: current,
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
+        child: Column(
+          children: const [
+            _ThemeRow(
+              mode: ThemeMode.light,
+              icon: Icons.light_mode_rounded,
+              label: 'Light',
+              sublabel: 'Bright canvas, vivid colours',
+            ),
+            _Divider(),
+            _ThemeRow(
+              mode: ThemeMode.dark,
+              icon: Icons.dark_mode_rounded,
+              label: 'Dark',
+              sublabel: 'Easy on the eyes after hours',
+            ),
+            _Divider(),
+            _ThemeRow(
+              mode: ThemeMode.system,
+              icon: Icons.brightness_auto_rounded,
+              label: 'System',
+              sublabel: 'Follow your device setting',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ThemeRow extends StatelessWidget {
+  final ThemeMode mode;
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  const _ThemeRow({
+    required this.mode,
+    required this.icon,
+    required this.label,
+    required this.sublabel,
   });
 
   @override
   Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF2FF),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, color: MizdahTokens.primary, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: MizdahTokens.ink,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    sublabel,
+                    style: const TextStyle(
+                      color: MizdahTokens.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Radio<ThemeMode>(
+            value: mode,
+            activeColor: MizdahTokens.primary,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Generic settings row
+// ────────────────────────────────────────────────────────────────────
+
+class _SettingRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  final VoidCallback onTap;
+  final bool destructive;
+  const _SettingRow({
+    required this.icon,
+    required this.label,
+    required this.sublabel,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accent =
+        destructive ? const Color(0xFFB42318) : MizdahTokens.primary;
+    final accentBg =
+        destructive ? const Color(0xFFFEE4E2) : const Color(0xFFEEF2FF);
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
             Container(
-              width: 40,
-              height: 40,
+              width: 38,
+              height: 38,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: (selected
-                        ? const Color(0xFF1A73E8)
-                        : Colors.white)
-                    .withValues(alpha: selected ? 0.18 : (isDark ? 0.06 : 0.0)),
-                border: Border.all(
-                  color: isDark ? Colors.white12 : Colors.black12,
-                ),
-                borderRadius: BorderRadius.circular(10),
+                color: accentBg,
+                borderRadius: BorderRadius.circular(11),
               ),
-              child: Icon(
-                layout.icon,
-                color: selected
-                    ? const Color(0xFF1A73E8)
-                    : (isDark ? Colors.white70 : Colors.black54),
-                size: 20,
-              ),
+              child: Icon(icon, color: accent, size: 18),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    layout.label,
+                    label,
                     style: TextStyle(
-                      color: isDark ? Colors.white : Colors.black87,
-                      fontWeight: FontWeight.w600,
+                      color: destructive
+                          ? const Color(0xFFB42318)
+                          : MizdahTokens.ink,
                       fontSize: 14,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    layout.description,
-                    style: TextStyle(
-                      color: isDark ? Colors.white54 : Colors.black54,
+                    sublabel,
+                    style: const TextStyle(
+                      color: MizdahTokens.muted,
                       fontSize: 12,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
             ),
-            Icon(
-              selected
-                  ? Icons.radio_button_checked_rounded
-                  : Icons.radio_button_unchecked_rounded,
-              color: selected
-                  ? const Color(0xFF1A73E8)
-                  : (isDark ? Colors.white24 : Colors.black26),
-            ),
+            Icon(Icons.chevron_right_rounded,
+                color: MizdahTokens.muted, size: 20),
           ],
         ),
       ),
@@ -236,300 +727,12 @@ class _LayoutTile extends StatelessWidget {
   }
 }
 
-class _ProfileSection extends ConsumerStatefulWidget {
-  @override
-  ConsumerState<_ProfileSection> createState() => _ProfileSectionState();
-}
-
-class _ProfileSectionState extends ConsumerState<_ProfileSection> {
-  final _nameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isSaving = false;
+class _Divider extends StatelessWidget {
+  const _Divider();
 
   @override
-  void initState() {
-    super.initState();
-    final user = ref.read(authProvider).user;
-    if (user != null) {
-      _nameController.text = user.name;
-    }
-  }
-
-  Future<void> _saveProfile() async {
-    setState(() => _isSaving = true);
-    try {
-      final newName = _nameController.text.trim();
-      final newPass = _passwordController.text.trim();
-      await ref.read(authProvider.notifier).updateProfile(
-        name: newName.isNotEmpty ? newName : null,
-        password: newPass.isNotEmpty ? newPass : null,
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Container(height: 1, color: MizdahTokens.cardBorder),
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated system-wide!')));
-        _passwordController.clear();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Profile', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        GlassCard(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              TextField(
-                controller: _nameController,
-                decoration: InputDecoration(
-                  labelText: 'Display Name',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'New Password (Optional)',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _isSaving
-                ? const Center(child: CircularProgressIndicator())
-                : MizdahButton(
-                    label: 'Save Profile',
-                    isFullWidth: true,
-                    onTap: _saveProfile,
-                  ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SupportSection extends ConsumerWidget {
-  Future<void> _sendFeedback(BuildContext context, WidgetRef ref) async {
-    // Basic mockup logic for the modal
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        final feedbackController = TextEditingController();
-        return AlertDialog(
-          title: const Text('Send Feedback'),
-          content: TextField(
-            controller: feedbackController,
-            maxLines: 4,
-            decoration: const InputDecoration(hintText: 'What can we improve?'),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                final text = feedbackController.text.trim();
-                if (text.isEmpty) return;
-                Navigator.pop(ctx);
-                try {
-                  final user = ref.read(authProvider).user;
-                  await ref.read(settingsRepositoryProvider).sendFeedback(
-                    category: 'General',
-                    description: text,
-                    userEmail: user?.email ?? 'anonymous',
-                  );
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Feedback sent!')));
-                  }
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-                  }
-                }
-              },
-              child: const Text('Send'),
-            )
-          ],
-        );
-      }
-    );
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Help & Support', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        GlassCard(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.feedback_outlined, color: MizdahTheme.primaryBlue),
-                title: Text('Send Feedback', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                onTap: () => _sendFeedback(context, ref),
-              ),
-              Divider(height: 1, color: isDark ? Colors.white10 : Colors.black12),
-              ListTile(
-                leading: const Icon(Icons.support_agent_outlined, color: MizdahTheme.primaryBlue),
-                title: Text('Contact Support', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Support contact API triggered. (UI coming soon)')));
-                },
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ThemeTile extends StatelessWidget {
-  final String title;
-  final ThemeMode mode;
-  final WidgetRef ref;
-  final bool isDark;
-
-  const _ThemeTile({
-    required this.title,
-    required this.mode,
-    required this.ref,
-    this.isDark = true,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      title: Text(title, style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-      leading: Radio<ThemeMode>(
-        value: mode,
-        activeColor: MizdahTheme.primaryBlue,
-      ),
-      onTap: () => ref.read(themeProvider.notifier).setTheme(mode),
-    );
-  }
-}
-
-class _AudioSettings extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('Microphone', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        GlassCard(
-          child: ListTile(
-            title: Text('Built-in Microphone', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-            trailing: const Icon(Icons.check, color: MizdahTheme.primaryBlue),
-            onTap: () {},
-          ),
-        ),
-        const SizedBox(height: 24),
-        Text('Speakers', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        GlassCard(
-          child: ListTile(
-            title: Text('Built-in Output', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-            trailing: const Icon(Icons.volume_up, color: MizdahTheme.primaryBlue),
-            onTap: () {},
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _VideoSettings extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('Camera', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        AspectRatio(
-          aspectRatio: 16 / 9,
-          child: GlassCard(
-            padding: EdgeInsets.zero,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.network(
-                    'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&h=225&fit=crop',
-                    fit: BoxFit.cover,
-                  ),
-                  const Center(child: Icon(Icons.videocam_rounded, color: Colors.white, size: 48)),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        GlassCard(
-          child: ListTile(
-            title: Text('FaceTime HD Camera', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-            trailing: const Icon(Icons.check, color: MizdahTheme.primaryBlue),
-            onTap: () {},
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _NotificationSettings extends StatefulWidget {
-  @override
-  State<_NotificationSettings> createState() => _NotificationSettingsState();
-}
-
-class _NotificationSettingsState extends State<_NotificationSettings> {
-  bool _pushEnabled = true;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('Notifications', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-        const SizedBox(height: 16),
-        GlassCard(
-          child: ListTile(
-            title: Text('Push Notifications', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-            subtitle: Text('Get notified about upcoming meetings', style: TextStyle(color: isDark ? Colors.white70 : Colors.black54)),
-            trailing: Switch.adaptive(
-              value: _pushEnabled,
-              activeThumbColor: Colors.white,
-              activeTrackColor: MizdahTheme.primaryBlue,
-              onChanged: (v) => setState(() => _pushEnabled = v),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 }

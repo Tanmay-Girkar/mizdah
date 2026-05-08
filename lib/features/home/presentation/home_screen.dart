@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../core/services/google_calendar_service.dart';
+import '../../../core/ui/mizdah_design.dart' as md;
 import '../../../core/utils/meeting_utils.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../../data/models/models.dart';
@@ -169,12 +170,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             ),
           ),
 
-          // Floating bottom navigation
+          // Floating bottom navigation — shared 5-tab nav (Home /
+          // Meetings / Call / People / Settings) so every tab page
+          // looks identical. activeIndex=0 because this IS the home.
           Positioned(
             left: 12,
             right: 12,
             bottom: MediaQuery.of(context).padding.bottom + 10,
-            child: const _FloatingNav(),
+            child: const md.MizdahFloatingNav(activeIndex: 0),
           ),
         ],
       ),

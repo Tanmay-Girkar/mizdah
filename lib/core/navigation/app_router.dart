@@ -3,6 +3,9 @@ import '../../features/home/presentation/home_screen.dart';
 import '../../features/home/presentation/splash_screen.dart';
 import '../../features/call/presentation/start_call_screen.dart';
 import '../../features/call/presentation/schedule_screen.dart';
+import '../../features/call/presentation/call_hub_screen.dart';
+import '../../features/meetings/presentation/meetings_screen.dart';
+import '../../features/people/presentation/people_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/settings/presentation/privacy_screen.dart';
 import '../../features/settings/presentation/report_screen.dart';
@@ -30,6 +33,10 @@ final appRouter = GoRouter(
     GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
     GoRoute(path: '/start-call', builder: (context, state) => const StartCallScreen()),
     GoRoute(path: '/schedule', builder: (context, state) => const ScheduleScreen()),
+    // New premium tabs reachable from the floating bottom nav.
+    GoRoute(path: '/meetings', builder: (context, state) => const MeetingsScreen()),
+    GoRoute(path: '/call-hub', builder: (context, state) => const CallHubScreen()),
+    GoRoute(path: '/people', builder: (context, state) => const PeopleScreen()),
     GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
     GoRoute(
       path: '/meeting-settings/:id', 
