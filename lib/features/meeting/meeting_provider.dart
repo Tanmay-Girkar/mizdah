@@ -364,7 +364,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// the device log which build their APK is from. Update this when
   /// shipping a new feature so a screenshot of "[BUILD] sfu-v2"
   /// confirms the bug-fix code is actually running.
-  static const String _kBuildStamp = 'sfu-v12 2026-05-08 (mediasid-appdata)';
+  static const String _kBuildStamp = 'sfu-v13 2026-05-08 (verify-nsp)';
 
   void joinMeeting(String meetingId, String userId, String name, String jwtToken,
       {bool video = true, bool audio = true, bool isHostHint = false}) async {
@@ -2673,10 +2673,28 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     };
     final mediaSocket = io.io('${ApiConfig.signalingUrl}/media', mediaOpts);
     _mediaSocket = mediaSocket;
+    _log('[SFU] media socket built — '
+        'requested namespace=/media, engine.io path=${ApiConfig.mediaPath}, '
+        'requested nsp at construct time=${mediaSocket.nsp}');
 
     final connectedCompleter = Completer<bool>();
     mediaSocket.onConnect((_) async {
-      _log('[SFU] media socket CONNECTED (sid=${mediaSocket.id})');
+      // [DIAG] Backend dev reported Flutter was hitting `/` (root)
+      // namespace instead of `/media` — every newProducer event we
+      // emit was scoped to `/` so web peers (subscribed to `/media`)
+      // never received it. Log the actual nsp at connect-time so we
+      // can verify whether socket_io_client_dart 3.0.2 is parsing
+      // the URL path as the namespace correctly. If this prints
+      // `nsp=/` we have a library-level bug; if it prints
+      // `nsp=/media` then the issue lives elsewhere.
+      _log('[SFU] media socket CONNECTED '
+          '(sid=${mediaSocket.id}, nsp=${mediaSocket.nsp})');
+      if (mediaSocket.nsp != '/media') {
+        _log('[SFU] ⚠️ NAMESPACE MISMATCH — connected to '
+            '${mediaSocket.nsp}, but server expects /media. '
+            'newProducer broadcasts will not reach /media-scoped '
+            'web peers. socket_io_client URL parsing failed.');
+      }
       if (!connectedCompleter.isCompleted) {
         // First connect — bootstrap proceeds below.
         connectedCompleter.complete(true);
