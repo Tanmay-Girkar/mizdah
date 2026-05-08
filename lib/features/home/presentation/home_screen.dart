@@ -367,9 +367,9 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 6, 16, 10),
+      padding: const EdgeInsets.fromLTRB(20, 10, 12, 14),
       child: SizedBox(
-        height: 168,
+        height: 220,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -382,12 +382,12 @@ class _Hero extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: const [
                     _HeroHeading(),
-                    SizedBox(height: 8),
+                    SizedBox(height: 12),
                     Text(
                       'Collaborate · Meet · Achieve',
                       style: TextStyle(
                         color: _Tokens.muted,
-                        fontSize: 12.5,
+                        fontSize: 15,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 0.2,
                       ),
@@ -396,10 +396,10 @@ class _Hero extends StatelessWidget {
                 ),
               ),
             ),
-            // Glass blob illustration
+            // Hero illustration — sized up for more presence
             SizedBox(
-              width: 130,
-              height: 168,
+              width: 170,
+              height: 220,
               child: _BlobIllustration(floatCtrl: floatCtrl),
             ),
           ],
@@ -421,10 +421,10 @@ class _HeroHeading extends StatelessWidget {
       text: TextSpan(
         style: const TextStyle(
           color: _Tokens.ink,
-          fontSize: 24,
+          fontSize: 30,
           fontWeight: FontWeight.w800,
           height: 1.15,
-          letterSpacing: -0.6,
+          letterSpacing: -0.8,
         ),
         children: [
           const TextSpan(text: 'Ready to\nconnect '),
@@ -438,10 +438,10 @@ class _HeroHeading extends StatelessWidget {
                 'today',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 24,
+                  fontSize: 30,
                   fontWeight: FontWeight.w800,
                   height: 1.15,
-                  letterSpacing: -0.6,
+                  letterSpacing: -0.8,
                 ),
               ),
             ),
