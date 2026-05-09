@@ -5,20 +5,46 @@ class User {
   final String email;
   final String name;
   final String role;
+  /// HTTPS URL to the user's profile photo, or null when none is set.
+  /// Backend field is `avatar_url`; verified live in the signup
+  /// response on the dev server (2026-05-09).
+  final String? avatarUrl;
 
   User({
     required this.id,
     required this.email,
     required this.name,
     this.role = 'USER',
+    this.avatarUrl,
   });
 
+  User copyWith({
+    String? id,
+    String? email,
+    String? name,
+    String? role,
+    String? avatarUrl,
+    bool clearAvatar = false,
+  }) {
+    return User(
+      id: id ?? this.id,
+      email: email ?? this.email,
+      name: name ?? this.name,
+      role: role ?? this.role,
+      avatarUrl: clearAvatar ? null : (avatarUrl ?? this.avatarUrl),
+    );
+  }
+
   factory User.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = (json['avatar_url'] ?? json['avatarUrl']) as String?;
     return User(
       id: json['id'] ?? '',
       email: json['email'] ?? '',
       name: json['name'] ?? '',
       role: json['role'] ?? 'USER',
+      avatarUrl: (rawAvatar != null && rawAvatar.trim().isNotEmpty)
+          ? rawAvatar
+          : null,
     );
   }
 
@@ -28,6 +54,7 @@ class User {
       'email': email,
       'name': name,
       'role': role,
+      if (avatarUrl != null) 'avatar_url': avatarUrl,
     };
   }
 }

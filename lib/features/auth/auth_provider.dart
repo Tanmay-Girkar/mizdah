@@ -151,9 +151,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(status: AuthStatus.authenticated, token: token);
   }
 
-  Future<void> updateProfile({String? name, String? password}) async {
+  Future<void> updateProfile({
+    String? name,
+    String? password,
+    String? avatarUrl,
+  }) async {
     try {
-      final updatedUser = await _authRepository.updateProfile(name: name, password: password);
+      final updatedUser = await _authRepository.updateProfile(
+        name: name,
+        password: password,
+        avatarUrl: avatarUrl,
+      );
       state = state.copyWith(user: updatedUser);
     } catch (e) {
       rethrow;

@@ -314,31 +314,119 @@ class _Header extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 6),
-            // Avatar — first letter of user name, gradient bg
+            // Avatar — user photo if set, else gradient initial.
             GestureDetector(
               onTap: () => Scaffold.of(context).openDrawer(),
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  gradient: _Tokens.heroGradient,
-                  shape: BoxShape.circle,
-                  boxShadow: md.MizdahTokens.shadow(context, elevation: 0.6),
-                ),
-                child: Center(
-                  child: Text(
-                    initial,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
+              child: _HeaderAvatar(
+                avatarUrl: user?.avatarUrl,
+                initial: initial,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Header avatar — renders the network photo when the user has set
+/// one, falling back to a gradient circle with their initial. Sized
+/// 32×32 to fit alongside the wordmark.
+class _HeaderAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String initial;
+  const _HeaderAvatar({required this.avatarUrl, required this.initial});
+
+  bool get _hasUrl => avatarUrl != null && avatarUrl!.trim().isNotEmpty;
+
+  Widget _fallback(BuildContext context) => Container(
+        width: 32,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: const BoxDecoration(
+          gradient: _Tokens.heroGradient,
+          shape: BoxShape.circle,
+        ),
+        child: Text(
+          initial,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final shadow = md.MizdahTokens.shadow(context, elevation: 0.6);
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: shadow,
+      ),
+      child: ClipOval(
+        child: _hasUrl
+            ? Image.network(
+                avatarUrl!,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                loadingBuilder: (ctx, child, progress) =>
+                    progress == null ? child : _fallback(context),
+                errorBuilder: (_, __, ___) => _fallback(context),
+              )
+            : _fallback(context),
+      ),
+    );
+  }
+}
+
+/// Drawer avatar — same idea as `_HeaderAvatar` but sized for the
+/// drawer header (56×56). The fallback uses a translucent white
+/// circle so it sits on top of the gradient drawer banner.
+class _DrawerAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String initial;
+  const _DrawerAvatar({required this.avatarUrl, required this.initial});
+
+  bool get _hasUrl => avatarUrl != null && avatarUrl!.trim().isNotEmpty;
+
+  Widget _fallback() => Container(
+        width: 56,
+        height: 56,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.2),
+          shape: BoxShape.circle,
+        ),
+        child: Text(
+          initial,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 56,
+      height: 56,
+      child: ClipOval(
+        child: _hasUrl
+            ? Image.network(
+                avatarUrl!,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                loadingBuilder: (ctx, child, progress) =>
+                    progress == null ? child : _fallback(),
+                errorBuilder: (_, __, ___) => _fallback(),
+              )
+            : _fallback(),
       ),
     );
   }
@@ -2315,25 +2403,11 @@ class MizdahDrawer extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(
-                      (user?.name.isNotEmpty == true)
-                          ? user!.name[0].toUpperCase()
-                          : 'A',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
+                _DrawerAvatar(
+                  avatarUrl: user?.avatarUrl,
+                  initial: (user?.name.isNotEmpty == true)
+                      ? user!.name[0].toUpperCase()
+                      : 'A',
                 ),
                 const SizedBox(height: 12),
                 Text(user?.name ?? 'Guest User',

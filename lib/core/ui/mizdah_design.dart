@@ -1160,7 +1160,15 @@ class MizdahEmptyState extends StatelessWidget {
 class MizdahAvatar extends StatelessWidget {
   final String name;
   final double size;
-  const MizdahAvatar({super.key, required this.name, this.size = 44});
+  /// HTTPS URL to the user's profile photo. When null/empty, the
+  /// widget falls back to coloured initials.
+  final String? avatarUrl;
+  const MizdahAvatar({
+    super.key,
+    required this.name,
+    this.size = 44,
+    this.avatarUrl,
+  });
 
   String get _initials {
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -1177,10 +1185,12 @@ class MizdahAvatar extends StatelessWidget {
     return MizdahTokens.rowColors[seed % MizdahTokens.rowColors.length];
   }
 
+  bool get _hasUrl => avatarUrl != null && avatarUrl!.trim().isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
     final p = _palette;
-    return Container(
+    final fallback = Container(
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -1206,6 +1216,26 @@ class MizdahAvatar extends StatelessWidget {
           fontSize: size * 0.38,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.3,
+        ),
+      ),
+    );
+
+    if (!_hasUrl) return fallback;
+    // Render the network avatar; `errorBuilder` ensures the initials
+    // still appear if the image 404s or the network is offline.
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Image.network(
+          avatarUrl!,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          loadingBuilder: (ctx, child, progress) {
+            if (progress == null) return child;
+            return fallback;
+          },
+          errorBuilder: (ctx, error, stack) => fallback,
         ),
       ),
     );

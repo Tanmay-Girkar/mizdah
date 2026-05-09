@@ -78,16 +78,52 @@ class AuthRepository {
     return null;
   }
 
-  Future<User> updateProfile({String? name, String? password}) async {
+  Future<User> updateProfile({
+    String? name,
+    String? password,
+    String? avatarUrl,
+  }) async {
     try {
       final response = await _apiClient.post(ApiConfig.authUpdate, data: {
         if (name != null) 'name': name,
         if (password != null) 'password': password,
+        // Backend exposes `avatar_url` on the user object (verified
+        // live in /signup response 2026-05-09). Whether
+        // /api/auth/update accepts an `avatar_url` field is documented
+        // as the one outstanding backend confirmation in
+        // docs/PROFILE_API.md — if the server ignores this key the
+        // name/password parts of the patch still go through.
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
       });
       return User.fromJson(response.data['user']);
     } catch (e) {
       rethrow;
     }
+  }
+
+  /// Upload an image (or any file) via the gateway's file service.
+  /// Returns the public `fileUrl` on success — that URL can be passed
+  /// to `updateProfile(avatarUrl: ...)` to set the user's photo.
+  ///
+  /// Documented at `MOBILE_API_DOCS.md` §8.1 (`POST /api/files/upload`,
+  /// multipart/form-data, field name `file`).
+  Future<String> uploadFile({
+    required String filePath,
+    String? fileName,
+  }) async {
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+    });
+    final response = await _apiClient.postMultipart(
+      ApiConfig.fileUpload,
+      form,
+    );
+    final data = response.data;
+    if (data is Map) {
+      final url = data['fileUrl'] ?? data['url'] ?? data['file_url'];
+      if (url is String && url.isNotEmpty) return url;
+    }
+    throw Exception('Upload succeeded but server returned no fileUrl');
   }
 
   /// Search the directory for users matching `q` (name or email

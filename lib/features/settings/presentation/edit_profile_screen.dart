@@ -1,22 +1,28 @@
 // ════════════════════════════════════════════════════════════════════
 //  Edit profile — premium account editor
 //  ────────────────────────────────────────────────────────────────────
-//  Reachable from Settings → Account → Edit profile. Lets the user
-//  change their display name. Photo upload + password change are
-//  surfaced as rows but trigger "coming soon" snackbars — they need
-//  separate UX flows that aren't in scope for v1.
+//  Reachable from Settings → Account → Edit profile.
 //
-//  Name update calls `AuthRepository.updateProfile(name: ...)` which
-//  already exists in the codebase, so the change persists to the
-//  backend AND updates the local `authProvider` so the avatar /
-//  drawer / settings header all reflect the new name immediately.
+//  Wired up:
+//    • Display name → POST /api/auth/update {name}
+//    • Avatar      → POST /api/files/upload (multipart)
+//                    then POST /api/auth/update {avatar_url}
+//    • Password    → POST /api/auth/update {password} via dialog
+//
+//  Name + password endpoints are documented in MOBILE_API_DOCS.md §1.4
+//  and verified against the dev backend. Whether `/api/auth/update`
+//  accepts `avatar_url` is the one outstanding backend confirmation —
+//  flagged in docs/PROFILE_API.md.
 // ════════════════════════════════════════════════════════════════════
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/ui/mizdah_design.dart';
+import '../../../data/repositories/auth_repository.dart';
 import '../../auth/auth_provider.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
@@ -32,6 +38,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
   late final AnimationController _entryCtrl;
   late final TextEditingController _nameCtrl;
   bool _saving = false;
+  bool _uploadingAvatar = false;
   String? _error;
 
   @override
@@ -168,7 +175,9 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                         child: Center(
                           child: _AvatarEditor(
                             name: user?.name ?? 'User',
-                            onTap: () => _comingSoon('Photo upload'),
+                            avatarUrl: user?.avatarUrl,
+                            uploading: _uploadingAvatar,
+                            onTap: _pickAndUploadAvatar,
                           ),
                         ),
                       ),
@@ -253,8 +262,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                                   label: 'Change password',
                                   sublabel:
                                       'Set a new password for your account',
-                                  onTap: () =>
-                                      _comingSoon('Password change'),
+                                  onTap: _changePassword,
                                 ),
                               ),
                             ],
@@ -326,13 +334,134 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
     );
   }
 
-  void _comingSoon(String label) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text('$label · coming soon'),
+  /// Pick an image, upload to /api/files/upload, then patch the
+  /// user's avatar_url via /api/auth/update. The local user state
+  /// updates immediately so the avatar in the drawer + settings
+  /// header refreshes without a re-login.
+  Future<void> _pickAndUploadAvatar() async {
+    if (_uploadingAvatar) return;
+    // Capture before any await — context is no longer reliable across
+    // the async gap that the file picker introduces.
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      withData: false,
+    );
+    final file = picked?.files.firstOrNull;
+    if (file == null || file.path == null) return;
+
+    setState(() => _uploadingAvatar = true);
+    try {
+      final repo = AuthRepository();
+      final url = await repo.uploadFile(
+        filePath: file.path!,
+        fileName: file.name,
+      );
+      await ref
+          .read(authProvider.notifier)
+          .updateProfile(avatarUrl: url);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: MizdahTokens.surface(context),
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded,
+                  color: Color(0xFF10B981), size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Profile photo updated',
+                style: TextStyle(
+                  color: MizdahTokens.inkOf(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFB42318),
+          content: Text(
+            'Could not upload photo: $e',
+            style: const TextStyle(color: Colors.white),
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
+  }
+
+  /// Modal sheet: enter a new password (twice). On submit, calls
+  /// /api/auth/update with the password field.
+  Future<void> _changePassword() async {
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _PasswordSheet(
+        newCtrl: newCtrl,
+        confirmCtrl: confirmCtrl,
       ),
     );
+    if (ok != true) {
+      newCtrl.dispose();
+      confirmCtrl.dispose();
+      return;
+    }
+    final pw = newCtrl.text;
+    newCtrl.dispose();
+    confirmCtrl.dispose();
+    try {
+      await ref
+          .read(authProvider.notifier)
+          .updateProfile(password: pw);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: MizdahTokens.surface(context),
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded,
+                  color: Color(0xFF10B981), size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Password updated',
+                style: TextStyle(
+                  color: MizdahTokens.inkOf(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFB42318),
+          content: Text(
+            'Could not update password',
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
   }
 
   String _shortId(String id) {
@@ -345,13 +474,39 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
 
 class _AvatarEditor extends StatelessWidget {
   final String name;
+  final String? avatarUrl;
+  final bool uploading;
   final VoidCallback onTap;
-  const _AvatarEditor({required this.name, required this.onTap});
+  const _AvatarEditor({
+    required this.name,
+    required this.avatarUrl,
+    required this.uploading,
+    required this.onTap,
+  });
 
   String get _initial => name.isEmpty ? '?' : name[0].toUpperCase();
+  bool get _hasUrl => avatarUrl != null && avatarUrl!.trim().isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
+    final fallback = Container(
+      width: 124,
+      height: 124,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        gradient: MizdahTokens.heroGradient,
+        shape: BoxShape.circle,
+      ),
+      child: Text(
+        _initial,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 48,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.5,
+        ),
+      ),
+    );
     return SizedBox(
       width: 124,
       height: 124,
@@ -360,9 +515,7 @@ class _AvatarEditor extends StatelessWidget {
           Container(
             width: 124,
             height: 124,
-            alignment: Alignment.center,
             decoration: BoxDecoration(
-              gradient: MizdahTokens.heroGradient,
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
@@ -376,16 +529,38 @@ class _AvatarEditor extends StatelessWidget {
                 width: 4,
               ),
             ),
-            child: Text(
-              _initial,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 48,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
-              ),
+            child: ClipOval(
+              child: _hasUrl
+                  ? Image.network(
+                      avatarUrl!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      loadingBuilder: (ctx, child, progress) {
+                        if (progress == null) return child;
+                        return fallback;
+                      },
+                      errorBuilder: (ctx, error, stack) => fallback,
+                    )
+                  : fallback,
             ),
           ),
+          if (uploading)
+            Positioned.fill(
+              child: ClipOval(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  alignment: Alignment.center,
+                  child: const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.6,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           Positioned(
             right: 2,
             bottom: 2,
@@ -414,6 +589,261 @@ class _AvatarEditor extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Password change sheet — used by `_changePassword`.
+// ────────────────────────────────────────────────────────────────────
+
+class _PasswordSheet extends StatefulWidget {
+  final TextEditingController newCtrl;
+  final TextEditingController confirmCtrl;
+  const _PasswordSheet({required this.newCtrl, required this.confirmCtrl});
+
+  @override
+  State<_PasswordSheet> createState() => _PasswordSheetState();
+}
+
+class _PasswordSheetState extends State<_PasswordSheet> {
+  String? _error;
+  bool _obscure = true;
+
+  bool get _valid {
+    final n = widget.newCtrl.text;
+    final c = widget.confirmCtrl.text;
+    return n.length >= 5 && n == c;
+  }
+
+  void _submit() {
+    final n = widget.newCtrl.text;
+    final c = widget.confirmCtrl.text;
+    if (n.length < 5) {
+      setState(() => _error = 'Password must be at least 5 characters');
+      return;
+    }
+    if (n != c) {
+      setState(() => _error = 'Passwords do not match');
+      return;
+    }
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        decoration: BoxDecoration(
+          color: MizdahTokens.surface(context),
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(28),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: MizdahTokens.border(context),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Change password',
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'At least 5 characters. Use a unique one.',
+                  style: TextStyle(
+                    color: MizdahTokens.mutedOf(context),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _PwField(
+                  controller: widget.newCtrl,
+                  hint: 'New password',
+                  obscure: _obscure,
+                  onChanged: (_) {
+                    if (_error != null) setState(() => _error = null);
+                  },
+                  trailing: IconButton(
+                    onPressed: () =>
+                        setState(() => _obscure = !_obscure),
+                    icon: Icon(
+                      _obscure
+                          ? Icons.visibility_rounded
+                          : Icons.visibility_off_rounded,
+                      color: MizdahTokens.mutedOf(context),
+                      size: 18,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _PwField(
+                  controller: widget.confirmCtrl,
+                  hint: 'Confirm new password',
+                  obscure: _obscure,
+                  onChanged: (_) {
+                    if (_error != null) setState(() => _error = null);
+                  },
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.error_outline_rounded,
+                          color: Color(0xFFB42318), size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        _error!,
+                        style: const TextStyle(
+                          color: Color(0xFFB42318),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).pop(false),
+                        child: Container(
+                          height: 50,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: MizdahTokens.iconTileBg(context),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: MizdahTokens.inkOf(context),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: MizdahPressScale(
+                        scaleTo: 0.97,
+                        onTap: _valid ? _submit : () {},
+                        child: Opacity(
+                          opacity: _valid ? 1 : 0.45,
+                          child: Container(
+                            height: 50,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              gradient: MizdahTokens.heroGradient,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Text(
+                              'Update password',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PwField extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final bool obscure;
+  final ValueChanged<String> onChanged;
+  final Widget? trailing;
+  const _PwField({
+    required this.controller,
+    required this.hint,
+    required this.obscure,
+    required this.onChanged,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: MizdahTokens.bg(context),
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: MizdahTokens.border(context), width: 1),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.lock_rounded,
+              color: MizdahTokens.mutedOf(context), size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              obscureText: obscure,
+              autocorrect: false,
+              enableSuggestions: false,
+              onChanged: onChanged,
+              style: TextStyle(
+                color: MizdahTokens.inkOf(context),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              decoration: InputDecoration(
+                isCollapsed: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(vertical: 16),
+                border: InputBorder.none,
+                hintText: hint,
+                hintStyle: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+          if (trailing != null) trailing!,
         ],
       ),
     );
@@ -678,14 +1108,15 @@ class _CopyChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return MizdahPressScale(
       scaleTo: 0.92,
-      onTap: () {
-        // Clipboard.setData would normally go here, but to keep
-        // imports lean we just show a snackbar acknowledgement.
-        // The actual copy can be wired in a follow-up if desired.
+      onTap: () async {
+        if (text.isEmpty) return;
+        await Clipboard.setData(ClipboardData(text: text));
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             behavior: SnackBarBehavior.floating,
-            content: Text('Copy from your account email link'),
+            duration: Duration(seconds: 2),
+            content: Text('Account ID copied'),
           ),
         );
       },

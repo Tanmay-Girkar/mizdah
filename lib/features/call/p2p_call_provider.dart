@@ -158,7 +158,12 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     _logPeerUserId = call.fromUserId;
     _logPeerName = call.fromName;
     _logPeerEmail = null;
-    _logWithVideo = true;
+    // The signaling payload doesn't carry the caller's media intent
+    // yet, so default to audio. If the user accepts with video, the
+    // value is overwritten in `acceptIncoming` before the entry is
+    // logged. (TODO: include withVideo in the incomingCall socket
+    // payload so the ringing UI can show the right icon too.)
+    _logWithVideo = false;
     _logCallId = call.callId;
   }
 
@@ -371,6 +376,9 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     final incoming = state.incoming;
     if (incoming == null) return;
     _service.acceptCall(call: incoming, withVideo: withVideo);
+    // Now we know the real media kind for the call log entry that
+    // will be appended on `onCallEnded`.
+    _logWithVideo = withVideo;
     state = state.copyWith(
       phase: P2PCallPhase.outgoing, // transient — moves to active on media
       withVideo: withVideo,
