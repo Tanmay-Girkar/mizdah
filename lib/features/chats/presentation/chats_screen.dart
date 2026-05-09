@@ -192,10 +192,11 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
                 ),
               ],
             ),
-            // Floating "new chat" button — sits above the bottom nav.
+            // Floating "new chat" button — anchored to the bottom-
+            // right corner, just above the floating nav.
             Positioned(
-              right: 18,
-              bottom: MizdahTokens.navBarBottomInset(context) + 8,
+              right: 12,
+              bottom: MizdahTokens.navBarBottomInset(context) - 4,
               child: _NewChatFab(
                 onTap: () => context.push('/chats/new'),
               ),
