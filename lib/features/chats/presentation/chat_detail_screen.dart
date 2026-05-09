@@ -12,6 +12,7 @@
 //  page comes from `conversationHistoryProvider`. We merge the two
 //  in a local list so the UI doesn't flicker on each ack.
 
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -40,7 +41,52 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   /// per delta so the bubble list is stable.
   final List<ChatMessage> _messages = [];
   bool _hydrated = false;
+  bool _emojiOpen = false;
   ProviderSubscription<AsyncValue<ChatMessage>>? _deltaSub;
+
+  void _toggleEmoji() {
+    if (_emojiOpen) {
+      // Closing the picker → re-focus the input so the keyboard
+      // slides back up.
+      setState(() => _emojiOpen = false);
+      _focusNode.requestFocus();
+    } else {
+      // Opening the picker → drop the soft keyboard first so the
+      // emoji panel takes its place rather than stacking on top.
+      _focusNode.unfocus();
+      setState(() => _emojiOpen = true);
+    }
+  }
+
+  void _onComposerTap() {
+    // Tapping the input dismisses the emoji panel — keyboard is the
+    // active input, picker is the secondary mode.
+    if (_emojiOpen) setState(() => _emojiOpen = false);
+  }
+
+  void _onBackspaceFromPicker() {
+    final v = _textCtrl.value;
+    final selection = v.selection;
+    final text = v.text;
+    if (text.isEmpty) return;
+    if (selection.isCollapsed) {
+      final cursor = selection.baseOffset;
+      if (cursor <= 0) return;
+      final newText =
+          text.substring(0, cursor - 1) + text.substring(cursor);
+      _textCtrl.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: cursor - 1),
+      );
+    } else {
+      final newText =
+          text.substring(0, selection.start) + text.substring(selection.end);
+      _textCtrl.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: selection.start),
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -95,6 +141,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     final body = _textCtrl.text.trim();
     if (body.isEmpty) return;
     _textCtrl.clear();
+    if (_emojiOpen) setState(() => _emojiOpen = false);
     final repo = ref.read(chatRepositoryProvider);
     final optimistic = await repo.sendMessage(
       conversationId: widget.conversationId,
@@ -199,21 +246,18 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (ctx, i) {
                       final m = _messages[i];
-                      // Three-layer mine check:
-                      //   1. user-id (UUID, case-exact)
-                      //   2. email   (case-insensitive)
-                      //   3. peer-elimination (in a 1:1 thread,
-                      //      anything not from the peer is mine)
+                      final prev = i > 0 ? _messages[i - 1] : null;
+                      // Date divider when the day rolls over (or for
+                      // the very first message in the thread). Mirrors
+                      // the WhatsApp pattern: TODAY / YESTERDAY /
+                      // weekday for this week / "Apr 22, 2026" older.
+                      final showDateDivider =
+                          prev == null || !_sameDay(prev.sentAt, m.sentAt);
                       final mine = m.isMine(
                         selfUserId: selfUserId,
                         selfEmail: selfEmail,
                         peerEmail: peerEmail,
                       );
-                      // One-line diagnostic so the device log makes
-                      // mis-classification immediately obvious. If
-                      // you see `mine=false` on a message you sent,
-                      // the printed self/peer/sender values tell you
-                      // exactly which leg of isMine to look at.
                       assert(() {
                         debugPrint(
                           '[chat] body="${m.body}" '
@@ -230,13 +274,19 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                       final tailing = next == null ||
                           next.senderEmail != m.senderEmail ||
                           next.sentAt.difference(m.sentAt).inMinutes >= 5;
-                      return Padding(
-                        padding: EdgeInsets.only(top: tailing ? 6 : 2),
-                        child: _Bubble(
-                          message: m,
-                          mine: mine,
-                          tailing: tailing,
-                        ),
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (showDateDivider) _DateDivider(date: m.sentAt),
+                          Padding(
+                            padding: EdgeInsets.only(top: tailing ? 6 : 2),
+                            child: _Bubble(
+                              message: m,
+                              mine: mine,
+                              tailing: tailing,
+                            ),
+                          ),
+                        ],
                       );
                     },
                   );
@@ -246,9 +296,108 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
             _Composer(
               controller: _textCtrl,
               focusNode: _focusNode,
+              emojiOpen: _emojiOpen,
               onSend: _send,
+              onToggleEmoji: _toggleEmoji,
+              onComposerTap: _onComposerTap,
+            ),
+            // Emoji panel — slides in below the composer when toggled.
+            // Animates height to give a smooth transition between the
+            // soft keyboard and the picker.
+            AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              child: SizedBox(
+                height: _emojiOpen ? 300 : 0,
+                child: _emojiOpen
+                    ? EmojiPicker(
+                        textEditingController: _textCtrl,
+                        onBackspacePressed: _onBackspaceFromPicker,
+                        config: Config(
+                          height: 300,
+                          checkPlatformCompatibility: true,
+                          emojiViewConfig: EmojiViewConfig(
+                            backgroundColor:
+                                MizdahTokens.surface(context),
+                            columns: 8,
+                            emojiSizeMax: 26,
+                          ),
+                          categoryViewConfig: CategoryViewConfig(
+                            backgroundColor:
+                                MizdahTokens.surface(context),
+                            iconColor:
+                                MizdahTokens.mutedOf(context),
+                            iconColorSelected: MizdahTokens.primary,
+                            indicatorColor: MizdahTokens.primary,
+                          ),
+                          bottomActionBarConfig: BottomActionBarConfig(
+                            backgroundColor:
+                                MizdahTokens.surface(context),
+                            buttonColor: MizdahTokens.primary,
+                            buttonIconColor: Colors.white,
+                          ),
+                          searchViewConfig: SearchViewConfig(
+                            backgroundColor:
+                                MizdahTokens.surface(context),
+                          ),
+                        ),
+                      )
+                    : null,
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+/// Centered date chip placed between bubble groups when the day
+/// rolls over. Matches the WhatsApp pattern — TODAY / YESTERDAY /
+/// weekday for this week / `MMM d, yyyy` for older.
+class _DateDivider extends StatelessWidget {
+  final DateTime date;
+  const _DateDivider({required this.date});
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final whenDay = DateTime(date.year, date.month, date.day);
+    final delta = today.difference(whenDay).inDays;
+    if (delta == 0) return 'Today';
+    if (delta == 1) return 'Yesterday';
+    if (delta < 7) return DateFormat('EEEE').format(date);
+    if (date.year == now.year) return DateFormat('MMM d').format(date);
+    return DateFormat('MMM d, yyyy').format(date);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Center(
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: MizdahTokens.surface(context),
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(
+                color: MizdahTokens.border(context), width: 1),
+            boxShadow: MizdahTokens.shadow(context, elevation: 0.3),
+          ),
+          child: Text(
+            _label().toUpperCase(),
+            style: TextStyle(
+              color: MizdahTokens.mutedOf(context),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
+            ),
+          ),
         ),
       ),
     );
@@ -487,21 +636,33 @@ class _StatusTicks extends StatelessWidget {
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
+  final bool emojiOpen;
   final VoidCallback onSend;
+  final VoidCallback onToggleEmoji;
+  final VoidCallback onComposerTap;
   const _Composer({
     required this.controller,
     required this.focusNode,
+    required this.emojiOpen,
     required this.onSend,
+    required this.onToggleEmoji,
+    required this.onComposerTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isDark = MizdahTokens.isDark(context);
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        // Slight tint behind the pill so the white pill reads as
+        // elevated against the page background — matches WhatsApp's
+        // "tray" feel rather than the previous flat outline.
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
         decoration: BoxDecoration(
-          color: MizdahTokens.surface(context),
+          color: isDark
+              ? MizdahTokens.surface(context)
+              : const Color(0xFFF6F4FB),
           border: Border(
             top: BorderSide(
                 color: MizdahTokens.subtle(context), width: 1),
@@ -513,23 +674,43 @@ class _Composer extends StatelessWidget {
             Expanded(
               child: Container(
                 constraints:
-                    const BoxConstraints(minHeight: 44, maxHeight: 140),
-                padding: const EdgeInsets.symmetric(horizontal: 14),
+                    const BoxConstraints(minHeight: 46, maxHeight: 140),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
                 decoration: BoxDecoration(
-                  color: MizdahTokens.bg(context),
-                  borderRadius: BorderRadius.circular(22),
+                  color: MizdahTokens.surface(context),
+                  borderRadius: BorderRadius.circular(24),
                   border: Border.all(
                       color: MizdahTokens.border(context), width: 1),
+                  boxShadow:
+                      MizdahTokens.shadow(context, elevation: 0.4),
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.emoji_emotions_outlined,
-                        color: MizdahTokens.mutedOf(context), size: 20),
-                    const SizedBox(width: 8),
+                    // Emoji toggle — icon flips between smile and
+                    // keyboard glyph so the user sees that the same
+                    // tap closes the picker too.
+                    InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: onToggleEmoji,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Icon(
+                          emojiOpen
+                              ? Icons.keyboard_alt_outlined
+                              : Icons.emoji_emotions_outlined,
+                          color: emojiOpen
+                              ? MizdahTokens.primary
+                              : MizdahTokens.mutedOf(context),
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: TextField(
                         controller: controller,
                         focusNode: focusNode,
+                        onTap: onComposerTap,
                         minLines: 1,
                         maxLines: 6,
                         textCapitalization: TextCapitalization.sentences,
@@ -542,7 +723,7 @@ class _Composer extends StatelessWidget {
                         decoration: InputDecoration(
                           isCollapsed: true,
                           contentPadding:
-                              const EdgeInsets.symmetric(vertical: 12),
+                              const EdgeInsets.symmetric(vertical: 13),
                           border: InputBorder.none,
                           hintText: 'Message',
                           hintStyle: TextStyle(
@@ -553,9 +734,27 @@ class _Composer extends StatelessWidget {
                         onSubmitted: (_) => onSend(),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Icon(Icons.attach_file_rounded,
-                        color: MizdahTokens.mutedOf(context), size: 20),
+                    const SizedBox(width: 4),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            behavior: SnackBarBehavior.floating,
+                            duration: Duration(seconds: 2),
+                            content: Text('Attachments — coming soon'),
+                          ),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.attach_file_rounded,
+                          color: MizdahTokens.mutedOf(context),
+                          size: 20,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -565,8 +764,8 @@ class _Composer extends StatelessWidget {
               scaleTo: 0.92,
               onTap: onSend,
               child: Container(
-                width: 44,
-                height: 44,
+                width: 46,
+                height: 46,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   gradient: MizdahTokens.heroGradient,
