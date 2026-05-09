@@ -88,7 +88,15 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
                   child: ListView(
                     physics: const ClampingScrollPhysics(
                         parent: AlwaysScrollableScrollPhysics()),
-                    padding: const EdgeInsets.only(bottom: 96),
+                    // Clear the floating nav AND the new-chat FAB.
+                    // FAB is anchored at `navBarBottomInset + 8` and is
+                    // 56 tall, so the last card needs at least
+                    // `navBarBottomInset + 56 + 8 + 8` of bottom padding
+                    // to never overlap the FAB.
+                    padding: EdgeInsets.only(
+                      bottom:
+                          MizdahTokens.navBarBottomInset(context) + 80,
+                    ),
                     children: [
                       MizdahFadeUp(
                         controller: _entryCtrl,
