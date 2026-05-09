@@ -1,21 +1,28 @@
 // ════════════════════════════════════════════════════════════════════
 //  Call hub — the "Call" tab
 //  ────────────────────────────────────────────────────────────────────
-//  Stripped down to two features per UX spec:
+//  Two stacked sections:
 //
 //    1. Search bar — type an email or name to find a Mizdah user.
 //       Live-debounced lookup against
 //       `GET /api/auth/users/search?q=...`. Each result row exposes
-//       audio + video call buttons.
+//       audio + video call buttons that fire
+//       `p2pCallProvider.startCall(...)`.
 //
-//    2. Recent contacts — the people you've spoken with before
-//       (derived from `callHistoryProvider`). Same call buttons
-//       inline so the row doubles as a quick-redial.
+//    2. Call log — WhatsApp-style chronological call history grouped
+//       by date (Today / Yesterday / weekday / date). Each row shows
+//       a status icon (Outgoing / Incoming / Missed), the meeting
+//       label, time, and duration. Tap a row to redial via
+//       `/pre-join/<code>`.
 //
-//  Tapping audio / video on either list fires
-//  `p2pCallProvider.startCall(...)` which kicks off the signaling
-//  handshake. Phase transitions are handled by the provider; this
-//  screen just navigates to `/p2p-call` once `outgoing` is active.
+//  Data source: `callHistoryProvider` → `getUserHistory(userId)` →
+//  `GET /api/participant/history/{userId}` (already wired). Status is
+//  derived locally:
+//    • outgoing  ⇐ hostId == me
+//    • incoming  ⇐ hostId != me
+//    • missed    ⇐ duration == 0  (regardless of direction)
+//  "Decline" requires backend support — flagged in CHATS_API.md /
+//  participant-service tickets but not yet present in the response.
 // ════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
@@ -23,12 +30,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import '../../../core/ui/mizdah_design.dart';
+import '../../../core/utils/meeting_utils.dart';
 import '../../../data/models/models.dart';
 import '../../../data/repositories/auth_repository.dart';
-import '../../../data/repositories/participant_repository.dart';
 import '../../auth/auth_provider.dart';
+import '../../home/presentation/home_screen.dart' show callHistoryProvider;
 import '../p2p_call_provider.dart';
 
 class CallHubScreen extends ConsumerStatefulWidget {
@@ -150,7 +159,7 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
                     controller: _entryCtrl,
                     delay: 0.18,
                     child: _query.isEmpty
-                        ? _RecentContactsSection(onCall: _placeCall)
+                        ? const _CallLogSection()
                         : _SearchResultsSection(
                             results: _results,
                             busy: _searching,
@@ -348,19 +357,16 @@ class _SearchResultsSection extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────────
-//  Recent contacts — derived from callHistoryProvider
+//  Call log — WhatsApp-style chronological call history
 // ────────────────────────────────────────────────────────────────────
 
-class _RecentContactsSection extends ConsumerWidget {
-  final void Function(User, {required bool withVideo}) onCall;
-  const _RecentContactsSection({required this.onCall});
+class _CallLogSection extends ConsumerWidget {
+  const _CallLogSection();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Build a stable list from call-history. Each entry becomes a
-    // `User`-shaped row so the same _UserRow widget renders both
-    // search hits and contacts.
-    final history = ref.watch(_recentContactsProvider);
+    final history = ref.watch(callHistoryProvider);
+    final me = ref.watch(authProvider).user?.id;
 
     return history.when(
       loading: () => const Padding(
@@ -382,25 +388,35 @@ class _RecentContactsSection extends ConsumerWidget {
           padding: EdgeInsets.zero,
           child: MizdahEmptyState(
             icon: Icons.cloud_off_rounded,
-            title: 'Could not load contacts',
+            title: 'Could not load call history',
             subtitle: 'Pull down to retry',
           ),
         ),
       ),
-      data: (contacts) {
-        if (contacts.isEmpty) {
+      data: (items) {
+        if (items.isEmpty) {
           return const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18),
             child: MizdahCard(
               padding: EdgeInsets.zero,
               child: MizdahEmptyState(
-                icon: Icons.contacts_rounded,
-                title: 'No contacts yet',
+                icon: Icons.call_rounded,
+                title: 'No calls yet',
                 subtitle:
-                    'Search anyone above to start a call. People you call show up here for quick redial.',
+                    'Search anyone above to start a call. Your call history will show up here.',
               ),
             ),
           );
+        }
+        // Newest first.
+        final sorted = [...items]
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        // Group by date label so the list reads like WhatsApp's calls
+        // tab — Today / Yesterday / weekday / date.
+        final groups = <String, List<CallHistory>>{};
+        for (final h in sorted) {
+          final label = _dateLabel(h.timestamp);
+          groups.putIfAbsent(label, () => []).add(h);
         }
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -408,11 +424,11 @@ class _RecentContactsSection extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 4, bottom: 8),
+                padding: const EdgeInsets.only(left: 4, bottom: 6),
                 child: Row(
                   children: [
                     Text(
-                      'Contacts',
+                      'Call log',
                       style: TextStyle(
                         color: MizdahTokens.inkOf(context),
                         fontSize: 16,
@@ -429,7 +445,7 @@ class _RecentContactsSection extends ConsumerWidget {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        '${contacts.length}',
+                        '${sorted.length}',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,
@@ -440,43 +456,201 @@ class _RecentContactsSection extends ConsumerWidget {
                   ],
                 ),
               ),
-              for (final u in contacts)
+              for (final entry in groups.entries) ...[
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _UserRow(user: u, onCall: onCall),
+                  padding:
+                      const EdgeInsets.only(left: 4, top: 14, bottom: 6),
+                  child: Text(
+                    entry.key.toUpperCase(),
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
                 ),
+                for (final item in entry.value)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _CallLogRow(item: item, isOutgoing: item.hostId == me),
+                  ),
+              ],
             ],
           ),
         );
       },
     );
   }
+
+  /// "Today" / "Yesterday" / "Mon" / "Apr 22, 2026" — matches the
+  /// header convention WhatsApp uses on its Calls tab.
+  static String _dateLabel(DateTime when) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final whenDay = DateTime(when.year, when.month, when.day);
+    final delta = today.difference(whenDay).inDays;
+    if (delta == 0) return 'Today';
+    if (delta == 1) return 'Yesterday';
+    if (delta < 7) return DateFormat('EEEE').format(when);
+    if (when.year == now.year) return DateFormat('MMM d').format(when);
+    return DateFormat('MMM d, yyyy').format(when);
+  }
 }
 
-// Local provider — derives a deduped contacts list from the
-// participant history. We don't have a dedicated "people I've met
-// with" endpoint yet, so this is the closest approximation. Each
-// history row becomes a synthetic `User` so the same `_UserRow`
-// widget renders both search hits and contacts.
-final _recentContactsProvider = FutureProvider<List<User>>((ref) async {
-  final auth = ref.watch(authProvider);
-  if (auth.user == null) return const [];
-  final repo = ref.read(participantRepositoryProvider);
-  final history = await repo.getUserHistory(auth.user!.id);
-  final seen = <String>{};
-  final out = <User>[];
-  for (final h in history) {
-    final key = h.title.trim().toLowerCase();
-    if (key.isEmpty || seen.contains(key)) continue;
-    seen.add(key);
-    out.add(User(
-      id: h.id,
-      name: h.title.trim(),
-      email: h.meetingCode ?? '',
-    ));
+/// One row in the call log. Visuals match the WhatsApp pattern:
+/// avatar, title, status icon + label + time on the next line, and a
+/// duration tag on the right when the call connected.
+class _CallLogRow extends StatelessWidget {
+  final CallHistory item;
+  final bool isOutgoing;
+  const _CallLogRow({required this.item, required this.isOutgoing});
+
+  bool get _missed => item.duration == Duration.zero || item.isMissed;
+
+  IconData get _statusIcon {
+    if (_missed) {
+      return isOutgoing
+          ? Icons.call_missed_outgoing_rounded
+          : Icons.call_missed_rounded;
+    }
+    return isOutgoing
+        ? Icons.call_made_rounded
+        : Icons.call_received_rounded;
   }
-  return out;
-});
+
+  Color get _statusColor =>
+      _missed ? const Color(0xFFE54848) : const Color(0xFF10B981);
+
+  String get _statusLabel {
+    if (_missed) return 'Missed';
+    return isOutgoing ? 'Outgoing' : 'Incoming';
+  }
+
+  String _formatDuration(Duration d) {
+    if (d.inSeconds == 0) return '';
+    if (d.inMinutes < 1) return '${d.inSeconds}s';
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final time = DateFormat('h:mm a').format(item.timestamp);
+    final duration = _formatDuration(item.duration);
+    final code = item.meetingCode?.isNotEmpty == true
+        ? MeetingUtils.extractCode(item.meetingCode!)
+        : null;
+    // Best-effort display name. The participant API doesn't carry a
+    // "peer name" yet — fall back to the meeting title (the model's
+    // own resolver already cleans up URLs / long codes), or the
+    // pretty meeting code as a last resort.
+    final title = item.title.isNotEmpty
+        ? item.title
+        : (code != null ? 'Meeting $code' : 'Past call');
+
+    return MizdahCard(
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+      onTap: code == null
+          ? null
+          : () => context.push('/pre-join/$code'),
+      child: Row(
+        children: [
+          MizdahAvatar(name: title, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _missed
+                        ? const Color(0xFFE54848)
+                        : MizdahTokens.inkOf(context),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Icon(_statusIcon, color: _statusColor, size: 14),
+                    const SizedBox(width: 5),
+                    Text(
+                      _statusLabel,
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      ' · $time',
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (duration.isNotEmpty) ...[
+                      Text(
+                        ' · $duration',
+                        style: TextStyle(
+                          color: MizdahTokens.mutedOf(context),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // Trailing call-back glyph — matches WhatsApp's tappable
+          // phone glyph at the row's right edge. Tap the row (or the
+          // glyph) to land on /pre-join/<code> and re-enter.
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: code == null
+                  ? MizdahTokens.iconTileBg(context)
+                  : null,
+              gradient: code == null
+                  ? null
+                  : (_missed
+                      ? const LinearGradient(
+                          colors: [Color(0xFFE54848), Color(0xFFB91C1C)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        )
+                      : MizdahTokens.heroGradient),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isOutgoing
+                  ? Icons.videocam_rounded
+                  : Icons.call_rounded,
+              color: code == null
+                  ? MizdahTokens.mutedOf(context)
+                  : Colors.white,
+              size: 16,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 // ────────────────────────────────────────────────────────────────────
 
