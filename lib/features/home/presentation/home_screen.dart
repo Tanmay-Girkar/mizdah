@@ -18,6 +18,7 @@ import '../../../data/repositories/participant_repository.dart';
 import '../../../data/repositories/scheduling_repository.dart';
 import '../../auth/auth_provider.dart';
 import '../../scheduling/data/calendar_payload.dart';
+import '../../chats/chats_provider.dart';
 import '../../scheduling/scheduling_provider.dart';
 import '../notification_provider.dart';
 
@@ -88,6 +89,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void initState() {
     super.initState();
+    // Pre-warm the chats stream the moment the home screen mounts so
+    // that by the time the user taps the Chats tab the conversation
+    // list is already loaded. `StatefulShellRoute.indexedStack`
+    // lazy-mounts branches by default, so without this the first
+    // chat-tab open eats a fresh REST round-trip.
+    //
+    // `ref.read` on a StreamProvider initialises it; the underlying
+    // RealChatRepository starts its REST refresh + spins up the
+    // /chats socket. The provider stays alive (no .autoDispose) so
+    // the result is cached for the rest of the session.
+    Future.microtask(() {
+      if (!mounted) return;
+      // ignore: unused_local_variable
+      final _ = ref.read(conversationsProvider);
+    });
     // 6s sin-wave loop drives the slow floating motion of the blob
     // illustration's icon cards. Auto-reverses so the wave stays
     // continuous instead of snapping back to 0.

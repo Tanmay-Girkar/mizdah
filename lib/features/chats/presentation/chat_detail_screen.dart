@@ -55,6 +55,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   /// isn't in the cache yet (brand-new chat), the message *we just
   /// typed* always renders on the right.
   final Set<String> _myMessageIds = {};
+  /// Pulled out of `build` so the build path stays free of side-
+  /// effects. Resolves once the history future first delivers data.
+  ProviderSubscription<AsyncValue<List<ChatMessage>>>? _historySub;
   /// REST poll fallback — we still want sent/delivered/read tick
   /// updates even when the /chats socket isn't connected (or the
   /// backend doesn't emit chat:status). Polls every few seconds
@@ -127,6 +130,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   void dispose() {
     _pollTimer?.cancel();
     _deltaSub?.close();
+    _historySub?.close();
     _scrollCtrl.dispose();
     _textCtrl.dispose();
     _focusNode.dispose();
@@ -261,8 +265,6 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   Widget build(BuildContext context) {
     final me = ref.watch(authProvider).user;
     final selfUserId = me?.id ?? '';
-    final history =
-        ref.watch(conversationHistoryProvider(widget.conversationId));
 
     // Subscribe to live deltas exactly once.
     _deltaSub ??= ref.listenManual(
@@ -270,6 +272,28 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
       (prev, next) {
         next.whenData(_applyDelta);
       },
+    );
+
+    // Subscribe to the initial-history future once. When it
+    // resolves we replace any seeded placeholder with the full
+    // server-side thread. Doing this via listenManual instead of
+    // ref.watch keeps build() free of `setState` side effects.
+    _historySub ??= ref.listenManual(
+      conversationHistoryProvider(widget.conversationId),
+      (prev, next) {
+        next.whenData((initial) {
+          if (!mounted || _hydrated) return;
+          setState(() {
+            _hydrated = true;
+            _messages
+              ..clear()
+              ..addAll(initial);
+          });
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _scrollToBottom());
+        });
+      },
+      fireImmediately: true,
     );
 
     // Pull all conversations up front — they're authoritative for
@@ -285,6 +309,15 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
         updatedAt: DateTime.now(),
       ),
     );
+
+    // Instant placeholder — show the conversation's last_message
+    // bubble immediately on first build, before the FutureProvider's
+    // history fetch completes. The full thread merges in over the
+    // top once it lands. This is what makes opening a chat feel
+    // instant rather than waiting on the network spinner.
+    if (!_hydrated && _messages.isEmpty && conv.lastMessage != null) {
+      _messages.add(conv.lastMessage!);
+    }
     // Shared provider falls back to the participants-intersection
     // derivation when auth.user.email is blank.
     final selfEmail = ref.watch(effectiveSelfEmailProvider);
@@ -302,53 +335,12 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
           children: [
             _TopBar(peerName: peerName, peerEmail: peerEmail),
             Expanded(
-              child: history.when(
-                loading: () => const Center(
-                  child: SizedBox(
-                    width: 26,
-                    height: 26,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.4,
-                      valueColor:
-                          AlwaysStoppedAnimation(MizdahTokens.primary),
-                    ),
-                  ),
-                ),
-                error: (_, __) => Center(
-                  child: Text(
-                    'Could not load messages',
-                    style: TextStyle(
-                      color: MizdahTokens.mutedOf(context),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                data: (initial) {
-                  if (!_hydrated) {
-                    _hydrated = true;
-                    _messages
-                      ..clear()
-                      ..addAll(initial);
-                    WidgetsBinding.instance
-                        .addPostFrameCallback((_) => _scrollToBottom());
-                  }
-                  if (_messages.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 32),
-                        child: Text(
-                          'No messages yet — say hi 👋',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: MizdahTokens.mutedOf(context),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-                  return ListView.builder(
+              child: _messages.isEmpty
+                  ? _EmptyOrLoading(
+                      historyAsync: ref.watch(
+                          conversationHistoryProvider(widget.conversationId)),
+                    )
+                  : ListView.builder(
                     controller: _scrollCtrl,
                     physics: const ClampingScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
@@ -404,9 +396,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                         ],
                       );
                     },
-                  );
-                },
-              ),
+                  ),
             ),
             _Composer(
               controller: _textCtrl,
@@ -468,6 +458,53 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
 
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+/// Renders the spinner / error / empty state shown when `_messages`
+/// has no entries yet — so the parent can switch to a real list as
+/// soon as a placeholder bubble or hydrated history is available.
+class _EmptyOrLoading extends StatelessWidget {
+  final AsyncValue<List<ChatMessage>> historyAsync;
+  const _EmptyOrLoading({required this.historyAsync});
+
+  @override
+  Widget build(BuildContext context) {
+    return historyAsync.when(
+      loading: () => const Center(
+        child: SizedBox(
+          width: 26,
+          height: 26,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.4,
+            valueColor: AlwaysStoppedAnimation(MizdahTokens.primary),
+          ),
+        ),
+      ),
+      error: (_, __) => Center(
+        child: Text(
+          'Could not load messages',
+          style: TextStyle(
+            color: MizdahTokens.mutedOf(context),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      data: (_) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Text(
+            'No messages yet — say hi 👋',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: MizdahTokens.mutedOf(context),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Centered date chip placed between bubble groups when the day
