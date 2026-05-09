@@ -64,7 +64,7 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
   bool get _canSubmit =>
       !_submitting &&
       _category != null &&
-      _descCtrl.text.trim().length >= 8;
+      _descCtrl.text.trim().isNotEmpty;
 
   Future<void> _submit() async {
     if (!_canSubmit) return;
