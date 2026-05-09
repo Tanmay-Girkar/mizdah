@@ -16,6 +16,8 @@ import '../../../data/repositories/mizdah_repository.dart';
 import '../../../data/repositories/participant_repository.dart';
 import '../../../data/repositories/scheduling_repository.dart';
 import '../../auth/auth_provider.dart';
+import '../../scheduling/data/calendar_payload.dart';
+import '../../scheduling/scheduling_provider.dart';
 import '../notification_provider.dart';
 
 // ════════════════════════════════════════════════════════════════════
@@ -2647,76 +2649,65 @@ class _NewMeetingOptions extends StatelessWidget {
     }
   }
 
+  /// Open Google Calendar with a prefilled "Mizdah Meeting" event.
+  /// Zero backend round-trips — the meeting code is generated client-
+  /// side and the room is created on-demand the first time someone
+  /// hits the join link. Mirrors the Google Meet "Schedule" flow.
   Future<void> _scheduleMeeting(BuildContext context) async {
-    final scheduleRepo = ref.read(schedulingRepositoryProvider);
-    final meetingRepo = ref.read(mizdahRepositoryProvider);
-    final calendarService = ref.read(googleCalendarServiceProvider);
+    final scheduling = ref.read(calendarSchedulingServiceProvider);
     final user = ref.read(authProvider).user;
+    final messenger = ScaffoldMessenger.of(context);
 
-    if (user == null) return;
     Navigator.pop(context);
 
-    try {
-      final startTime = DateTime.now().add(const Duration(hours: 1));
-      final endTime = startTime.add(const Duration(hours: 1));
-      final timezone = DateTime.now().timeZoneName;
+    final startTime = DateTime.now().add(const Duration(hours: 1));
+    final endTime = startTime.add(const Duration(hours: 1));
+    final code = MeetingUtils.generateMeetingCode();
+    final link = MeetingUtils.generateMeetingLink(code);
 
-      // Create the actual meeting room first so we have a real
-      // join code; the schedule row references it. Backend currently
-      // drops dedicated meetingId/meetingCode fields so we also embed
-      // the code in the title — see docs/SCHEDULING_BACKEND.md.
-      final code = MeetingUtils.generateMeetingCode();
-      final meeting = await meetingRepo.createMeeting(
-        title: 'Mizdah Meeting',
-        dateTime: startTime,
-        code: code,
-      );
-      final realCode = meeting.code;
+    final payload = CalendarPayload(
+      title: 'Mizdah Meeting',
+      meetingLink: link,
+      meetingId: code,
+      hostName: (user?.name.trim().isNotEmpty ?? false) ? user!.name : null,
+      startTime: startTime,
+      endTime: endTime,
+      timezone: DateTime.now().timeZoneName,
+    );
 
-      await scheduleRepo.scheduleMeeting(
-        hostId: user.id,
-        title: 'Mizdah Meeting [$realCode]',
-        startTime: startTime,
-        endTime: endTime,
-        recurrence: 'none',
-        timezone: timezone,
-        meetingId: meeting.id,
-        meetingCode: realCode,
-      );
-
-      final link = MeetingUtils.generateMeetingLink(realCode);
-      await calendarService.openGoogleCalendarTemplate(
-        title: 'Mizdah Meeting',
-        description: 'Join with Mizdah: $link\nMeeting Code: $realCode',
-        location: link,
-        startTime: startTime,
-      );
-
-      ref.invalidate(schedulesProvider);
-      ref.invalidate(callHistoryProvider);
-    } catch (e) {
-      // Keep the raw error in the device log for devs / backend
-      // debugging, but don't dump it on the user. Detect the specific
-      // "Prisma column doesn't exist" 500 we see while the backend
-      // migration is mid-flight and surface a useful hint.
-      debugPrint('[schedule] $e');
-      final raw = e.toString().toLowerCase();
-      final friendly = raw.contains('does not exist in the current')
-          ? 'Server is mid-migration — backend team needs to run the meeting-service migration before scheduling works.'
-          : 'Couldn\'t schedule the meeting. Try again, or contact support if this keeps happening.';
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: const Color(0xFFB42318),
-            content: Text(
-              friendly,
-              style: const TextStyle(color: Colors.white),
-            ),
-            duration: const Duration(seconds: 4),
+    final ok = await scheduling.schedule(payload);
+    if (!ok && context.mounted) {
+      // Last-resort fallback so the user can still get the link out.
+      final fallbackUrl = scheduling.resolveUrl(payload);
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: md.MizdahTokens.surface(context),
+          duration: const Duration(seconds: 4),
+          content: Row(
+            children: [
+              const Icon(Icons.error_outline_rounded,
+                  color: Color(0xFFB42318), size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Unable to open calendar',
+                  style: TextStyle(
+                    color: md.MizdahTokens.inkOf(context),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (fallbackUrl.isNotEmpty)
+                TextButton(
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: fallbackUrl)),
+                  child: const Text('Copy link'),
+                ),
+            ],
           ),
-        );
-      }
+        ),
+      );
     }
   }
 }
