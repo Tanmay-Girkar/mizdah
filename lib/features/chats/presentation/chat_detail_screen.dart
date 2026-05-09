@@ -106,7 +106,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final selfEmail = ref.watch(authProvider).user?.email ?? '';
+    final me = ref.watch(authProvider).user;
+    final selfEmail = me?.email ?? '';
+    final selfUserId = me?.id ?? '';
     final history =
         ref.watch(conversationHistoryProvider(widget.conversationId));
 
@@ -197,7 +199,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (ctx, i) {
                       final m = _messages[i];
-                      final mine = m.senderEmail == selfEmail;
+                      // Compare by user-id first (case-exact UUID),
+                      // then case-insensitive email — works whether
+                      // the backend wires sender_email, sender_id,
+                      // or both. Fixes the all-on-the-left bug when
+                      // the email casing differs between auth and
+                      // the message payload.
+                      final mine = m.isMine(
+                        selfUserId: selfUserId,
+                        selfEmail: selfEmail,
+                      );
                       // Group bubbles from the same sender in close
                       // succession — only show a tail on the last one.
                       final next =

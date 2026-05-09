@@ -23,11 +23,13 @@ import 'chat_models.dart';
 import 'chat_repository.dart';
 
 class RealChatRepository implements ChatRepository {
-  RealChatRepository({required String selfEmail})
+  RealChatRepository({required String selfEmail, String? selfUserId})
       : _selfEmail = selfEmail,
+        _selfUserId = selfUserId,
         _api = ApiClient();
 
   final String _selfEmail;
+  final String? _selfUserId;
   final ApiClient _api;
 
   final List<Conversation> _conversationsCache = [];
@@ -78,7 +80,7 @@ class RealChatRepository implements ChatRepository {
       return;
     }
     final old = _conversationsCache[i];
-    final fromMe = m.senderEmail == _selfEmail;
+    final fromMe = m.isMine(selfUserId: _selfUserId, selfEmail: _selfEmail);
     _conversationsCache[i] = Conversation(
       id: old.id,
       participants: old.participants,
@@ -290,6 +292,7 @@ class RealChatRepository implements ChatRepository {
       id: clientId,
       conversationId: conversationId,
       senderEmail: _selfEmail,
+      senderUserId: _selfUserId,
       body: body,
       sentAt: DateTime.now(),
       status: MessageStatus.sent,

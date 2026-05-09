@@ -21,11 +21,12 @@ import 'data/real_chat_repository.dart';
 const bool kUseMockChats = false;
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
-  final email = ref.watch(authProvider).user?.email ?? 'me@mizdah.dev';
+  final me = ref.watch(authProvider).user;
+  final email = me?.email ?? 'me@mizdah.dev';
   if (kUseMockChats) {
     return MockChatRepository(email);
   }
-  return RealChatRepository(selfEmail: email);
+  return RealChatRepository(selfEmail: email, selfUserId: me?.id);
 });
 
 /// Live stream of conversations for the current user.

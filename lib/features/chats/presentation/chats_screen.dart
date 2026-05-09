@@ -52,7 +52,9 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
 
   @override
   Widget build(BuildContext context) {
-    final selfEmail = ref.watch(authProvider).user?.email ?? '';
+    final me = ref.watch(authProvider).user;
+    final selfEmail = me?.email ?? '';
+    final selfUserId = me?.id ?? '';
     final async = ref.watch(conversationsProvider);
 
     return MizdahTabScaffold(
@@ -176,6 +178,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
                                       child: _ChatRow(
                                         conversation: c,
                                         selfEmail: selfEmail,
+                                        selfUserId: selfUserId,
                                       ),
                                     ),
                                 ],
@@ -252,7 +255,12 @@ class _SearchBar extends StatelessWidget {
 class _ChatRow extends StatelessWidget {
   final Conversation conversation;
   final String selfEmail;
-  const _ChatRow({required this.conversation, required this.selfEmail});
+  final String selfUserId;
+  const _ChatRow({
+    required this.conversation,
+    required this.selfEmail,
+    required this.selfUserId,
+  });
 
   String _formatRelative(DateTime when) {
     final now = DateTime.now();
@@ -272,11 +280,11 @@ class _ChatRow extends StatelessWidget {
         ? conversation.title!
         : (peer.contains('@') ? peer.split('@').first : peer);
     final last = conversation.lastMessage;
+    final lastFromMe = last != null &&
+        last.isMine(selfUserId: selfUserId, selfEmail: selfEmail);
     final preview = last == null
         ? 'Say hi 👋'
-        : (last.senderEmail == selfEmail
-            ? 'You: ${last.body}'
-            : last.body);
+        : (lastFromMe ? 'You: ${last.body}' : last.body);
     final unread = conversation.unreadCount;
     final hasUnread = unread > 0;
 

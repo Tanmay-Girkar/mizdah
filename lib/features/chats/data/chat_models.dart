@@ -50,7 +50,14 @@ String statusToString(MessageStatus s) {
 class ChatMessage {
   final String id;
   final String conversationId;
+  /// Sender's email — primary identity in the wire format. May be
+  /// empty if the backend only carries `sender_id` / `sender_user_id`
+  /// (UUID); use `isMine(...)` to test ownership without depending on
+  /// either field being populated.
   final String senderEmail;
+  /// Sender's user UUID — secondary identity, used as a fallback when
+  /// `senderEmail` is missing or the case differs from the local user.
+  final String? senderUserId;
   final String body;
   final DateTime sentAt;
   final MessageStatus status;
@@ -62,11 +69,33 @@ class ChatMessage {
     required this.id,
     required this.conversationId,
     required this.senderEmail,
+    this.senderUserId,
     required this.body,
     required this.sentAt,
     required this.status,
     this.replyToId,
   });
+
+  /// True when this message was sent by the local user. Compares by
+  /// user ID first (case-exact UUID match), then by email
+  /// (case-insensitive). Either route is enough — backends differ on
+  /// which field they put on the wire.
+  bool isMine({String? selfUserId, String? selfEmail}) {
+    if (selfUserId != null &&
+        selfUserId.isNotEmpty &&
+        senderUserId != null &&
+        senderUserId!.isNotEmpty &&
+        senderUserId == selfUserId) {
+      return true;
+    }
+    if (selfEmail != null &&
+        selfEmail.isNotEmpty &&
+        senderEmail.isNotEmpty &&
+        senderEmail.toLowerCase() == selfEmail.toLowerCase()) {
+      return true;
+    }
+    return false;
+  }
 
   ChatMessage copyWith({
     String? id,
@@ -76,6 +105,7 @@ class ChatMessage {
         id: id ?? this.id,
         conversationId: conversationId,
         senderEmail: senderEmail,
+        senderUserId: senderUserId,
         body: body,
         sentAt: sentAt,
         status: status ?? this.status,
@@ -83,19 +113,31 @@ class ChatMessage {
       );
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        id: j['id'] as String,
-        conversationId: j['conversation_id'] as String,
-        senderEmail: j['sender_email'] as String,
+        id: (j['id'] ?? j['_id'] ?? '') as String,
+        conversationId:
+            (j['conversation_id'] ?? j['conversationId'] ?? '') as String,
+        // `sender_email` is the doc-spec key; tolerate `senderEmail`
+        // (camelCase) and a missing field — `isMine` falls back to
+        // `senderUserId` when email is empty.
+        senderEmail:
+            (j['sender_email'] ?? j['senderEmail'] ?? '') as String,
+        senderUserId: (j['sender_user_id'] ??
+                j['senderUserId'] ??
+                j['sender_id'] ??
+                j['senderId']) as String?,
         body: (j['body'] ?? '') as String,
-        sentAt: DateTime.parse(j['sent_at'] as String).toLocal(),
+        sentAt: DateTime.parse(
+          (j['sent_at'] ?? j['sentAt'] ?? j['created_at']) as String,
+        ).toLocal(),
         status: _statusFromString(j['status'] as String?),
-        replyToId: j['reply_to_id'] as String?,
+        replyToId: (j['reply_to_id'] ?? j['replyToId']) as String?,
       );
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'conversation_id': conversationId,
         'sender_email': senderEmail,
+        if (senderUserId != null) 'sender_user_id': senderUserId,
         'body': body,
         'sent_at': sentAt.toUtc().toIso8601String(),
         'status': statusToString(status),
@@ -126,10 +168,13 @@ class Conversation {
     this.title,
   });
 
-  /// The other participant's email in a 1:1 conversation.
+  /// The other participant's email in a 1:1 conversation. Comparison
+  /// is case-insensitive — backends sometimes normalise email casing
+  /// inconsistently between sign-up and the chat participants list.
   String peerOf(String selfEmail) {
+    final selfLc = selfEmail.toLowerCase();
     return participants.firstWhere(
-      (e) => e != selfEmail,
+      (e) => e.toLowerCase() != selfLc,
       orElse: () => participants.isNotEmpty ? participants.first : '',
     );
   }
