@@ -21,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/services/storage_service.dart';
 import '../../../core/ui/mizdah_design.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../../auth/auth_provider.dart';
@@ -70,24 +71,36 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
       setState(() => _error = 'Name cannot be empty');
       return;
     }
-    if (!_hasChanges) {
-      context.pop();
-      return;
-    }
     setState(() {
       _saving = true;
       _error = null;
     });
+    final messenger = ScaffoldMessenger.of(context);
     try {
-      // `AuthNotifier.updateProfile` already calls the repo and
-      // pushes the fresh user into auth state — so the rest of the
-      // app (drawer, settings profile card, header avatar initial)
-      // reacts instantly without us touching state directly.
-      await ref
-          .read(authProvider.notifier)
-          .updateProfile(name: newName);
+      if (_hasChanges) {
+        // Real change — push to the server. AuthNotifier.updateProfile
+        // already saves the fresh user into both auth state AND
+        // secure storage, so the rest of the app updates instantly.
+        await ref
+            .read(authProvider.notifier)
+            .updateProfile(name: newName);
+      } else {
+        // No actual edit — just refresh the local secure-storage
+        // cache with the current user. Useful when the cache predates
+        // the email-persistence fix (see auth_provider.dart): one tap
+        // here populates the email field without requiring a logout.
+        final me = ref.read(authProvider).user;
+        if (me != null) {
+          await StorageService.saveUserData(
+            id: me.id,
+            name: me.name,
+            email: me.email,
+            avatarUrl: me.avatarUrl,
+          );
+        }
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: MizdahTokens.surface(context),
@@ -97,7 +110,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                   color: Color(0xFF10B981), size: 18),
               const SizedBox(width: 8),
               Text(
-                'Profile updated',
+                _hasChanges ? 'Profile updated' : 'Profile cache refreshed',
                 style: TextStyle(
                   color: MizdahTokens.inkOf(context),
                   fontWeight: FontWeight.w600,
@@ -107,7 +120,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
           ),
         ),
       );
-      context.pop();
+      if (mounted) context.pop();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -201,9 +214,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                                     _NameField(
                                       controller: _nameCtrl,
                                       onChanged: (_) {
-                                        if (_error != null) {
-                                          setState(() => _error = null);
-                                        }
+                                        // Always rebuild so the Save
+                                        // button's enable/disable
+                                        // state tracks the field's
+                                        // emptiness reactively.
+                                        setState(() {
+                                          if (_error != null) _error = null;
+                                        });
                                       },
                                     ),
                                     _RowDivider(),
@@ -317,7 +334,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                           padding:
                               const EdgeInsets.symmetric(horizontal: 18),
                           child: _SaveButton(
-                            enabled: _hasChanges && !_saving,
+                            enabled:
+                                !_saving && _nameCtrl.text.trim().isNotEmpty,
                             busy: _saving,
                             onTap: _save,
                           ),
