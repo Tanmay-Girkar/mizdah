@@ -2408,69 +2408,122 @@ class _NewMeetingOptions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1F2E) : Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        color: md.MizdahTokens.surface(context),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 20,
-            spreadRadius: 5,
+            color: Colors.black.withValues(
+              alpha: md.MizdahTokens.isDark(context) ? 0.45 : 0.10,
+            ),
+            blurRadius: 24,
+            offset: const Offset(0, -6),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: isDark ? Colors.white24 : Colors.black12,
-                  borderRadius: BorderRadius.circular(2),
+              // Drag handle — matches the report-screen / language-
+              // picker bottom-sheet pattern used elsewhere.
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: md.MizdahTokens.border(context),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
                 ),
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'Create Meeting',
+              const SizedBox(height: 18),
+              // Title with gradient accent — matches MizdahPageHeader
+              // style across the rest of the app (Settings, Meeting
+              // preferences, Report, Edit profile).
+              RichText(
+                text: TextSpan(
+                  style: TextStyle(
+                    color: md.MizdahTokens.inkOf(context),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                    height: 1.1,
+                  ),
+                  children: [
+                    const TextSpan(text: 'Create a '),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: ShaderMask(
+                        shaderCallback: (r) =>
+                            _Tokens.heroGradient.createShader(r),
+                        child: const Text(
+                          'meeting',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
+                            height: 1.1,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Pick how you want to start',
                 style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
+                  color: md.MizdahTokens.mutedOf(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 18),
               _OptionTile(
                 icon: Icons.link_rounded,
                 title: 'Create a meeting for later',
                 subtitle: 'Get a link you can share with others',
-                color: Colors.blue,
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                glow: const Color(0xFF3B82F6),
                 onTap: () => _createMeeting(context, 'Share'),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               _OptionTile(
-                icon: Icons.video_call_rounded,
+                icon: Icons.videocam_rounded,
                 title: 'Start an instant meeting',
                 subtitle: 'Join and invite people right now',
-                color: Colors.green,
+                gradient: _Tokens.heroGradient,
+                glow: _Tokens.primary,
+                primary: true,
                 onTap: () {
                   Navigator.pop(context);
                   context.push('/pre-join');
                 },
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               _OptionTile(
-                icon: Icons.calendar_today_rounded,
+                icon: Icons.event_note_rounded,
                 title: 'Schedule in Google Calendar',
                 subtitle: 'Plan a meeting in your calendar',
-                color: Colors.orange,
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                glow: const Color(0xFFF59E0B),
                 onTap: () => _scheduleMeeting(context),
               ),
             ],
@@ -2581,78 +2634,99 @@ class _OptionTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
-  final Color color;
+  /// Pill icon background gradient — distinct per option so the
+  /// sheet reads visually like the Recent-Activity rows on home.
+  final LinearGradient gradient;
+  /// Accent colour used for the icon-pill drop shadow. Usually the
+  /// brightest stop of `gradient`.
+  final Color glow;
+  /// When true the row gets a slightly larger shadow + tinted border
+  /// so it reads as the primary CTA (used for "Start an instant
+  /// meeting").
+  final bool primary;
   final VoidCallback onTap;
   const _OptionTile({
     required this.icon,
     required this.title,
     required this.subtitle,
-    required this.color,
+    required this.gradient,
+    required this.glow,
     required this.onTap,
+    this.primary = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.05)
-                : Colors.black.withValues(alpha: 0.02),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.05)
-                  : Colors.black.withValues(alpha: 0.05),
+    return md.MizdahPressScale(
+      scaleTo: 0.97,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: md.MizdahTokens.surface(context),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: primary
+                ? glow.withValues(alpha: 0.30)
+                : md.MizdahTokens.border(context),
+            width: primary ? 1.4 : 1,
+          ),
+          boxShadow: md.MizdahTokens.shadow(
+            context,
+            elevation: primary ? 0.8 : 0.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                gradient: gradient,
+                borderRadius: BorderRadius.circular(13),
+                boxShadow: [
+                  BoxShadow(
+                    color: glow.withValues(alpha: 0.32),
+                    blurRadius: 12,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Icon(icon, color: Colors.white, size: 22),
             ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(icon, color: color, size: 24),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: md.MizdahTokens.inkOf(context),
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: isDark ? Colors.white70 : Colors.black54,
-                        fontSize: 12,
-                      ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: md.MizdahTokens.mutedOf(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 14,
-                color: isDark ? Colors.white24 : Colors.black26,
-              ),
-            ],
-          ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: md.MizdahTokens.mutedOf(context),
+            ),
+          ],
         ),
       ),
     );
