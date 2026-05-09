@@ -21,6 +21,12 @@ import 'data/real_chat_repository.dart';
 const bool kUseMockChats = false;
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
+  // Use auth state directly — must NOT consume
+  // effectiveSelfEmailProvider here, because that one watches
+  // conversationsProvider, which watches this provider. The cycle
+  // collapses an entire chain. The UI layer uses
+  // effectiveSelfEmailProvider for display; the repository just
+  // needs *some* identity string for outbound socket / REST calls.
   final me = ref.watch(authProvider).user;
   final email = me?.email ?? 'me@mizdah.dev';
   if (kUseMockChats) {
@@ -49,3 +55,37 @@ final conversationDeltasProvider =
       .watch(chatRepositoryProvider)
       .watchMessages(conversationId);
 });
+
+/// Best-known email for the local user. Auth state is the primary
+/// source; when `auth.user.email` is blank — typically because the
+/// secure-storage cache pre-dates the email-storage fix or
+/// `/api/auth/me` returned `session_superseded` — we fall back to
+/// the email that appears in EVERY one of the user's conversations
+/// (the intersection of participants). With a single conversation
+/// we can't disambiguate and return ''.
+///
+/// Both the chats list and the chat detail consume this so the
+/// "peer" rendering is consistent across the chat surface.
+final effectiveSelfEmailProvider = Provider<String>((ref) {
+  final auth = ref.watch(authProvider).user;
+  final fromAuth = auth?.email.trim() ?? '';
+  if (fromAuth.isNotEmpty) return fromAuth;
+  final convs = ref.watch(conversationsProvider).asData?.value ?? const [];
+  return deriveSelfEmailFromConversations(convs);
+});
+
+/// Pure helper — compute the email that's present in every
+/// conversation. Exposed so a screen can call it directly with a
+/// custom list (e.g. tests, or call sites that already have the
+/// list in hand and want to avoid a second `ref.watch`).
+String deriveSelfEmailFromConversations(List<Conversation> convs) {
+  if (convs.length < 2) return '';
+  final candidate =
+      convs.first.participants.map((e) => e.toLowerCase()).toSet();
+  for (var i = 1; i < convs.length; i++) {
+    final ps = convs[i].participants.map((e) => e.toLowerCase()).toSet();
+    candidate.retainWhere(ps.contains);
+    if (candidate.isEmpty) return '';
+  }
+  return candidate.length == 1 ? candidate.first : '';
+}

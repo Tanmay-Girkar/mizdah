@@ -53,7 +53,13 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(authProvider).user;
-    final selfEmail = me?.email ?? '';
+    // selfEmail goes through the shared provider that falls back to
+    // the participants intersection when auth.user.email is blank
+    // (session_superseded / pre-email-storage cache). Without this
+    // fallback, peerOf returns the *first* participant — which is
+    // actually the local user — and chat rows render with the
+    // user's own name instead of the peer's.
+    final selfEmail = ref.watch(effectiveSelfEmailProvider);
     final selfUserId = me?.id ?? '';
     final async = ref.watch(conversationsProvider);
 
