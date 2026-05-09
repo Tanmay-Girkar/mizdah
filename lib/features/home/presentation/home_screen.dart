@@ -242,41 +242,14 @@ class _Header extends ConsumerWidget {
               ),
             ),
             const Spacer(),
-            // Logo + wordmark
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    gradient: _Tokens.heroGradient,
-                    borderRadius: BorderRadius.circular(6),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: Colors.white,
-                    size: 13,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'MIZDAH',
-                  style: TextStyle(
-                    color: md.MizdahTokens.inkOf(context),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 3.5,
-                  ),
-                ),
-              ],
+            // Brand logo — uses the asset shared with the app icon
+            // (assets/images/mizdahlogo.png) so the in-app header
+            // matches what users see on their launcher.
+            Image.asset(
+              'assets/images/mizdahlogo.png',
+              height: 28,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
             ),
             const Spacer(),
             // Bell with notification dot
