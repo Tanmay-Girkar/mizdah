@@ -20,7 +20,10 @@ class AboutScreen extends ConsumerStatefulWidget {
 }
 
 class _AboutScreenState extends ConsumerState<AboutScreen>
-    with SingleTickerProviderStateMixin {
+    // We drive TWO controllers here (entry + float), so we need
+    // multi-ticker support. SingleTickerProviderStateMixin would
+    // throw at construction of the second controller.
+    with TickerProviderStateMixin {
   late final AnimationController _entryCtrl;
   // Subtle floating loop on the brand mark.
   late final AnimationController _floatCtrl;
