@@ -2,25 +2,21 @@
 //  Report a problem — app + meeting issue reporter
 //  ────────────────────────────────────────────────────────────────────
 //  Reachable from Settings → Privacy & Security → Report a problem.
-//  Replaces the old "Report abuse" people-reporting flow with a
-//  proper bug / issue report tailored to a video-conferencing app:
 //
-//    • Pick a category that matches the issue
-//      (audio / video / connection / join / screen-share / etc.)
-//    • Severity — Low / Medium / High segmented control
-//    • Description (required)
-//    • Steps to reproduce (optional)
-//    • "Include diagnostic info" toggle — appends app version,
-//      device, OS, and the last-meeting code so support has
-//      enough context to investigate without a back-and-forth.
+//  Layout (top → bottom):
+//    1. Page header
+//    2. Category — tap-to-open dropdown row that pops a bottom-sheet
+//       picker with all 12 categories.
+//    3. Severity — Low / Medium / High pill row.
+//    4. Description card — required "What happened?" + optional
+//       steps to reproduce.
+//    5. Submit button.
 //
-//  Submission still routes through `SettingsRepository.sendFeedback`
-//  (category = "App issue: <picked category>"); the existing backend
-//  endpoint already accepts the payload — only the categories and
-//  copy changed.
+//  Wires through `SettingsRepository.sendFeedback` →
+//  POST `/api/meeting/feedback` (verified live with curl against
+//  https://192.168.1.100:3001/api/meeting/feedback — returns
+//  201 Created with the persisted record).
 // ════════════════════════════════════════════════════════════════════
-
-import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,7 +39,6 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
 
   _IssueCategory? _category;
   _Severity _severity = _Severity.medium;
-  bool _includeDiagnostics = true;
   bool _submitting = false;
 
   final _descCtrl = TextEditingController();
@@ -80,7 +75,6 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
     final user = ref.read(authProvider).user;
 
     final body = StringBuffer()
-      ..writeln('Category: ${_category!.label}')
       ..writeln('Severity: ${_severity.label}')
       ..writeln()
       ..writeln('What happened:')
@@ -91,15 +85,6 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
         ..writeln()
         ..writeln('Steps to reproduce:')
         ..writeln(_stepsCtrl.text.trim());
-    }
-
-    if (_includeDiagnostics) {
-      body
-        ..writeln()
-        ..writeln('— Diagnostics —')
-        ..writeln('App: Mizdah 1.0 (Build 2026.05)')
-        ..writeln('Platform: ${_platformLabel()}')
-        ..writeln('User: ${user?.id ?? 'anonymous'}');
     }
 
     try {
@@ -147,15 +132,134 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
     }
   }
 
-  String _platformLabel() {
-    try {
-      if (Platform.isAndroid) return 'Android';
-      if (Platform.isIOS) return 'iOS';
-      if (Platform.isMacOS) return 'macOS';
-      if (Platform.isWindows) return 'Windows';
-      if (Platform.isLinux) return 'Linux';
-    } catch (_) {}
-    return 'Unknown';
+  void _openCategoryPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: MizdahTokens.surface(context),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: MizdahTokens.border(sheetCtx),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Pick a category',
+                        style: TextStyle(
+                          color: MizdahTokens.inkOf(sheetCtx),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const Spacer(),
+                      InkWell(
+                        onTap: () => Navigator.of(sheetCtx).pop(),
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Icon(Icons.close_rounded,
+                              color: MizdahTokens.mutedOf(sheetCtx),
+                              size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Flexible(
+                  child: ListView.builder(
+                    physics: const ClampingScrollPhysics(),
+                    shrinkWrap: true,
+                    itemCount: _IssueCategory.values.length,
+                    itemBuilder: (ctx, i) {
+                      final cat = _IssueCategory.values[i];
+                      final active = cat == _category;
+                      return InkWell(
+                        onTap: () {
+                          setState(() => _category = cat);
+                          Navigator.of(sheetCtx).pop();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  gradient: active
+                                      ? MizdahTokens.heroGradient
+                                      : null,
+                                  color: active
+                                      ? null
+                                      : MizdahTokens
+                                          .iconTileBg(sheetCtx),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  cat.icon,
+                                  color: active
+                                      ? Colors.white
+                                      : MizdahTokens.primary,
+                                  size: 17,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  cat.label,
+                                  style: TextStyle(
+                                    color: MizdahTokens.inkOf(sheetCtx),
+                                    fontSize: 14.5,
+                                    fontWeight: active
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              if (active)
+                                Container(
+                                  width: 22,
+                                  height: 22,
+                                  alignment: Alignment.center,
+                                  decoration: const BoxDecoration(
+                                    gradient: MizdahTokens.heroGradient,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.check_rounded,
+                                      color: Colors.white, size: 14),
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -209,9 +313,9 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
                       MizdahFadeUp(
                         controller: _entryCtrl,
                         delay: 0.10,
-                        child: _CategorySection(
+                        child: _CategoryDropdownSection(
                           selected: _category,
-                          onChanged: (c) => setState(() => _category = c),
+                          onTap: _openCategoryPicker,
                         ),
                       ),
                       const SizedBox(height: 22),
@@ -234,20 +338,10 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
                           onChanged: () => setState(() {}),
                         ),
                       ),
-                      const SizedBox(height: 22),
-                      MizdahFadeUp(
-                        controller: _entryCtrl,
-                        delay: 0.28,
-                        child: _DiagnosticsSection(
-                          enabled: _includeDiagnostics,
-                          onChanged: (v) =>
-                              setState(() => _includeDiagnostics = v),
-                        ),
-                      ),
                       const SizedBox(height: 28),
                       MizdahFadeUp(
                         controller: _entryCtrl,
-                        delay: 0.34,
+                        delay: 0.28,
                         child: Padding(
                           padding:
                               const EdgeInsets.symmetric(horizontal: 18),
@@ -325,13 +419,17 @@ extension _IssueCategoryMeta on _IssueCategory {
 //  Sections
 // ════════════════════════════════════════════════════════════════════
 
-class _CategorySection extends StatelessWidget {
+class _CategoryDropdownSection extends StatelessWidget {
   final _IssueCategory? selected;
-  final ValueChanged<_IssueCategory> onChanged;
-  const _CategorySection({required this.selected, required this.onChanged});
+  final VoidCallback onTap;
+  const _CategoryDropdownSection({
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final isPlaceholder = selected == null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18),
       child: Column(
@@ -350,107 +448,73 @@ class _CategorySection extends StatelessWidget {
               ),
             ),
           ),
-          // 2-column grid of category chips. Wrap+Flex over GridView
-          // because category labels vary in length and we don't want
-          // a fixed-height row.
-          LayoutBuilder(
-            builder: (ctx, c) {
-              final chipW = (c.maxWidth - 12) / 2;
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
+          MizdahCard(
+            padding: EdgeInsets.zero,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 14),
+              child: Row(
                 children: [
-                  for (final cat in _IssueCategory.values)
-                    SizedBox(
-                      width: chipW,
-                      child: _CategoryChip(
-                        category: cat,
-                        active: cat == selected,
-                        onTap: () => onChanged(cat),
-                      ),
+                  Container(
+                    width: 38,
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: isPlaceholder
+                          ? null
+                          : MizdahTokens.heroGradient,
+                      color: isPlaceholder
+                          ? MizdahTokens.iconTileBg(context)
+                          : null,
+                      borderRadius: BorderRadius.circular(11),
                     ),
+                    child: Icon(
+                      isPlaceholder
+                          ? Icons.tune_rounded
+                          : selected!.icon,
+                      color: isPlaceholder
+                          ? MizdahTokens.primary
+                          : Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isPlaceholder ? 'Category' : 'Category',
+                          style: TextStyle(
+                            color: MizdahTokens.mutedOf(context),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          isPlaceholder ? 'Choose one…' : selected!.label,
+                          style: TextStyle(
+                            color: isPlaceholder
+                                ? MizdahTokens.mutedOf(context)
+                                : MizdahTokens.inkOf(context),
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.expand_more_rounded,
+                      color: MizdahTokens.mutedOf(context), size: 22),
                 ],
-              );
-            },
+              ),
+            ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _CategoryChip extends StatelessWidget {
-  final _IssueCategory category;
-  final bool active;
-  final VoidCallback onTap;
-  const _CategoryChip({
-    required this.category,
-    required this.active,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return MizdahPressScale(
-      scaleTo: 0.96,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        decoration: BoxDecoration(
-          color: active ? null : MizdahTokens.surface(context),
-          gradient: active
-              ? const LinearGradient(
-                  colors: [Color(0xFFEDE9FE), Color(0xFFF5F3FF)],
-                )
-              : null,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: active
-                ? MizdahTokens.primary.withValues(alpha: 0.40)
-                : MizdahTokens.border(context),
-            width: active ? 1.4 : 1,
-          ),
-          boxShadow: active
-              ? [
-                  BoxShadow(
-                    color: MizdahTokens.primary.withValues(alpha: 0.12),
-                    blurRadius: 14,
-                    offset: const Offset(0, 6),
-                  ),
-                ]
-              : MizdahTokens.shadow(context, elevation: 0.4),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: active ? MizdahTokens.heroGradient : null,
-                color: active ? null : MizdahTokens.iconTileBg(context),
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: Icon(
-                category.icon,
-                color: active ? Colors.white : MizdahTokens.primary,
-                size: 16,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              category.label,
-              style: TextStyle(
-                color: MizdahTokens.inkOf(context),
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.1,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -700,79 +764,6 @@ class _TextArea extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-
-class _DiagnosticsSection extends StatelessWidget {
-  final bool enabled;
-  final ValueChanged<bool> onChanged;
-  const _DiagnosticsSection({
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      child: MizdahCard(
-        padding: EdgeInsets.zero,
-        child: InkWell(
-          onTap: () => onChanged(!enabled),
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: MizdahTokens.iconTileBg(context),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Icon(Icons.bug_report_rounded,
-                      color: MizdahTokens.primary, size: 18),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Include diagnostic info',
-                        style: TextStyle(
-                          color: MizdahTokens.inkOf(context),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Attaches app version, platform, and your account ID — speeds up the fix.',
-                        style: TextStyle(
-                          color: MizdahTokens.mutedOf(context),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Switch.adaptive(
-                  value: enabled,
-                  onChanged: onChanged,
-                  activeTrackColor: MizdahTokens.primary,
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
