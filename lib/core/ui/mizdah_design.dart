@@ -3,7 +3,7 @@
 //  ────────────────────────────────────────────────────────────────────
 //  Single source of truth for the premium look established in the
 //  redesigned home screen. Centralised so the four "tab" screens
-//  (Home, Meetings, Call, People, Settings) share an identical
+//  (Home, Meetings, Call, Chats, Settings) share an identical
 //  palette / shadow recipe / nav layout without copy-paste drift.
 //
 //  IF YOU CHANGE COLOURS OR THE GRADIENT, you only need to edit
@@ -466,7 +466,7 @@ class MizdahTabsShell extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 
 class MizdahFloatingNav extends StatefulWidget {
-  /// 0 = Home, 1 = Meetings, 2 = Call, 3 = People, 4 = Settings.
+  /// 0 = Home, 1 = Meetings, 2 = Call, 3 = Chats, 4 = Settings.
   final int activeIndex;
 
   /// Optional tap handler. When supplied, this is called instead of
@@ -477,7 +477,7 @@ class MizdahFloatingNav extends StatefulWidget {
 
   /// Tab → route map, exposed so the shell route can keep the same
   /// list as the in-widget fallback.
-  static const tabRoutes = ['/', '/meetings', '/call-hub', '/people', '/settings'];
+  static const tabRoutes = ['/', '/meetings', '/call-hub', '/chats', '/settings'];
 
   const MizdahFloatingNav({
     super.key,
@@ -647,8 +647,8 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   index: 3,
                   activeIndex: widget.activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.people_outline_rounded,
-                  label: 'People',
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: 'Chats',
                   onTap: () => _go(3),
                 ),
               ),

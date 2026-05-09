@@ -8,7 +8,9 @@ import '../../features/call/presentation/schedule_screen.dart';
 import '../../features/call/presentation/call_hub_screen.dart';
 import '../../features/call/presentation/p2p_call_screen.dart';
 import '../../features/meetings/presentation/meetings_screen.dart';
-import '../../features/people/presentation/people_screen.dart';
+import '../../features/chats/presentation/chats_screen.dart';
+import '../../features/chats/presentation/chat_detail_screen.dart';
+import '../../features/chats/presentation/new_chat_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/settings/presentation/privacy_screen.dart';
 import '../../features/settings/presentation/report_screen.dart';
@@ -99,13 +101,13 @@ final appRouter = GoRouter(
             ),
           ],
         ),
-        // Branch 3 — People
+        // Branch 3 — Chats (replaces the legacy People tab)
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/people',
+              path: '/chats',
               pageBuilder: (context, state) =>
-                  _branchPage(state, const PeopleScreen()),
+                  _branchPage(state, const ChatsScreen()),
             ),
           ],
         ),
@@ -130,6 +132,16 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/meeting-settings/:id',
       builder: (context, state) => MeetingSettingsScreen(meetingId: state.pathParameters['id']!),
+    ),
+    GoRoute(
+      path: '/chats/new',
+      builder: (context, state) => const NewChatScreen(),
+    ),
+    GoRoute(
+      path: '/chats/:id',
+      builder: (context, state) => ChatDetailScreen(
+        conversationId: state.pathParameters['id']!,
+      ),
     ),
     GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
     GoRoute(path: '/privacy', builder: (context, state) => const PrivacyScreen()),

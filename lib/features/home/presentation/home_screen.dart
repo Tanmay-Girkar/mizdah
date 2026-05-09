@@ -1853,16 +1853,11 @@ class _FloatingNavState extends State<_FloatingNav>
                   index: 2,
                   activeIndex: _activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.people_outline_rounded,
-                  label: 'People',
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: 'Chats',
                   onTap: () {
                     _activate(2);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        behavior: SnackBarBehavior.floating,
-                        content: Text('People directory coming soon'),
-                      ),
-                    );
+                    context.go('/chats');
                   },
                 ),
               ),
