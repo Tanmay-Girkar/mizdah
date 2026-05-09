@@ -57,8 +57,14 @@ class RealMizdahRepository implements MizdahRepository {
   Future<Meeting> createMeeting({required String title, required DateTime dateTime, String? code}) async {
     if (_currentUserId == null) throw Exception("Not logged in");
     try {
+      // Backend renamed `title` → `topic` (verified by 400 response
+      // "Meeting topic is required" against /api/meetings/create on
+      // 2026-05-09). Send both keys so this client keeps working
+      // against older/newer service versions; whichever the backend
+      // reads, the other is ignored.
       final response = await _apiClient.post(ApiConfig.createMeeting, data: {
         'hostId': _currentUserId,
+        'topic': title,
         'title': title,
         'scheduledFor': dateTime.toIso8601String(),
         if (code != null) 'id': code,

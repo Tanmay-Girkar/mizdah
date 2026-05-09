@@ -33,6 +33,9 @@ class SchedulingRepository {
         ApiConfig.scheduling,
         data: {
           'hostId': hostId,
+          // Backend renamed `title` → `topic`; send both for
+          // forwards/backwards compat with the meeting service.
+          'topic': title,
           'title': title,
           'startTime': startTime.toIso8601String(),
           'endTime': endTime.toIso8601String(),
