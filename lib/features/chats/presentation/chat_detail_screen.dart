@@ -199,16 +199,30 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (ctx, i) {
                       final m = _messages[i];
-                      // Compare by user-id first (case-exact UUID),
-                      // then case-insensitive email — works whether
-                      // the backend wires sender_email, sender_id,
-                      // or both. Fixes the all-on-the-left bug when
-                      // the email casing differs between auth and
-                      // the message payload.
+                      // Three-layer mine check:
+                      //   1. user-id (UUID, case-exact)
+                      //   2. email   (case-insensitive)
+                      //   3. peer-elimination (in a 1:1 thread,
+                      //      anything not from the peer is mine)
                       final mine = m.isMine(
                         selfUserId: selfUserId,
                         selfEmail: selfEmail,
+                        peerEmail: peerEmail,
                       );
+                      // One-line diagnostic so the device log makes
+                      // mis-classification immediately obvious. If
+                      // you see `mine=false` on a message you sent,
+                      // the printed self/peer/sender values tell you
+                      // exactly which leg of isMine to look at.
+                      assert(() {
+                        debugPrint(
+                          '[chat] body="${m.body}" '
+                          'mine=$mine '
+                          'sender=${m.senderEmail} '
+                          'self=$selfEmail peer=$peerEmail',
+                        );
+                        return true;
+                      }());
                       // Group bubbles from the same sender in close
                       // succession — only show a tail on the last one.
                       final next =

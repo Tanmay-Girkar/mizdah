@@ -76,11 +76,20 @@ class ChatMessage {
     this.replyToId,
   });
 
-  /// True when this message was sent by the local user. Compares by
-  /// user ID first (case-exact UUID match), then by email
-  /// (case-insensitive). Either route is enough — backends differ on
-  /// which field they put on the wire.
-  bool isMine({String? selfUserId, String? selfEmail}) {
+  /// True when this message was sent by the local user. Three lines
+  /// of defence so the comparison never silently fails:
+  ///   1. Case-exact UUID match against `selfUserId`.
+  ///   2. Case-insensitive email match against `selfEmail`.
+  ///   3. Peer-elimination: in a 1:1 chat, if the sender's email is
+  ///      *not* the peer's email, it has to be the local user.
+  ///      This rescues the common dev-backend gotcha where auth
+  ///      state momentarily reports an empty email and (1) + (2)
+  ///      both come back false despite the message being mine.
+  bool isMine({
+    String? selfUserId,
+    String? selfEmail,
+    String? peerEmail,
+  }) {
     if (selfUserId != null &&
         selfUserId.isNotEmpty &&
         senderUserId != null &&
@@ -92,6 +101,12 @@ class ChatMessage {
         selfEmail.isNotEmpty &&
         senderEmail.isNotEmpty &&
         senderEmail.toLowerCase() == selfEmail.toLowerCase()) {
+      return true;
+    }
+    if (peerEmail != null &&
+        peerEmail.isNotEmpty &&
+        senderEmail.isNotEmpty &&
+        senderEmail.toLowerCase() != peerEmail.toLowerCase()) {
       return true;
     }
     return false;
