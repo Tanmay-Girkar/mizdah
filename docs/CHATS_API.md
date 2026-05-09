@@ -391,3 +391,73 @@ When the implementation is ready on staging, swap
 `chatRepositoryProvider` in `lib/features/chats/chats_provider.dart` from
 `MockChatRepository` to a `RealChatRepository(ApiClient(), socketClient)` —
 no UI files change.
+
+---
+
+## 10. Verification recipe (curl)
+
+The dev gateway requires a Bearer JWT. Email-verification is gated, so
+to grab a token the easiest path is to log in once on the running app and
+copy the JWT from `flutter_secure_storage` (or temporarily `print` it from
+`auth_provider.dart`'s `_initialize`). Then:
+
+```bash
+TOKEN="<bearer token>"
+BASE="https://192.168.1.100:3001"
+
+# 0. Liveness — should all return 401 without a token (already verified
+#    on 2026-05-09: every chat route returns 401 unauth, confirming the
+#    gateway has them mounted).
+curl -sk -o /dev/null -w "%{http_code}\n" $BASE/api/chats/conversations
+
+# 1. List my conversations
+curl -sk -H "Authorization: Bearer $TOKEN" $BASE/api/chats/conversations | jq
+
+# 2. Search for a peer to start a chat with
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/chats/users/search?q=alex&limit=10" | jq
+
+# 3. Open a 1:1 conversation with a peer (idempotent — repeated calls
+#    return the same conversation id)
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST $BASE/api/chats/conversations \
+  -d '{"peer_email":"alex.wong@gmail.com"}' | jq
+
+# 4. Fetch the message history (newest 50)
+CONV_ID="<id from step 3>"
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/chats/conversations/$CONV_ID/messages?limit=50" | jq
+
+# 5. Send a message — note the client_id + idempotent retry contract
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$BASE/api/chats/conversations/$CONV_ID/messages" \
+  -d '{"client_id":"curl_test_1","body":"Hello from curl"}' | jq
+
+# 6. Mark read — server should emit chat:read on the peer's socket
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$BASE/api/chats/conversations/$CONV_ID/read" -d '{}'
+```
+
+The Flutter client (`RealChatRepository`) calls these exact paths with
+this exact shape, so when curl works the app works. If any of the above
+returns something other than the documented 200/201/204, that's the bug
+and fixing it on the server side fixes the app at the same time.
+
+### Socket sanity check
+
+The Flutter client connects to `<baseUrl>/chats` as a socket.io
+namespace, with the JWT in the `auth` payload. Quick check that the
+namespace is mounted:
+
+```bash
+# Should respond with a socket.io handshake — NOT a 404 / Cannot GET.
+curl -sk -i "$BASE/socket.io/?EIO=4&transport=polling" | head -3
+```
+
+If your server uses a custom engine.io path (the existing P2P signaling
+uses `/signaling-fresh`), expose it the same way for the chats namespace
+or share the same engine.io path with namespace routing — and update
+`RealChatRepository._ensureSocket` if the path differs.
