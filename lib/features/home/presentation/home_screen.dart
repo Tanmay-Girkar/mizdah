@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -2649,12 +2650,20 @@ class _NewMeetingOptions extends StatelessWidget {
     }
   }
 
-  /// Open Google Calendar with a prefilled "Mizdah Meeting" event.
-  /// Zero backend round-trips — the meeting code is generated client-
-  /// side and the room is created on-demand the first time someone
-  /// hits the join link. Mirrors the Google Meet "Schedule" flow.
+  /// Open Google Calendar with a prefilled "Mizdah Meeting" event,
+  /// then persist a row in our own scheduling backend so the meeting
+  /// shows up in Upcoming Meetings on home + the Meetings tab.
+  ///
+  /// Calendar launch is the user-facing critical path — it's
+  /// awaited. Backend persistence is fire-and-forget (kicked off in
+  /// parallel) so a slow / down server never blocks Google Calendar
+  /// from opening. The schedule row uses `meetingId: null` —
+  /// the meeting-service migration is currently broken on the dev
+  /// gateway, but `/api/scheduling/schedule` is independent and was
+  /// confirmed live with curl on 2026-05-09.
   Future<void> _scheduleMeeting(BuildContext context) async {
     final scheduling = ref.read(calendarSchedulingServiceProvider);
+    final scheduleRepo = ref.read(schedulingRepositoryProvider);
     final user = ref.read(authProvider).user;
     final messenger = ScaffoldMessenger.of(context);
 
@@ -2664,6 +2673,7 @@ class _NewMeetingOptions extends StatelessWidget {
     final endTime = startTime.add(const Duration(hours: 1));
     final code = MeetingUtils.generateMeetingCode();
     final link = MeetingUtils.generateMeetingLink(code);
+    final timezone = DateTime.now().timeZoneName;
 
     final payload = CalendarPayload(
       title: 'Mizdah Meeting',
@@ -2672,9 +2682,30 @@ class _NewMeetingOptions extends StatelessWidget {
       hostName: (user?.name.trim().isNotEmpty ?? false) ? user!.name : null,
       startTime: startTime,
       endTime: endTime,
-      timezone: DateTime.now().timeZoneName,
+      timezone: timezone,
     );
 
+    // (1) Persist in the background — don't await. Upcoming Meetings
+    // refreshes itself via `ref.invalidate(schedulesProvider)` when
+    // the POST resolves; if it fails we log and move on (the user's
+    // Google Calendar entry already captured the meeting).
+    if (user != null) {
+      // Encode the join code in the title so the meeting code is
+      // recoverable on the Upcoming list even though `meetingId` /
+      // `meetingCode` are nullable on the backend (we still send
+      // `meetingCode` so future server versions can wire it).
+      unawaited(_persistSchedule(
+        scheduleRepo: scheduleRepo,
+        hostId: user.id,
+        title: 'Mizdah Meeting [$code]',
+        startTime: startTime,
+        endTime: endTime,
+        timezone: timezone,
+        meetingCode: code,
+      ));
+    }
+
+    // (2) Open Google Calendar instantly.
     final ok = await scheduling.schedule(payload);
     if (!ok && context.mounted) {
       // Last-resort fallback so the user can still get the link out.
@@ -2708,6 +2739,38 @@ class _NewMeetingOptions extends StatelessWidget {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _persistSchedule({
+    required SchedulingRepository scheduleRepo,
+    required String hostId,
+    required String title,
+    required DateTime startTime,
+    required DateTime endTime,
+    required String timezone,
+    required String meetingCode,
+  }) async {
+    try {
+      await scheduleRepo.scheduleMeeting(
+        hostId: hostId,
+        title: title,
+        startTime: startTime,
+        endTime: endTime,
+        recurrence: 'none',
+        timezone: timezone,
+        // meetingId: null — the dedicated meeting-service has a
+        // pending Prisma migration; the scheduling service is
+        // independent and accepts a null meeting reference.
+        meetingId: null,
+        meetingCode: meetingCode,
+      );
+      ref.invalidate(schedulesProvider);
+      ref.invalidate(callHistoryProvider);
+    } catch (e) {
+      // Calendar entry already saved on Google's side; the user is
+      // not blocked. Just log so devs can spot regressions.
+      debugPrint('[schedule] persist failed: $e');
     }
   }
 }
