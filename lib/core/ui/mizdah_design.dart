@@ -466,7 +466,7 @@ class MizdahTabsShell extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 
 class MizdahFloatingNav extends StatefulWidget {
-  /// 0 = Home, 1 = Meetings, 2 = Call, 3 = Chats, 4 = Settings.
+  /// 0 = Call, 1 = Meetings, 2 = Home (centre), 3 = Chats, 4 = Settings.
   final int activeIndex;
 
   /// Optional tap handler. When supplied, this is called instead of
@@ -477,7 +477,9 @@ class MizdahFloatingNav extends StatefulWidget {
 
   /// Tab → route map, exposed so the shell route can keep the same
   /// list as the in-widget fallback.
-  static const tabRoutes = ['/', '/meetings', '/call-hub', '/chats', '/settings'];
+  // Tab order: 0 = Call (flat, left edge) · 1 = Meetings · 2 = Home
+  // (prominent gradient centre) · 3 = Chats · 4 = Settings.
+  static const tabRoutes = ['/call-hub', '/meetings', '/', '/chats', '/settings'];
 
   const MizdahFloatingNav({
     super.key,
@@ -617,8 +619,8 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   index: 0,
                   activeIndex: widget.activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.home_rounded,
-                  label: 'Home',
+                  icon: Icons.videocam_rounded,
+                  label: 'Call',
                   onTap: () => _go(0),
                 ),
               ),
@@ -632,13 +634,15 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   onTap: () => _go(1),
                 ),
               ),
-              // Center "Call" item — slightly raised with a stronger
-              // gradient pill so it reads as the primary CTA in the
-              // bar. Tap takes you to the call hub.
+              // Centre "Home" item — slightly raised with a stronger
+              // gradient pill so it reads as the primary anchor in
+              // the bar. Tap takes you to the home dashboard.
               Expanded(
-                child: _CallNavItem(
+                child: _CenterNavItem(
                   active: widget.activeIndex == 2,
                   pulseCtrl: _pulseCtrl,
+                  icon: Icons.home_rounded,
+                  label: 'Home',
                   onTap: () => _go(2),
                 ),
               ),
@@ -840,21 +844,28 @@ class _InactiveContent extends StatelessWidget {
 /// glow halo + the label fades to a gradient text below. Doesn't need
 /// the rotating active/inactive AnimatedSwitcher — a single
 /// AnimatedContainer drives the size delta.
-class _CallNavItem extends StatefulWidget {
+/// Prominent center nav item — bigger gradient circle, raised shadow,
+/// pulse animation on activation. Reused for whichever tab the design
+/// wants to read as the primary action at the centre of the bar.
+class _CenterNavItem extends StatefulWidget {
   final bool active;
   final AnimationController pulseCtrl;
   final VoidCallback onTap;
-  const _CallNavItem({
+  final IconData icon;
+  final String label;
+  const _CenterNavItem({
     required this.active,
     required this.pulseCtrl,
     required this.onTap,
+    required this.icon,
+    required this.label,
   });
 
   @override
-  State<_CallNavItem> createState() => _CallNavItemState();
+  State<_CenterNavItem> createState() => _CenterNavItemState();
 }
 
-class _CallNavItemState extends State<_CallNavItem> {
+class _CenterNavItemState extends State<_CenterNavItem> {
   bool _pressed = false;
 
   @override
@@ -896,8 +907,8 @@ class _CallNavItemState extends State<_CallNavItem> {
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.videocam_rounded,
+                    child: Icon(
+                      widget.icon,
                       color: Colors.white,
                       size: 22,
                     ),
@@ -907,9 +918,9 @@ class _CallNavItemState extends State<_CallNavItem> {
                     ShaderMask(
                       shaderCallback: (r) =>
                           MizdahTokens.heroGradient.createShader(r),
-                      child: const Text(
-                        'Call',
-                        style: TextStyle(
+                      child: Text(
+                        widget.label,
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -918,7 +929,7 @@ class _CallNavItemState extends State<_CallNavItem> {
                     )
                   else
                     Text(
-                      'Call',
+                      widget.label,
                       style: TextStyle(
                         color: MizdahTokens.isDark(context)
                             ? const Color(0xFFA0A8BD)

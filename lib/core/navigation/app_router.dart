@@ -64,13 +64,13 @@ final appRouter = GoRouter(
       builder: (context, state, navigationShell) =>
           MizdahTabsShell(navigationShell: navigationShell),
       branches: [
-        // Branch 0 — Home
+        // Branch 0 — Call hub (flat tab on the left edge)
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/',
+              path: '/call-hub',
               pageBuilder: (context, state) =>
-                  _branchPage(state, const HomeScreen()),
+                  _branchPage(state, const CallHubScreen()),
             ),
           ],
         ),
@@ -91,13 +91,13 @@ final appRouter = GoRouter(
             ),
           ],
         ),
-        // Branch 2 — Call hub
+        // Branch 2 — Home (prominent centre tab)
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/call-hub',
+              path: '/',
               pageBuilder: (context, state) =>
-                  _branchPage(state, const CallHubScreen()),
+                  _branchPage(state, const HomeScreen()),
             ),
           ],
         ),
