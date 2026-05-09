@@ -12,10 +12,12 @@
 //       steps to reproduce.
 //    5. Submit button.
 //
-//  Wires through `SettingsRepository.sendFeedback` →
-//  POST `/api/meeting/feedback` (verified live with curl against
-//  https://192.168.1.100:3001/api/meeting/feedback — returns
-//  201 Created with the persisted record).
+//  Wires through `SettingsRepository.reportAbuse` →
+//  POST `/api/abuse/report` — the dedicated issue-reporting endpoint
+//  the admin panel reads from. (The older `/api/meeting/feedback`
+//  endpoint is for in-meeting audio/video feedback and is not
+//  surfaced in the issue-review queue, which is why submissions
+//  there were never seen by an admin.)
 // ════════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -74,24 +76,14 @@ class _ReportScreenState extends ConsumerState<ReportScreen>
     final repo = ref.read(settingsRepositoryProvider);
     final user = ref.read(authProvider).user;
 
-    final body = StringBuffer()
-      ..writeln('Severity: ${_severity.label}')
-      ..writeln()
-      ..writeln('What happened:')
-      ..writeln(_descCtrl.text.trim());
-
-    if (_stepsCtrl.text.trim().isNotEmpty) {
-      body
-        ..writeln()
-        ..writeln('Steps to reproduce:')
-        ..writeln(_stepsCtrl.text.trim());
-    }
-
     try {
-      await repo.sendFeedback(
-        category: 'App issue: ${_category!.label}',
-        description: body.toString(),
-        userEmail: user?.email ?? 'anonymous',
+      await repo.reportAbuse(
+        abuseType: 'App issue: ${_category!.label}',
+        description: _descCtrl.text.trim(),
+        severity: _severity.label,
+        steps: _stepsCtrl.text.trim(),
+        userId: user?.id,
+        userEmail: user?.email,
       );
       if (!mounted) return;
       messenger.showSnackBar(
