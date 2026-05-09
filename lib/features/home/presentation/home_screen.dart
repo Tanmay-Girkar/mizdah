@@ -577,10 +577,14 @@ class _StartMeetingCardState extends ConsumerState<_StartMeetingCard> {
   bool _pressed = false;
 
   void _open() {
+    // useRootNavigator so the sheet renders above the floating nav
+    // (which lives in the shell route). Without it, the third tile —
+    // "Schedule in Google Calendar" — gets hidden under the nav.
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      useRootNavigator: true,
       builder: (ctx) => _NewMeetingOptions(ref: ref),
     );
   }
@@ -1836,6 +1840,7 @@ class _FloatingNavState extends State<_FloatingNav>
                       context: ctx,
                       backgroundColor: Colors.transparent,
                       isScrollControlled: true,
+                      useRootNavigator: true,
                       builder: (sheetCtx) => _NewMeetingOptions(
                         ref: _ContainerWidgetRefShim(ref),
                       ),
