@@ -45,6 +45,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   bool _hydrated = false;
   bool _emojiOpen = false;
   ProviderSubscription<AsyncValue<ChatMessage>>? _deltaSub;
+  /// Bulletproof "this is mine" tracker — every message id we
+  /// produce locally via `_send` lands here, plus optimistic
+  /// `tmp_*` ids that are later replaced with the server id.
+  /// Used as the first leg of the bubble-alignment check, before
+  /// `ChatMessage.isMine`, so even if the auth state momentarily
+  /// reports an empty user (`session_superseded`), or the backend
+  /// omits the sender field on the response, or the conversation
+  /// isn't in the cache yet (brand-new chat), the message *we just
+  /// typed* always renders on the right.
+  final Set<String> _myMessageIds = {};
   /// REST poll fallback — we still want sent/delivered/read tick
   /// updates even when the /chats socket isn't connected (or the
   /// backend doesn't emit chat:status). Polls every few seconds
@@ -144,12 +154,22 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   void _mergeServerMessages(List<ChatMessage> server) {
     bool changed = false;
     for (final s in server) {
-      final i = _messages.indexWhere((m) => m.id == s.id);
+      final i = _messages.indexWhere(
+        (m) => m.id == s.id ||
+            // Server might echo our message back under a fresh id
+            // we've never seen — match by `tmp_` body to dedup.
+            (m.id.startsWith('tmp_') &&
+                m.body == s.body &&
+                m.senderEmail == s.senderEmail),
+      );
       if (i >= 0) {
-        // Update only if something actually changed (status / body)
-        // so the ListView doesn't rebuild needlessly.
         final existing = _messages[i];
-        if (existing.status != s.status || existing.body != s.body) {
+        if (_myMessageIds.contains(existing.id) && existing.id != s.id) {
+          _myMessageIds.add(s.id);
+        }
+        if (existing.status != s.status ||
+            existing.body != s.body ||
+            existing.id != s.id) {
           _messages[i] = s;
           changed = true;
         }
@@ -184,6 +204,13 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     setState(() {
       if (i >= 0) {
         final existing = _messages[i];
+        // Carry the "mine" tracker across an id change (optimistic
+        // tmp_* → server uuid) so the bubble alignment doesn't flip
+        // when the ack arrives.
+        if (_myMessageIds.contains(existing.id) &&
+            existing.id != m.id) {
+          _myMessageIds.add(m.id);
+        }
         // Status-only delta (e.g. chat:status flipping sent → read)
         // arrives with body=='' and a placeholder timestamp. Merge it
         // into the existing bubble — don't blow away the body or the
@@ -223,7 +250,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
       conversationId: widget.conversationId,
       body: body,
     );
-    setState(() => _messages.add(optimistic));
+    setState(() {
+      _myMessageIds.add(optimistic.id);
+      _messages.add(optimistic);
+    });
     _scrollToBottom();
   }
 
@@ -329,11 +359,17 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                       // weekday for this week / "Apr 22, 2026" older.
                       final showDateDivider =
                           prev == null || !_sameDay(prev.sentAt, m.sentAt);
-                      final mine = m.isMine(
-                        selfUserId: selfUserId,
-                        selfEmail: selfEmail,
-                        peerEmail: peerEmail,
-                      );
+                      // Bulletproof check first — anything we've sent
+                      // locally during this session is definitively
+                      // ours, regardless of what the server returned.
+                      // Falls through to ChatMessage.isMine for
+                      // hydrated history we didn't send ourselves.
+                      final mine = _myMessageIds.contains(m.id) ||
+                          m.isMine(
+                            selfUserId: selfUserId,
+                            selfEmail: selfEmail,
+                            peerEmail: peerEmail,
+                          );
                       assert(() {
                         debugPrint(
                           '[chat] body="${m.body}" '
