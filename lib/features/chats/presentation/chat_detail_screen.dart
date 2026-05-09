@@ -12,6 +12,8 @@
 //  page comes from `conversationHistoryProvider`. We merge the two
 //  in a local list so the UI doesn't flicker on each ack.
 
+import 'dart:async';
+
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,6 +45,11 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   bool _hydrated = false;
   bool _emojiOpen = false;
   ProviderSubscription<AsyncValue<ChatMessage>>? _deltaSub;
+  /// REST poll fallback — we still want sent/delivered/read tick
+  /// updates even when the /chats socket isn't connected (or the
+  /// backend doesn't emit chat:status). Polls every few seconds
+  /// while this screen is on top.
+  Timer? _pollTimer;
 
   void _toggleEmoji() {
     if (_emojiOpen) {
@@ -98,15 +105,71 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
           .read(chatRepositoryProvider)
           .markRead(widget.conversationId);
     });
+    // Periodic REST refresh — picks up status changes (sent →
+    // delivered → read) and any messages that arrived without a
+    // socket event firing.
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _refreshMessagesQuiet();
+    });
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _deltaSub?.close();
     _scrollCtrl.dispose();
     _textCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  /// Background refresh that doesn't reset the scroll position or
+  /// flicker the list. Merges server messages into `_messages` —
+  /// optimistic temp messages survive until their server ack arrives.
+  Future<void> _refreshMessagesQuiet() async {
+    if (!mounted || !_hydrated) return;
+    try {
+      final fresh = await ref
+          .read(chatRepositoryProvider)
+          .fetchMessages(conversationId: widget.conversationId);
+      if (!mounted) return;
+      _mergeServerMessages(fresh);
+    } catch (_) {
+      // Quiet — next tick will retry.
+    }
+  }
+
+  /// Reconcile a fresh server-side messages list with the local one
+  /// without losing optimistic sends or scroll position.
+  void _mergeServerMessages(List<ChatMessage> server) {
+    bool changed = false;
+    for (final s in server) {
+      final i = _messages.indexWhere((m) => m.id == s.id);
+      if (i >= 0) {
+        // Update only if something actually changed (status / body)
+        // so the ListView doesn't rebuild needlessly.
+        final existing = _messages[i];
+        if (existing.status != s.status || existing.body != s.body) {
+          _messages[i] = s;
+          changed = true;
+        }
+      } else if (!s.id.startsWith('tmp_')) {
+        _messages.add(s);
+        changed = true;
+      }
+    }
+    // Drop any local server-id messages that the server no longer
+    // returns (deleted on backend). Optimistic temps stay.
+    final serverIds = server.map((m) => m.id).toSet();
+    final beforeLen = _messages.length;
+    _messages.removeWhere((m) =>
+        !m.id.startsWith('tmp_') && !serverIds.contains(m.id));
+    if (_messages.length != beforeLen) changed = true;
+    if (changed) {
+      // Re-sort by sentAt to keep ordering canonical.
+      _messages.sort((a, b) => a.sentAt.compareTo(b.sentAt));
+      setState(() {});
+    }
   }
 
   void _applyDelta(ChatMessage m) {
@@ -116,14 +179,27 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
         (existing.status == MessageStatus.sending &&
             existing.body == m.body &&
             existing.senderEmail == m.senderEmail));
+    var isStatusOnly = false;
+    var shouldScroll = false;
     setState(() {
       if (i >= 0) {
-        _messages[i] = m;
-      } else {
+        final existing = _messages[i];
+        // Status-only delta (e.g. chat:status flipping sent → read)
+        // arrives with body=='' and a placeholder timestamp. Merge it
+        // into the existing bubble — don't blow away the body or the
+        // real sentAt with the synthetic event.
+        isStatusOnly = m.body.isEmpty && existing.body.isNotEmpty;
+        _messages[i] = isStatusOnly
+            ? existing.copyWith(status: m.status)
+            : m;
+      } else if (m.body.isNotEmpty) {
         _messages.add(m);
+        shouldScroll = true;
       }
     });
-    _scrollToBottom();
+    // Only follow new content; don't yank the user back to bottom on
+    // a tick flipping in the middle of the thread.
+    if (shouldScroll && !isStatusOnly) _scrollToBottom();
   }
 
   void _scrollToBottom() {
