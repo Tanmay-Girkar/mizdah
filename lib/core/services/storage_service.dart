@@ -13,6 +13,8 @@ class StorageService {
   static const String tokenKey = 'auth_token';
   static const String userIdKey = 'auth_user_id';
   static const String userNameKey = 'auth_user_name';
+  static const String userEmailKey = 'auth_user_email';
+  static const String userAvatarKey = 'auth_user_avatar_url';
 
   static Future<void> saveToken(String token) async {
     await _storage.write(key: tokenKey, value: token);
@@ -26,15 +28,32 @@ class StorageService {
     await _storage.delete(key: tokenKey);
   }
 
-  static Future<void> saveUserData({required String id, required String name}) async {
+  /// Persist enough of the user object to rehydrate auth state at
+  /// startup even when /api/auth/me is unreachable or returns null
+  /// (e.g. `session_superseded`). Email is essential — every chat /
+  /// scheduling / "is this mine" comparison needs it.
+  static Future<void> saveUserData({
+    required String id,
+    required String name,
+    String? email,
+    String? avatarUrl,
+  }) async {
     await _storage.write(key: userIdKey, value: id);
     await _storage.write(key: userNameKey, value: name);
+    if (email != null) {
+      await _storage.write(key: userEmailKey, value: email);
+    }
+    if (avatarUrl != null) {
+      await _storage.write(key: userAvatarKey, value: avatarUrl);
+    }
   }
 
   static Future<Map<String, String?>> getUserData() async {
     return {
       'id': await _storage.read(key: userIdKey),
       'name': await _storage.read(key: userNameKey),
+      'email': await _storage.read(key: userEmailKey),
+      'avatarUrl': await _storage.read(key: userAvatarKey),
     };
   }
 

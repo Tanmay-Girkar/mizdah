@@ -45,31 +45,49 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> _checkAuth() async {
     final token = await StorageService.getToken();
     final userData = await StorageService.getUserData();
-    
+
     if (token != null) {
       if (userData['id'] != null && userData['name'] != null) {
+        // Rehydrate the full user from secure storage — including
+        // email and avatarUrl. These are essential for chat sender
+        // matching, scheduling, and avatar rendering when
+        // /api/auth/me is later unreachable or returns null
+        // (`session_superseded`).
         state = state.copyWith(
-          status: AuthStatus.authenticated, 
+          status: AuthStatus.authenticated,
           token: token,
           user: User(
-            id: userData['id']!, 
-            name: userData['name']!, 
-            email: '', 
+            id: userData['id']!,
+            name: userData['name']!,
+            email: userData['email'] ?? '',
             role: 'USER',
+            avatarUrl: userData['avatarUrl'],
           ),
         );
       } else {
         state = state.copyWith(status: AuthStatus.authenticating, token: token);
       }
-      
+
       try {
         final user = await _authRepository.getMe();
         if (user != null) {
-          await StorageService.saveUserData(id: user.id, name: user.name);
+          await StorageService.saveUserData(
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            avatarUrl: user.avatarUrl,
+          );
           state = state.copyWith(status: AuthStatus.authenticated, user: user);
         } else if (userData['id'] == null) {
+          // No cached user AND /me said null — actually logged out.
           await logout();
         }
+        // ELSE: /me returned null but we have a cached user. Could
+        // be `session_superseded` while another device holds the
+        // active session, or a transient backend hiccup. Keep the
+        // cached user in state so the UI keeps working — the token
+        // is still valid for the other backend services that don't
+        // gate on /me.
       } catch (e) {
         debugPrint("Initial auth check network error: $e");
       }
@@ -97,9 +115,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final token = data['token'];
       final user = User.fromJson(data['user'] ?? {});
-      
+
       await StorageService.saveToken(token);
-      await StorageService.saveUserData(id: user.id, name: user.name);
+      await StorageService.saveUserData(
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+      );
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
       debugPrint("Login error: $e");
@@ -126,9 +149,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final token = data['token'];
       final user = User.fromJson(data['user'] ?? {});
-      
+
       await StorageService.saveToken(token);
-      await StorageService.saveUserData(id: user.id, name: user.name);
+      await StorageService.saveUserData(
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+      );
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
     } catch (e) {
       debugPrint("Signup error: $e");
@@ -161,6 +189,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
         name: name,
         password: password,
         avatarUrl: avatarUrl,
+      );
+      // Persist the fresh user data so a later restart doesn't fall
+      // back to a stale name / email / avatar.
+      await StorageService.saveUserData(
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        avatarUrl: updatedUser.avatarUrl,
       );
       state = state.copyWith(user: updatedUser);
     } catch (e) {

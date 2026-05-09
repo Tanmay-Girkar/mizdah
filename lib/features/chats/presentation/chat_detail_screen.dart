@@ -260,7 +260,6 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(authProvider).user;
-    final selfEmail = me?.email ?? '';
     final selfUserId = me?.id ?? '';
     final history =
         ref.watch(conversationHistoryProvider(widget.conversationId));
@@ -273,18 +272,29 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
       },
     );
 
-    // Find peer info from the conversations list (already loaded).
+    // Pull all conversations up front — they're authoritative for
+    // both the peer name AND the self-email derivation below.
     final allConvs = ref.watch(conversationsProvider).asData?.value ?? const [];
     final conv = allConvs.firstWhere(
       (c) => c.id == widget.conversationId,
       orElse: () => Conversation(
         id: widget.conversationId,
-        participants: [selfEmail, ''],
+        participants: [me?.email ?? '', ''],
         lastMessage: null,
         unreadCount: 0,
         updatedAt: DateTime.now(),
       ),
     );
+    // selfEmail derivation — auth state is the primary source, but
+    // when /api/auth/me returned `session_superseded` (or another
+    // hiccup left user.email blank), fall back to the email that
+    // appears in EVERY one of the user's conversations: by
+    // definition that's the local user. Catches the historical case
+    // where messages were sent in a previous session and need to
+    // be aligned right.
+    final selfEmail = (me?.email.trim().isNotEmpty ?? false)
+        ? me!.email
+        : _deriveSelfEmail(allConvs);
     final peerEmail = conv.peerOf(selfEmail);
     final peerName = (conv.title?.isNotEmpty ?? false)
         ? conv.title!
@@ -465,6 +475,27 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
 
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// When auth state has no email (e.g. `/api/auth/me` returned null
+  /// with `session_superseded` and the cached user pre-dates the
+  /// email-storage fix), derive the local user's email from the
+  /// conversation participants list. The email that appears in
+  /// every one of the user's conversations is by definition the
+  /// local user's. With a single conversation we can't distinguish
+  /// — we return ''. Both legs of `isMine` (email match and peer-
+  /// elimination) handle empty values gracefully.
+  static String _deriveSelfEmail(List<Conversation> convs) {
+    if (convs.isEmpty) return '';
+    if (convs.length == 1) return '';
+    final candidate =
+        convs.first.participants.map((e) => e.toLowerCase()).toSet();
+    for (var i = 1; i < convs.length; i++) {
+      final ps = convs[i].participants.map((e) => e.toLowerCase()).toSet();
+      candidate.retainWhere(ps.contains);
+      if (candidate.isEmpty) return '';
+    }
+    return candidate.length == 1 ? candidate.first : '';
+  }
 }
 
 /// Centered date chip placed between bubble groups when the day
