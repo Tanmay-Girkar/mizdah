@@ -460,19 +460,6 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           _RoundIcon(
-            icon: Icons.videocam_rounded,
-            onTap: () {
-              // Future: kick a /pre-join with a fresh code.
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Video call from chat — coming soon'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-          ),
-          const SizedBox(width: 8),
-          _RoundIcon(
             icon: Icons.call_rounded,
             onTap: () {
               ScaffoldMessenger.of(context).showSnackBar(
