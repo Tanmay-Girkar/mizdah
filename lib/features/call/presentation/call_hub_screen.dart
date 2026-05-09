@@ -9,20 +9,18 @@
 //       audio + video call buttons that fire
 //       `p2pCallProvider.startCall(...)`.
 //
-//    2. Call log — WhatsApp-style chronological call history grouped
-//       by date (Today / Yesterday / weekday / date). Each row shows
-//       a status icon (Outgoing / Incoming / Missed), the meeting
-//       label, time, and duration. Tap a row to redial via
-//       `/pre-join/<code>`.
+//    2. Call log — WhatsApp-style chronological log of actual P2P
+//       call events grouped by date (Today / Yesterday / weekday /
+//       date). Each row shows the peer name, a status icon
+//       (Outgoing / Incoming / Missed / Declined / Cancelled), time,
+//       and duration. Tap a row to call that peer back.
 //
-//  Data source: `callHistoryProvider` → `getUserHistory(userId)` →
-//  `GET /api/participant/history/{userId}` (already wired). Status is
-//  derived locally:
-//    • outgoing  ⇐ hostId == me
-//    • incoming  ⇐ hostId != me
-//    • missed    ⇐ duration == 0  (regardless of direction)
-//  "Decline" requires backend support — flagged in CHATS_API.md /
-//  participant-service tickets but not yet present in the response.
+//  Data source: `callLogProvider` — backed by `LocalCallLogRepository`
+//  (SharedPreferences). Entries are appended by `P2PCallNotifier`
+//  whenever a P2P call reaches a terminal state (declined / missed /
+//  answered+ended / cancelled / failed). This is local-only for v1;
+//  the server-backed multi-device version is specified in
+//  docs/CALL_HISTORY_API.md.
 // ════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
@@ -33,11 +31,11 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/ui/mizdah_design.dart';
-import '../../../core/utils/meeting_utils.dart';
 import '../../../data/models/models.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../../auth/auth_provider.dart';
-import '../../home/presentation/home_screen.dart' show callHistoryProvider;
+import '../call_log_provider.dart';
+import '../data/call_log_models.dart';
 import '../p2p_call_provider.dart';
 
 class CallHubScreen extends ConsumerStatefulWidget {
@@ -159,7 +157,7 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
                     controller: _entryCtrl,
                     delay: 0.18,
                     child: _query.isEmpty
-                        ? const _CallLogSection()
+                        ? _CallLogSection(onRedial: _placeCall)
                         : _SearchResultsSection(
                             results: _results,
                             busy: _searching,
@@ -361,14 +359,14 @@ class _SearchResultsSection extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 
 class _CallLogSection extends ConsumerWidget {
-  const _CallLogSection();
+  final void Function(User, {required bool withVideo}) onRedial;
+  const _CallLogSection({required this.onRedial});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final history = ref.watch(callHistoryProvider);
-    final me = ref.watch(authProvider).user?.id;
+    final logAsync = ref.watch(callLogProvider);
 
-    return history.when(
+    return logAsync.when(
       loading: () => const Padding(
         padding: EdgeInsets.symmetric(vertical: 60),
         child: Center(
@@ -393,8 +391,8 @@ class _CallLogSection extends ConsumerWidget {
           ),
         ),
       ),
-      data: (items) {
-        if (items.isEmpty) {
+      data: (entries) {
+        if (entries.isEmpty) {
           return const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18),
             child: MizdahCard(
@@ -403,20 +401,17 @@ class _CallLogSection extends ConsumerWidget {
                 icon: Icons.call_rounded,
                 title: 'No calls yet',
                 subtitle:
-                    'Search anyone above to start a call. Your call history will show up here.',
+                    'Search anyone above to start a call. Each call you place or receive will appear here.',
               ),
             ),
           );
         }
-        // Newest first.
-        final sorted = [...items]
-          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-        // Group by date label so the list reads like WhatsApp's calls
-        // tab — Today / Yesterday / weekday / date.
-        final groups = <String, List<CallHistory>>{};
-        for (final h in sorted) {
-          final label = _dateLabel(h.timestamp);
-          groups.putIfAbsent(label, () => []).add(h);
+        // Repository emits newest-first already; group by date so the
+        // list reads like the WhatsApp Calls tab.
+        final groups = <String, List<CallLogEntry>>{};
+        for (final e in entries) {
+          final label = _dateLabel(e.startedAt);
+          groups.putIfAbsent(label, () => []).add(e);
         }
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -445,7 +440,7 @@ class _CallLogSection extends ConsumerWidget {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        '${sorted.length}',
+                        '${entries.length}',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,
@@ -456,12 +451,12 @@ class _CallLogSection extends ConsumerWidget {
                   ],
                 ),
               ),
-              for (final entry in groups.entries) ...[
+              for (final group in groups.entries) ...[
                 Padding(
                   padding:
                       const EdgeInsets.only(left: 4, top: 14, bottom: 6),
                   child: Text(
-                    entry.key.toUpperCase(),
+                    group.key.toUpperCase(),
                     style: TextStyle(
                       color: MizdahTokens.mutedOf(context),
                       fontSize: 10.5,
@@ -470,10 +465,10 @@ class _CallLogSection extends ConsumerWidget {
                     ),
                   ),
                 ),
-                for (final item in entry.value)
+                for (final entry in group.value)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: _CallLogRow(item: item, isOutgoing: item.hostId == me),
+                    child: _CallLogRow(entry: entry, onRedial: onRedial),
                   ),
               ],
             ],
@@ -499,32 +494,57 @@ class _CallLogSection extends ConsumerWidget {
 }
 
 /// One row in the call log. Visuals match the WhatsApp pattern:
-/// avatar, title, status icon + label + time on the next line, and a
-/// duration tag on the right when the call connected.
+/// avatar, peer name, status icon + label + time + duration on the
+/// next line, and a tappable call-back glyph on the right.
 class _CallLogRow extends StatelessWidget {
-  final CallHistory item;
-  final bool isOutgoing;
-  const _CallLogRow({required this.item, required this.isOutgoing});
+  final CallLogEntry entry;
+  final void Function(User, {required bool withVideo}) onRedial;
+  const _CallLogRow({required this.entry, required this.onRedial});
 
-  bool get _missed => item.duration == Duration.zero || item.isMissed;
+  bool get _isOutgoing => entry.direction == CallDirection.outgoing;
+
+  bool get _isFailureLike =>
+      entry.outcome == CallOutcome.missed ||
+      entry.outcome == CallOutcome.declined ||
+      entry.outcome == CallOutcome.failed ||
+      entry.outcome == CallOutcome.cancelled;
 
   IconData get _statusIcon {
-    if (_missed) {
-      return isOutgoing
-          ? Icons.call_missed_outgoing_rounded
-          : Icons.call_missed_rounded;
+    switch (entry.outcome) {
+      case CallOutcome.answered:
+        return _isOutgoing
+            ? Icons.call_made_rounded
+            : Icons.call_received_rounded;
+      case CallOutcome.declined:
+        return Icons.call_end_rounded;
+      case CallOutcome.missed:
+        return _isOutgoing
+            ? Icons.call_missed_outgoing_rounded
+            : Icons.call_missed_rounded;
+      case CallOutcome.cancelled:
+        return Icons.call_made_rounded;
+      case CallOutcome.failed:
+        return Icons.error_outline_rounded;
     }
-    return isOutgoing
-        ? Icons.call_made_rounded
-        : Icons.call_received_rounded;
   }
 
-  Color get _statusColor =>
-      _missed ? const Color(0xFFE54848) : const Color(0xFF10B981);
+  Color get _statusColor => entry.outcome == CallOutcome.answered
+      ? const Color(0xFF10B981)
+      : const Color(0xFFE54848);
 
   String get _statusLabel {
-    if (_missed) return 'Missed';
-    return isOutgoing ? 'Outgoing' : 'Incoming';
+    switch (entry.outcome) {
+      case CallOutcome.answered:
+        return _isOutgoing ? 'Outgoing' : 'Incoming';
+      case CallOutcome.declined:
+        return _isOutgoing ? 'Declined' : 'You declined';
+      case CallOutcome.missed:
+        return _isOutgoing ? 'No answer' : 'Missed';
+      case CallOutcome.cancelled:
+        return 'Cancelled';
+      case CallOutcome.failed:
+        return 'Failed';
+    }
   }
 
   String _formatDuration(Duration d) {
@@ -536,29 +556,27 @@ class _CallLogRow extends StatelessWidget {
     return m == 0 ? '${h}h' : '${h}h ${m}m';
   }
 
+  void _redial(BuildContext context) {
+    final target = User(
+      id: entry.peerUserId,
+      name: entry.peerName.isEmpty ? 'Unknown' : entry.peerName,
+      email: entry.peerEmail ?? '',
+    );
+    onRedial(target, withVideo: entry.withVideo);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final time = DateFormat('h:mm a').format(item.timestamp);
-    final duration = _formatDuration(item.duration);
-    final code = item.meetingCode?.isNotEmpty == true
-        ? MeetingUtils.extractCode(item.meetingCode!)
-        : null;
-    // Best-effort display name. The participant API doesn't carry a
-    // "peer name" yet — fall back to the meeting title (the model's
-    // own resolver already cleans up URLs / long codes), or the
-    // pretty meeting code as a last resort.
-    final title = item.title.isNotEmpty
-        ? item.title
-        : (code != null ? 'Meeting $code' : 'Past call');
+    final time = DateFormat('h:mm a').format(entry.startedAt);
+    final duration = _formatDuration(entry.duration);
+    final name = entry.peerName.isNotEmpty ? entry.peerName : 'Unknown';
 
     return MizdahCard(
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
-      onTap: code == null
-          ? null
-          : () => context.push('/pre-join/$code'),
+      onTap: () => _redial(context),
       child: Row(
         children: [
-          MizdahAvatar(name: title, size: 44),
+          MizdahAvatar(name: name, size: 44),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -566,11 +584,11 @@ class _CallLogRow extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  title,
+                  name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: _missed
+                    color: _isFailureLike
                         ? const Color(0xFFE54848)
                         : MizdahTokens.inkOf(context),
                     fontSize: 14.5,
@@ -599,7 +617,7 @@ class _CallLogRow extends StatelessWidget {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    if (duration.isNotEmpty) ...[
+                    if (duration.isNotEmpty)
                       Text(
                         ' · $duration',
                         style: TextStyle(
@@ -608,41 +626,32 @@ class _CallLogRow extends StatelessWidget {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                    ],
                   ],
                 ),
               ],
             ),
           ),
-          // Trailing call-back glyph — matches WhatsApp's tappable
-          // phone glyph at the row's right edge. Tap the row (or the
-          // glyph) to land on /pre-join/<code> and re-enter.
+          // Trailing call-back glyph — tap to redial that peer with
+          // the same media kind (video/audio) as the original call.
           Container(
             width: 36,
             height: 36,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: code == null
-                  ? MizdahTokens.iconTileBg(context)
-                  : null,
-              gradient: code == null
-                  ? null
-                  : (_missed
-                      ? const LinearGradient(
-                          colors: [Color(0xFFE54848), Color(0xFFB91C1C)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        )
-                      : MizdahTokens.heroGradient),
+              gradient: _isFailureLike
+                  ? const LinearGradient(
+                      colors: [Color(0xFFE54848), Color(0xFFB91C1C)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : MizdahTokens.heroGradient,
               shape: BoxShape.circle,
             ),
             child: Icon(
-              isOutgoing
+              entry.withVideo
                   ? Icons.videocam_rounded
                   : Icons.call_rounded,
-              color: code == null
-                  ? MizdahTokens.mutedOf(context)
-                  : Colors.white,
+              color: Colors.white,
               size: 16,
             ),
           ),

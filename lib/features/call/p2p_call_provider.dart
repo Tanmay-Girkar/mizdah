@@ -25,6 +25,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../core/services/p2p_call_service.dart';
 import '../../data/models/models.dart';
 import '../auth/auth_provider.dart';
+import 'call_log_provider.dart';
+import 'data/call_log_models.dart';
 
 enum P2PCallPhase {
   idle,
@@ -120,6 +122,82 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   final P2PCallService _service = P2PCallService();
   P2PCallService get service => _service;
 
+  // ── Per-call tracking — used to assemble a CallLogEntry on every
+  //    terminal event. Reset after each append. peerEmail is null on
+  //    incoming (the signaling payload doesn't carry it yet).
+  DateTime? _callStartedAt;
+  DateTime? _callConnectedAt;
+  CallDirection? _logDirection;
+  String? _logPeerUserId;
+  String? _logPeerName;
+  String? _logPeerEmail;
+  bool _logWithVideo = true;
+  // Keep the callId after the state copy nukes it, so the terminal
+  // log helper can still produce a stable entry id.
+  String? _logCallId;
+
+  void _trackOutgoing({
+    required String callId,
+    required User target,
+    required bool withVideo,
+  }) {
+    _callStartedAt = DateTime.now();
+    _callConnectedAt = null;
+    _logDirection = CallDirection.outgoing;
+    _logPeerUserId = target.id;
+    _logPeerName = target.name;
+    _logPeerEmail = target.email.isEmpty ? null : target.email;
+    _logWithVideo = withVideo;
+    _logCallId = callId;
+  }
+
+  void _trackIncoming(P2PIncomingCall call) {
+    _callStartedAt = DateTime.now();
+    _callConnectedAt = null;
+    _logDirection = CallDirection.incoming;
+    _logPeerUserId = call.fromUserId;
+    _logPeerName = call.fromName;
+    _logPeerEmail = null;
+    _logWithVideo = true;
+    _logCallId = call.callId;
+  }
+
+  /// Append one entry to the call log. Repository dedups by id, so
+  /// firing this twice for the same call is harmless. After append,
+  /// the per-call trackers are cleared so the next call starts clean.
+  void _appendLog(CallOutcome outcome, {String? overrideCallId}) {
+    final id = overrideCallId ?? _logCallId;
+    final dir = _logDirection;
+    final peerId = _logPeerUserId;
+    if (id == null || dir == null || peerId == null) return;
+    final startedAt = _callStartedAt ?? DateTime.now();
+    final connectedAt = _callConnectedAt;
+    final durationSeconds =
+        (outcome == CallOutcome.answered && connectedAt != null)
+            ? DateTime.now().difference(connectedAt).inSeconds
+            : 0;
+    final entry = CallLogEntry(
+      id: id,
+      peerUserId: peerId,
+      peerName: _logPeerName ?? 'Unknown',
+      peerEmail: _logPeerEmail,
+      startedAt: startedAt,
+      durationSeconds: durationSeconds,
+      direction: dir,
+      outcome: outcome,
+      withVideo: _logWithVideo,
+    );
+    // Fire-and-forget — repository writes to SharedPreferences.
+    _ref.read(callLogRepositoryProvider).append(entry);
+    _callStartedAt = null;
+    _callConnectedAt = null;
+    _logDirection = null;
+    _logPeerUserId = null;
+    _logPeerName = null;
+    _logPeerEmail = null;
+    _logCallId = null;
+  }
+
   // ── Auth → service lifecycle ─────────────────────────────────────
 
   Future<void> _onAuthChanged(AuthState? prev, AuthState next) async {
@@ -153,6 +231,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         _service.declineCall(call);
         return;
       }
+      _trackIncoming(call);
       state = state.copyWith(
         phase: P2PCallPhase.incoming,
         callId: call.callId,
@@ -172,6 +251,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onCallDeclined = (callId) {
+      // Caller side: my outgoing call was rejected by the peer.
+      _appendLog(CallOutcome.declined, overrideCallId: callId);
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'Call declined',
@@ -180,6 +261,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onCallCancelled = (callId) {
+      // Callee side: caller hung up before I answered → I missed it.
+      _appendLog(CallOutcome.missed, overrideCallId: callId);
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'Caller cancelled',
@@ -189,6 +272,12 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onCallEnded = (callId, reason) async {
+      // If media ever connected, this is an "answered" call with a
+      // real duration; otherwise it's a connection failure.
+      final outcome = _callConnectedAt != null
+          ? CallOutcome.answered
+          : CallOutcome.failed;
+      _appendLog(outcome, overrideCallId: callId);
       await _disposeRenderers();
       state = state.copyWith(
         phase: P2PCallPhase.ended,
@@ -200,6 +289,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onCalleeOffline = (callId) {
+      // Caller side: peer was offline / unreachable.
+      _appendLog(CallOutcome.missed, overrideCallId: callId);
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'User unavailable',
@@ -208,6 +299,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onMediaConnected = () {
+      _callConnectedAt = DateTime.now();
       state = state.copyWith(
         phase: P2PCallPhase.active,
         mediaConnected: true,
@@ -258,6 +350,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       ),
       withVideo: withVideo,
     );
+    _trackOutgoing(callId: callId, target: target, withVideo: withVideo);
     state = state.copyWith(
       phase: P2PCallPhase.outgoing,
       callId: callId,
@@ -291,6 +384,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   void declineIncoming() {
     final incoming = state.incoming;
     if (incoming != null) _service.declineCall(incoming);
+    _appendLog(CallOutcome.declined, overrideCallId: state.callId);
     state = state.copyWith(
       phase: P2PCallPhase.idle,
       clearCallId: true,
@@ -303,6 +397,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   /// Caller side — cancel before the callee answers.
   void cancelOutgoing() {
     _service.cancelCall();
+    _appendLog(CallOutcome.cancelled, overrideCallId: state.callId);
     state = state.copyWith(
       phase: P2PCallPhase.idle,
       clearCallId: true,
