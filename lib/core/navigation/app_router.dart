@@ -14,6 +14,8 @@ import '../../features/settings/presentation/privacy_screen.dart';
 import '../../features/settings/presentation/report_screen.dart';
 import '../../features/settings/presentation/meeting_settings_screen.dart';
 import '../../features/settings/presentation/meeting_preferences_screen.dart';
+import '../../features/settings/presentation/edit_profile_screen.dart';
+import '../../features/settings/presentation/about_screen.dart';
 import '../../features/meeting/presentation/meeting_room_screen.dart';
 import '../../features/meeting/presentation/pre_join_screen.dart';
 import '../../features/meeting/presentation/meeting_designs_preview.dart';
@@ -134,6 +136,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/meeting-preferences',
       builder: (context, state) => const MeetingPreferencesScreen(),
+    ),
+    GoRoute(
+      path: '/edit-profile',
+      builder: (context, state) => const EditProfileScreen(),
+    ),
+    GoRoute(
+      path: '/about',
+      builder: (context, state) => const AboutScreen(),
     ),
     GoRoute(
       path: '/pre-join',

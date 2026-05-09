@@ -165,7 +165,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                         icon: Icons.account_circle_rounded,
                         label: 'Edit profile',
                         sublabel: 'Name, photo, display preferences',
-                        onTap: () => _comingSoon(context, 'Edit profile'),
+                        onTap: () => context.push('/edit-profile'),
                       ),
                       const _Divider(),
                       _SettingRow(
@@ -226,7 +226,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                         icon: Icons.info_outline_rounded,
                         label: 'About Mizdah',
                         sublabel: 'Version 1.0 · Build 2026.05',
-                        onTap: () {},
+                        onTap: () => context.push('/about'),
                       ),
                     ],
                   ),
@@ -277,6 +277,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     );
   }
 
+  // ignore: unused_element
   static void _comingSoon(BuildContext context, String label) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
