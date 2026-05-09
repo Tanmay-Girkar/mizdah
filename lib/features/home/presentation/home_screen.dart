@@ -2695,9 +2695,26 @@ class _NewMeetingOptions extends StatelessWidget {
       ref.invalidate(schedulesProvider);
       ref.invalidate(callHistoryProvider);
     } catch (e) {
+      // Keep the raw error in the device log for devs / backend
+      // debugging, but don't dump it on the user. Detect the specific
+      // "Prisma column doesn't exist" 500 we see while the backend
+      // migration is mid-flight and surface a useful hint.
+      debugPrint('[schedule] $e');
+      final raw = e.toString().toLowerCase();
+      final friendly = raw.contains('does not exist in the current')
+          ? 'Server is mid-migration — backend team needs to run the meeting-service migration before scheduling works.'
+          : 'Couldn\'t schedule the meeting. Try again, or contact support if this keeps happening.';
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to schedule meeting: $e')),
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFFB42318),
+            content: Text(
+              friendly,
+              style: const TextStyle(color: Colors.white),
+            ),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     }
