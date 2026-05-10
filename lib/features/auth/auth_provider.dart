@@ -15,7 +15,7 @@ import '../../core/services/storage_service.dart';
 /// **Flip back to `false` before shipping** — the fake user has a
 /// hardcoded id/email and can't actually authenticate against any
 /// real endpoint. While true, login/signup screens never show.
-const bool kBypassAuth = true;
+const bool kBypassAuth = false;
 
 enum AuthStatus { authenticated, unauthenticated, authenticating, initial }
 
