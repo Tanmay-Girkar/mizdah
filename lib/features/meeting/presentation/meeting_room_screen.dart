@@ -3,6 +3,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
+import 'meeting_effects_sheet.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
 import 'widgets/adjust_view_sheet.dart';
@@ -2398,6 +2399,23 @@ class _MeetingTopBar extends StatelessWidget {
           _TopBarIconButton(
             icon: Icons.cameraswitch_outlined,
             onTap: onSwitchCamera,
+          ),
+          const SizedBox(width: 8),
+          // Video effects sheet — Touch up, Background blur,
+          // Outgoing video quality. Opens a modal bottom sheet so
+          // the meeting view stays visible underneath while the
+          // user tweaks settings.
+          _TopBarIconButton(
+            icon: Icons.auto_awesome_rounded,
+            onTap: () {
+              showModalBottomSheet<void>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                useRootNavigator: true,
+                builder: (_) => const MeetingEffectsSheet(),
+              );
+            },
           ),
         ],
       ),

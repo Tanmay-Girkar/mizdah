@@ -26,6 +26,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/ui/mizdah_design.dart';
 import '../audio_preferences_provider.dart';
 import '../meeting_layout_provider.dart';
+import '../video_preferences_provider.dart';
 
 class MeetingPreferencesScreen extends ConsumerStatefulWidget {
   const MeetingPreferencesScreen({super.key});
@@ -62,6 +63,7 @@ class _MeetingPreferencesScreenState
     final hideNoVideo = ref.watch(hideTilesWithoutVideoProvider);
     final muteOnJoin = ref.watch(muteOnJoinProvider);
     final noiseLevel = ref.watch(noiseSuppressionProvider);
+    final videoQuality = ref.watch(outgoingVideoQualityProvider);
 
     return Scaffold(
       backgroundColor: MizdahTokens.bg(context),
@@ -249,6 +251,36 @@ class _MeetingPreferencesScreenState
                                           .set(v),
                                     ),
                                   ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+
+                      // ── Video section ─────────────────────────
+                      // Outgoing video quality only — touch up +
+                      // background blur live in the in-meeting
+                      // effects sheet, not here.
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.36,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _SectionLabel(label: 'Video'),
+                              const SizedBox(height: 8),
+                              MizdahCard(
+                                padding: EdgeInsets.zero,
+                                child: _VideoQualityRow(
+                                  quality: videoQuality,
+                                  onChanged: (q) => ref
+                                      .read(outgoingVideoQualityProvider
+                                          .notifier)
+                                      .set(q),
                                 ),
                               ),
                             ],
@@ -673,6 +705,153 @@ class _SegmentedRow extends StatelessWidget {
                             l.label,
                             style: TextStyle(
                               color: l == level
+                                  ? Colors.white
+                                  : MizdahTokens.mutedOf(context),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Outgoing video quality row — same visual recipe as the noise-
+/// suppression segmented row above, swapped icon + 3 different
+/// labels (Auto / 720p / 1080p).
+class _VideoQualityRow extends StatelessWidget {
+  final OutgoingVideoQuality quality;
+  final ValueChanged<OutgoingVideoQuality> onChanged;
+  const _VideoQualityRow({required this.quality, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: MizdahTokens.iconTileBg(context),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(
+                  Icons.high_quality_rounded,
+                  color: MizdahTokens.primary,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Outgoing video quality',
+                      style: TextStyle(
+                        color: MizdahTokens.inkOf(context),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      quality.description,
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _VideoQualitySegmented(
+            quality: quality,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 3-segment animated pill for video quality — `Auto / 720p / 1080p`.
+class _VideoQualitySegmented extends StatelessWidget {
+  final OutgoingVideoQuality quality;
+  final ValueChanged<OutgoingVideoQuality> onChanged;
+  const _VideoQualitySegmented({
+    required this.quality,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final levels = OutgoingVideoQuality.values;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final segWidth = constraints.maxWidth / levels.length;
+        final activeIndex = levels.indexOf(quality);
+        return Container(
+          height: 38,
+          decoration: BoxDecoration(
+            color: MizdahTokens.iconTileBg(context),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Stack(
+            children: [
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                left: segWidth * activeIndex + 4,
+                top: 4,
+                bottom: 4,
+                width: segWidth - 8,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: MizdahTokens.heroGradient,
+                    borderRadius: BorderRadius.circular(9),
+                    boxShadow: [
+                      BoxShadow(
+                        color: MizdahTokens.primary.withValues(alpha: 0.30),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  for (final l in levels)
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(9),
+                        onTap: () => onChanged(l),
+                        child: Center(
+                          child: Text(
+                            l.label,
+                            style: TextStyle(
+                              color: l == quality
                                   ? Colors.white
                                   : MizdahTokens.mutedOf(context),
                               fontSize: 13,
