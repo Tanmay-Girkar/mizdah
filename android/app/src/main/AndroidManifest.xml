@@ -58,16 +58,14 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- Default FCM notification channel id. The channel itself
-             is created from Dart in NotificationService._initChannel
-             so this just tells FCM which channel to deliver to when
-             the JSON payload doesn't carry an explicit `android.notification.channel_id`. -->
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="mizdah_general_v1" />
-        <!-- Default notification icon. Falls back to ic_launcher if
-             the resource doesn't exist; that's fine for now since we
-             don't ship a dedicated white-on-transparent notif icon. -->
+        <!-- Default notification icon. We deliberately omit the
+             `default_notification_channel_id` meta-data — Android 8+
+             drops notifications silently when the target channel
+             doesn't exist, and we never created `mizdah_general_v1`
+             via flutter_local_notifications. Without this meta-data
+             FCM falls back to its auto-created "Miscellaneous"
+             channel, which is good enough for v1. Add a real
+             channel + meta-data once we ship per-category sounds. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
