@@ -199,12 +199,32 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
               ],
             ),
             // Floating "new chat" button — anchored to the bottom-
-            // right corner, just above the floating nav.
+            // right corner, sitting just above the floating nav.
+            //
+            // Coordinate space note: this Stack lives inside
+            // `MizdahTabScaffold`, whose body is itself constrained
+            // above the floating nav (Positioned(bottom: navInset)).
+            // So `bottom: 8` here ALREADY clears the nav — adding
+            // navInset on top would push the FAB to the vertical
+            // centre of the screen, which was the previous bug.
+            //
+            // 24 px from the right edge + 8 px from the inner
+            // stack's bottom = WhatsApp-style "anchored to the nav"
+            // placement that respects safe area automatically (the
+            // inner stack's bottom is already safe-area-aware via
+            // navBarBottomInset).
             Positioned(
-              right: 12,
-              bottom: MizdahTokens.navBarBottomInset(context) - 4,
-              child: _NewChatFab(
-                onTap: () => context.push('/chats/new'),
+              right: 24,
+              bottom: 8,
+              child: MizdahFadeUp(
+                controller: _entryCtrl,
+                // Slight delay so the FAB lands after the list /
+                // empty-state chrome — feels like it's "settling
+                // in" once the rest of the screen is ready.
+                delay: 0.32,
+                child: _NewChatFab(
+                  onTap: () => context.push('/chats/new'),
+                ),
               ),
             ),
           ],
