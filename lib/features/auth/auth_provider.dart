@@ -6,6 +6,17 @@ import '../../data/models/models.dart';
 import '../../core/services/push_notification_service.dart';
 import '../../core/services/storage_service.dart';
 
+/// DEV-ONLY auth bypass — when true, the app skips the login flow
+/// entirely and boots with a fake authenticated user. Used while
+/// the backend is offline so we can test screens that need a
+/// signed-in user (chats, push notification token registration,
+/// edit profile, etc.) without hitting `/api/auth/login`.
+///
+/// **Flip back to `false` before shipping** — the fake user has a
+/// hardcoded id/email and can't actually authenticate against any
+/// real endpoint. While true, login/signup screens never show.
+const bool kBypassAuth = true;
+
 enum AuthStatus { authenticated, unauthenticated, authenticating, initial }
 
 class AuthState {
@@ -44,6 +55,23 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _checkAuth() async {
+    // ── DEV-ONLY: skip the entire auth flow when kBypassAuth is on.
+    //    See the constant's doc-comment at the top of this file.
+    if (kBypassAuth) {
+      final fakeUser = User(
+        id: 'f2a59e06-316f-4717-8794-89d9e06e9e6c',
+        email: 'test3@mizdah.dev',
+        name: 'Test User 3',
+        role: 'USER',
+      );
+      state = state.copyWith(
+        status: AuthStatus.authenticated,
+        token: 'dev_bypass_token',
+        user: fakeUser,
+      );
+      return;
+    }
+
     final token = await StorageService.getToken();
     final userData = await StorageService.getUserData();
 
