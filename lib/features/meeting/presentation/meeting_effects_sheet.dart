@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ui/mizdah_design.dart';
+import '../../../core/widgets/mizdah_picker.dart';
 import '../../settings/video_preferences_provider.dart';
 
 class MeetingEffectsSheet extends ConsumerWidget {
@@ -102,32 +103,117 @@ class MeetingEffectsSheet extends ConsumerWidget {
               const SizedBox(height: 18),
 
               // ── Touch up appearance ────────────────────────────
+              // Continuous slider — different shape from the picker
+              // rows below, kept as-is.
               _TouchUpRow(
                 value: touchUp,
                 onChanged: (v) =>
                     ref.read(touchUpIntensityProvider.notifier).set(v),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
-              // ── Background blur ────────────────────────────────
-              _BackgroundBlurRow(
-                level: blur,
-                onChanged: (v) =>
-                    ref.read(backgroundBlurProvider.notifier).set(v),
-              ),
-              const SizedBox(height: 14),
-
-              // ── Outgoing video quality ─────────────────────────
-              _QualityRow(
-                quality: quality,
-                onChanged: (q) =>
-                    ref.read(outgoingVideoQualityProvider.notifier).set(q),
+              // ── Background blur + Outgoing quality ─────────────
+              // Both are 3-option choices — share a single rounded
+              // card with picker rows inside, mirroring the iOS
+              // Settings pattern.
+              Container(
+                decoration: BoxDecoration(
+                  color: MizdahTokens.bg(context),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: MizdahTokens.border(context), width: 1),
+                ),
+                child: Column(
+                  children: [
+                    MizdahPickerRow<BackgroundBlurLevel>(
+                      icon: Icons.blur_on_rounded,
+                      label: 'Background blur',
+                      sublabel: _blurSubtitle(blur),
+                      value: blur,
+                      sheetTitle: 'Background blur',
+                      sheetSubtitle:
+                          'Hide what\'s behind you while you\'re on camera.',
+                      options: const [
+                        MizdahPickerOption(
+                          value: BackgroundBlurLevel.none,
+                          label: 'None',
+                          description: 'Show the room behind you.',
+                        ),
+                        MizdahPickerOption(
+                          value: BackgroundBlurLevel.light,
+                          label: 'Light',
+                          description:
+                              'Mild blur — subject stays crisp, room becomes soft.',
+                        ),
+                        MizdahPickerOption(
+                          value: BackgroundBlurLevel.strong,
+                          label: 'Strong',
+                          description:
+                              'Heavy blur — background reads as a soft colour wash.',
+                        ),
+                      ],
+                      onChanged: (v) => ref
+                          .read(backgroundBlurProvider.notifier)
+                          .set(v),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Container(
+                        height: 1,
+                        color: MizdahTokens.border(context),
+                      ),
+                    ),
+                    MizdahPickerRow<OutgoingVideoQuality>(
+                      icon: Icons.high_quality_rounded,
+                      label: 'Outgoing video quality',
+                      sublabel: quality.description,
+                      value: quality,
+                      sheetTitle: 'Outgoing video quality',
+                      sheetSubtitle:
+                          'Cap on the resolution we send to other participants.',
+                      options: const [
+                        MizdahPickerOption(
+                          value: OutgoingVideoQuality.auto,
+                          label: 'Auto',
+                          description:
+                              'Adapts to network conditions. Recommended.',
+                        ),
+                        MizdahPickerOption(
+                          value: OutgoingVideoQuality.hd720,
+                          label: '720p',
+                          description:
+                              'Cap at 1280×720 — gentler on bandwidth.',
+                        ),
+                        MizdahPickerOption(
+                          value: OutgoingVideoQuality.hd1080,
+                          label: '1080p',
+                          description:
+                              'Up to 1920×1080. Uses more data + CPU.',
+                        ),
+                      ],
+                      onChanged: (q) => ref
+                          .read(outgoingVideoQualityProvider.notifier)
+                          .set(q),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  static String _blurSubtitle(BackgroundBlurLevel l) {
+    switch (l) {
+      case BackgroundBlurLevel.none:
+        return 'Show the room behind you.';
+      case BackgroundBlurLevel.light:
+        return 'Mild blur — subject stays crisp.';
+      case BackgroundBlurLevel.strong:
+        return 'Heavy blur — background reads as a soft wash.';
+    }
   }
 }
 
@@ -246,255 +332,5 @@ class _TouchUpRow extends StatelessWidget {
     if (v < 31) return 'Light skin smoothing — looks natural.';
     if (v < 71) return 'Stronger smoothing with a brightness lift.';
     return 'Aggressive smoothing — can look painterly.';
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
-//  Background blur — 3-segment row
-// ─────────────────────────────────────────────────────────────────
-
-class _BackgroundBlurRow extends StatelessWidget {
-  final BackgroundBlurLevel level;
-  final ValueChanged<BackgroundBlurLevel> onChanged;
-  const _BackgroundBlurRow({required this.level, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: MizdahTokens.bg(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MizdahTokens.border(context), width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: MizdahTokens.iconTileBg(context),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Icon(
-                  Icons.blur_on_rounded,
-                  color: MizdahTokens.primary,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Background blur',
-                      style: TextStyle(
-                        color: MizdahTokens.inkOf(context),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _subtitleFor(level),
-                      style: TextStyle(
-                        color: MizdahTokens.mutedOf(context),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        height: 1.3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _Segmented<BackgroundBlurLevel>(
-            values: BackgroundBlurLevel.values,
-            active: level,
-            labelOf: (v) => v.label,
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _subtitleFor(BackgroundBlurLevel l) {
-    switch (l) {
-      case BackgroundBlurLevel.none:
-        return 'Show the room behind you.';
-      case BackgroundBlurLevel.light:
-        return 'Mild blur — subject stays crisp.';
-      case BackgroundBlurLevel.strong:
-        return 'Heavy blur — background reads as a soft wash.';
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
-//  Outgoing video quality — 3-segment row
-// ─────────────────────────────────────────────────────────────────
-
-class _QualityRow extends StatelessWidget {
-  final OutgoingVideoQuality quality;
-  final ValueChanged<OutgoingVideoQuality> onChanged;
-  const _QualityRow({required this.quality, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: MizdahTokens.bg(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MizdahTokens.border(context), width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: MizdahTokens.iconTileBg(context),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Icon(
-                  Icons.high_quality_rounded,
-                  color: MizdahTokens.primary,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Outgoing video quality',
-                      style: TextStyle(
-                        color: MizdahTokens.inkOf(context),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      quality.description,
-                      style: TextStyle(
-                        color: MizdahTokens.mutedOf(context),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        height: 1.3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _Segmented<OutgoingVideoQuality>(
-            values: OutgoingVideoQuality.values,
-            active: quality,
-            labelOf: (v) => v.label,
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
-//  Generic 3-segment animated pill — reused by blur + quality
-// ─────────────────────────────────────────────────────────────────
-
-class _Segmented<T> extends StatelessWidget {
-  final List<T> values;
-  final T active;
-  final String Function(T) labelOf;
-  final ValueChanged<T> onChanged;
-  const _Segmented({
-    required this.values,
-    required this.active,
-    required this.labelOf,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final activeIndex = values.indexOf(active);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final segWidth = constraints.maxWidth / values.length;
-        return Container(
-          height: 38,
-          decoration: BoxDecoration(
-            color: MizdahTokens.iconTileBg(context),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Stack(
-            children: [
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                left: segWidth * activeIndex + 4,
-                top: 4,
-                bottom: 4,
-                width: segWidth - 8,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: MizdahTokens.heroGradient,
-                    borderRadius: BorderRadius.circular(9),
-                    boxShadow: [
-                      BoxShadow(
-                        color: MizdahTokens.primary.withValues(alpha: 0.30),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  for (final v in values)
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(9),
-                        onTap: () => onChanged(v),
-                        child: Center(
-                          child: Text(
-                            labelOf(v),
-                            style: TextStyle(
-                              color: v == active
-                                  ? Colors.white
-                                  : MizdahTokens.mutedOf(context),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.1,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
 }
