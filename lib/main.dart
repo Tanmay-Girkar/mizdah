@@ -1,13 +1,37 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/services/push_notification_service.dart';
 import 'core/theme/theme_provider.dart';
 import 'core/navigation/app_router.dart';
 import 'core/ui/mizdah_design.dart' show MizdahScrollBehavior;
 import 'features/call/presentation/p2p_incoming_overlay.dart';
+import 'firebase_options.dart';
+
+/// FCM background-message handler. Must be a TOP-LEVEL function (not
+/// a closure / method) because Android spawns a separate isolate for
+/// it and only top-level entry points can be referenced from there.
+///
+/// Don't do heavy work here — Android kills the isolate after a few
+/// seconds. The OS already displays the system notification when the
+/// payload has a `notification` block; this hook is for analytics /
+/// silent-data side-effects (e.g. pre-fetching the message body so
+/// the app is warm when the user taps).
+@pragma('vm:entry-point')
+Future<void> _firebaseBackgroundMessageHandler(RemoteMessage message) async {
+  // Initialise Firebase in the background isolate — required because
+  // `main()` ran in a different isolate and the bindings don't carry.
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  debugPrint('[push] background message data=${message.data}');
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +63,23 @@ void main() async {
   // HttpClient under the hood, which respects HttpOverrides.global).
   if (kDebugMode) {
     HttpOverrides.global = _DevHttpOverrides();
+  }
+
+  // ── Firebase + push notifications ─────────────────────────────
+  // Initialised before runApp so the app sees notifications fired
+  // during the launch boot. Errors are swallowed to keep the app
+  // bootable even when Firebase is misconfigured (e.g. missing
+  // google-services.json on a fresh checkout).
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundMessageHandler);
+    // Wire the foreground / tap listeners + permission prompt + token
+    // registration. Doesn't block runApp — the rest is a Future.
+    unawaited(PushNotificationService.instance.init());
+  } catch (e) {
+    debugPrint('[push] Firebase init failed: $e');
   }
 
   runApp(const ProviderScope(child: MizdahApp()));
@@ -75,11 +116,69 @@ class _DevHttpOverrides extends HttpOverrides {
   }
 }
 
-class MizdahApp extends ConsumerWidget {
+class MizdahApp extends ConsumerStatefulWidget {
   const MizdahApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MizdahApp> createState() => _MizdahAppState();
+}
+
+class _MizdahAppState extends ConsumerState<MizdahApp> {
+  StreamSubscription<PushPayload>? _tapSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // Notification taps deep-link into the app. The router is
+    // already mounted by the time the first emission fires (the
+    // service deliberately delays the initial-launch tap by 300ms
+    // exactly so this listener can attach first).
+    _tapSub = PushNotificationService.instance.taps.listen(_handleTap);
+  }
+
+  @override
+  void dispose() {
+    _tapSub?.cancel();
+    super.dispose();
+  }
+
+  void _handleTap(PushPayload p) {
+    debugPrint('[push] routing tap type=${p.type} data=${p.raw}');
+    switch (p.type) {
+      case 'chat':
+        if (p.conversationId != null) {
+          appRouter.push('/chats/${p.conversationId}');
+        } else {
+          appRouter.go('/chats');
+        }
+        break;
+      case 'call':
+        // P2P incoming-call signaling already flows over the socket
+        // when the app is running; the push is mainly a wake-up.
+        // If the user tapped the notif we want to land on the
+        // pre-join / call screen so the incoming-call overlay can
+        // present accept/decline UI.
+        appRouter.push('/p2p-call');
+        break;
+      case 'meeting':
+        if (p.meetingCode != null) {
+          appRouter.push('/pre-join/${p.meetingCode}');
+        } else {
+          appRouter.push('/pre-join');
+        }
+        break;
+      case 'schedule':
+        appRouter.go('/meetings?tab=upcoming');
+        break;
+      default:
+        // Unknown type — open the app on Home; the notification
+        // tray badge tells the user *something* happened.
+        appRouter.go('/');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final themeMode = ref.watch(themeProvider);
 
     return MaterialApp.router(

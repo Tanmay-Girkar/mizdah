@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/models/models.dart';
+import '../../core/services/push_notification_service.dart';
 import '../../core/services/storage_service.dart';
 
 enum AuthStatus { authenticated, unauthenticated, authenticating, initial }
@@ -124,6 +125,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         avatarUrl: user.avatarUrl,
       );
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
+      // Push the FCM token to the backend now that we have an auth
+      // token. Best-effort; backend rejection is non-fatal.
+      // ignore: discarded_futures
+      PushNotificationService.instance.registerCurrentToken();
     } catch (e) {
       debugPrint("Login error: $e");
       String message = "Invalid email or password";
@@ -158,6 +163,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         avatarUrl: user.avatarUrl,
       );
       state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
+      // Push the FCM token to the backend now that we have an auth
+      // token. Best-effort; backend rejection is non-fatal.
+      // ignore: discarded_futures
+      PushNotificationService.instance.registerCurrentToken();
     } catch (e) {
       debugPrint("Signup error: $e");
       String message = "Signup failed. Email might already exist.";
@@ -205,6 +214,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
+    // Tell the backend to stop pushing to this device for the
+    // soon-to-be-departed user. Best-effort — happens before we
+    // wipe the JWT so the request can authenticate.
+    try {
+      await PushNotificationService.instance.unregister();
+    } catch (_) {}
     await StorageService.clearAll();
     state = state.copyWith(status: AuthStatus.unauthenticated, token: null, user: null);
   }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "422783082004",
+    "project_id": "mizdah-ce042",
+    "storage_bucket": "mizdah-ce042.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:422783082004:android:66f66acc47b8cf3dc0d101",
+        "android_client_info": {
+          "package_name": "com.mizdah.mizdah"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCITrljOBuLucW8eJ81k6_eJgDRRc9XD1w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
