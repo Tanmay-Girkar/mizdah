@@ -6,9 +6,13 @@
 //  app's signature "About" page.
 // ════════════════════════════════════════════════════════════════════
 
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/ui/mizdah_design.dart';
 
@@ -127,25 +131,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
                           title: 'Legal',
                           rows: [
                             _LinkRow(
-                              icon: Icons.shield_outlined,
-                              label: 'Privacy policy',
-                              sublabel: 'How we handle your data',
-                              onTap: () => context.push('/privacy'),
-                            ),
-                            _LinkRow(
                               icon: Icons.description_outlined,
                               label: 'Terms of service',
                               sublabel: 'The rules you agreed to',
-                              onTap: () => _comingSoon(context,
-                                  'Terms of service'),
-                            ),
-                            _LinkRow(
-                              icon: Icons.verified_user_outlined,
-                              label: 'Open-source licenses',
-                              sublabel:
-                                  'Credits for the libraries we use',
-                              onTap: () => _comingSoon(context,
-                                  'Open-source licenses'),
+                              onTap: () => _openTerms(context),
                             ),
                           ],
                         ),
@@ -162,21 +151,13 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
                               icon: Icons.public_rounded,
                               label: 'Website',
                               sublabel: 'mizdah.com',
-                              onTap: () =>
-                                  _comingSoon(context, 'Website'),
-                            ),
-                            _LinkRow(
-                              icon: Icons.support_agent_rounded,
-                              label: 'Contact support',
-                              sublabel: 'We usually reply within a day',
-                              onTap: () => context.push('/report'),
+                              onTap: () => _openWebsite(context),
                             ),
                             _LinkRow(
                               icon: Icons.star_rate_rounded,
                               label: 'Rate Mizdah',
                               sublabel: 'Tell us what you think',
-                              onTap: () =>
-                                  _comingSoon(context, 'Rate Mizdah'),
+                              onTap: () => _rateApp(context),
                             ),
                           ],
                         ),
@@ -199,11 +180,81 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
     );
   }
 
-  static void _comingSoon(BuildContext context, String label) {
+  /// Open mizdah.com/terms in the system browser. URL is canonical
+  /// even if the page is still being authored — once the page lives
+  /// at that URL, the link works without an app update.
+  static Future<void> _openTerms(BuildContext context) async {
+    await _launchExternal(context,
+        Uri.parse('https://mizdah.com/terms'), 'Open Terms of service');
+  }
+
+  /// Open the marketing site.
+  static Future<void> _openWebsite(BuildContext context) async {
+    await _launchExternal(context,
+        Uri.parse('https://mizdah.com'), 'Open mizdah.com');
+  }
+
+  /// Open the in-store review listing. Tries the native scheme first
+  /// (`market://` on Android, `itms-apps://` on iOS) so the device
+  /// jumps straight into Play Store / App Store rather than the
+  /// browser; falls back to the web URL if the native app isn't
+  /// installed (rare on real devices, common on emulators).
+  static Future<void> _rateApp(BuildContext context) async {
+    const androidId = 'com.mizdah.mizdah';
+    // TODO: replace with the real iOS App Store ID once the app is
+    // submitted. Until then iOS taps fall back to the website.
+    const iosAppId = '0000000000';
+    Uri primary;
+    Uri fallback;
+    if (!kIsWeb && Platform.isAndroid) {
+      primary = Uri.parse('market://details?id=$androidId');
+      fallback =
+          Uri.parse('https://play.google.com/store/apps/details?id=$androidId');
+    } else if (!kIsWeb && Platform.isIOS) {
+      primary = Uri.parse('itms-apps://itunes.apple.com/app/id$iosAppId');
+      fallback = Uri.parse('https://apps.apple.com/app/id$iosAppId');
+    } else {
+      // Web / desktop — just open the Play Store URL in browser.
+      primary = Uri.parse(
+          'https://play.google.com/store/apps/details?id=$androidId');
+      fallback = primary;
+    }
+
+    try {
+      final ok =
+          await launchUrl(primary, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+    try {
+      await launchUrl(fallback, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (!context.mounted) return;
+      _toast(context, 'Could not open the store');
+    }
+  }
+
+  /// Shared launch helper — tries externalApplication first, falls
+  /// back to platformDefault, and surfaces a snackbar if both fail.
+  static Future<void> _launchExternal(
+      BuildContext context, Uri uri, String _) async {
+    try {
+      final ok =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+    try {
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
+    } catch (_) {
+      if (!context.mounted) return;
+      _toast(context, 'Could not open ${uri.host}');
+    }
+  }
+
+  static void _toast(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        content: Text('$label · coming soon'),
+        content: Text(message),
       ),
     );
   }
