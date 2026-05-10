@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
+import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
@@ -70,13 +71,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
       final user = authState.user;
       final jwtToken = authState.token ?? '';
       _notifier = ref.read(meetingProvider(widget.meetingId).notifier);
+      // Respect the user's "mute on join" meeting preference — when
+      // set, the mic always starts disabled regardless of what the
+      // route's `initialAudio` flag says (which usually comes from
+      // the pre-join screen's mic toggle).
+      final wantsMuteOnJoin = ref.read(muteOnJoinProvider);
+      final effectiveAudio = wantsMuteOnJoin ? false : widget.initialAudio;
       _notifier!.joinMeeting(
         widget.meetingId,
         user?.id ?? 'guest',
         user?.name ?? 'Guest',
         jwtToken,
         video: widget.initialVideo,
-        audio: widget.initialAudio,
+        audio: effectiveAudio,
         isHostHint: widget.isHostHint,
       );
     });

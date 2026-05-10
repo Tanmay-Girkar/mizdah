@@ -4,14 +4,19 @@
 //  Reachable from Settings → Account → Meeting preferences. Holds the
 //  user's defaults that apply to every meeting they join:
 //
-//    • Default video grid layout (Auto / Tiled / Spotlight / Sidebar)
-//    • Maximum number of tiles before grid overflows
-//    • Whether to hide tiles whose camera is off
+//    Layout:
+//      • Default video grid layout (Auto / Tiled / Spotlight / Sidebar)
+//      • Maximum number of tiles before grid overflows
+//      • Whether to hide tiles whose camera is off
 //
-//  All three are backed by the existing
-//  `lib/features/settings/meeting_layout_provider.dart` notifiers, so
-//  changes persist across sessions via SharedPreferences and apply
-//  the next time the user joins a meeting.
+//    Audio (per docs/meeting-preferences/01-audio.md):
+//      • Mute on join — bool toggle
+//      • Noise suppression — Off / Standard / High segmented
+//
+//  All preferences are backed by SharedPreferences notifiers — pure
+//  client-side, no backend round-trips. The audio prefs are read by
+//  the meeting room when the mic is initialised so they apply to
+//  every meeting going forward.
 // ════════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -19,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/ui/mizdah_design.dart';
+import '../audio_preferences_provider.dart';
 import '../meeting_layout_provider.dart';
 
 class MeetingPreferencesScreen extends ConsumerStatefulWidget {
@@ -54,6 +60,8 @@ class _MeetingPreferencesScreenState
     final layout = ref.watch(meetingLayoutProvider);
     final maxTiles = ref.watch(maxTilesProvider);
     final hideNoVideo = ref.watch(hideTilesWithoutVideoProvider);
+    final muteOnJoin = ref.watch(muteOnJoinProvider);
+    final noiseLevel = ref.watch(noiseSuppressionProvider);
 
     return Scaffold(
       backgroundColor: MizdahTokens.bg(context),
@@ -197,6 +205,50 @@ class _MeetingPreferencesScreenState
                                       .read(hideTilesWithoutVideoProvider
                                           .notifier)
                                       .set(v),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+
+                      // ── Audio section ─────────────────────────
+                      // Mute on join + Noise suppression. Local
+                      // preferences only — no backend round-trips.
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.30,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _SectionLabel(label: 'Audio'),
+                              const SizedBox(height: 8),
+                              MizdahCard(
+                                padding: EdgeInsets.zero,
+                                child: Column(
+                                  children: [
+                                    _SwitchRow(
+                                      icon: Icons.mic_off_rounded,
+                                      label: 'Mute on join',
+                                      sublabel:
+                                          'Start every meeting with your microphone off.',
+                                      value: muteOnJoin,
+                                      onChanged: (v) => ref
+                                          .read(muteOnJoinProvider.notifier)
+                                          .set(v),
+                                    ),
+                                    _RowDivider(),
+                                    _NoiseSuppressionRow(
+                                      level: noiseLevel,
+                                      onChanged: (v) => ref
+                                          .read(noiseSuppressionProvider
+                                              .notifier)
+                                          .set(v),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -479,6 +531,164 @@ class _SwitchRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Three-segment pill for noise-suppression intensity. Tapping a
+/// segment animates the active gradient pill to that position and
+/// persists the choice via `noiseSuppressionProvider`.
+class _NoiseSuppressionRow extends StatelessWidget {
+  final NoiseSuppressionLevel level;
+  final ValueChanged<NoiseSuppressionLevel> onChanged;
+  const _NoiseSuppressionRow({
+    required this.level,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: MizdahTokens.iconTileBg(context),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(
+                  Icons.graphic_eq_rounded,
+                  color: MizdahTokens.primary,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Noise suppression',
+                      style: TextStyle(
+                        color: MizdahTokens.inkOf(context),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _subtitleFor(level),
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _SegmentedRow(level: level, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+
+  String _subtitleFor(NoiseSuppressionLevel l) {
+    switch (l) {
+      case NoiseSuppressionLevel.off:
+        return 'Raw mic — only echo cancellation applied.';
+      case NoiseSuppressionLevel.standard:
+        return 'Mild filter; voice stays natural.';
+      case NoiseSuppressionLevel.high:
+        return 'Aggressive — even chewing and traffic silenced.';
+    }
+  }
+}
+
+/// The animated 3-segment pill itself. Pure UI; lifts state to the
+/// parent so the persistence layer stays in one place.
+class _SegmentedRow extends StatelessWidget {
+  final NoiseSuppressionLevel level;
+  final ValueChanged<NoiseSuppressionLevel> onChanged;
+  const _SegmentedRow({required this.level, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final levels = NoiseSuppressionLevel.values;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final segWidth = constraints.maxWidth / levels.length;
+        final activeIndex = levels.indexOf(level);
+        return Container(
+          height: 38,
+          decoration: BoxDecoration(
+            color: MizdahTokens.iconTileBg(context),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Stack(
+            children: [
+              // Sliding gradient pill that animates between
+              // segments when the level changes.
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                left: segWidth * activeIndex + 4,
+                top: 4,
+                bottom: 4,
+                width: segWidth - 8,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: MizdahTokens.heroGradient,
+                    borderRadius: BorderRadius.circular(9),
+                    boxShadow: [
+                      BoxShadow(
+                        color: MizdahTokens.primary.withValues(alpha: 0.30),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  for (final l in levels)
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(9),
+                        onTap: () => onChanged(l),
+                        child: Center(
+                          child: Text(
+                            l.label,
+                            style: TextStyle(
+                              color: l == level
+                                  ? Colors.white
+                                  : MizdahTokens.mutedOf(context),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
