@@ -27,6 +27,7 @@ import '../../../core/ui/mizdah_design.dart';
 import '../../../core/widgets/mizdah_picker.dart';
 import '../audio_preferences_provider.dart';
 import '../meeting_layout_provider.dart';
+import '../privacy_preferences_provider.dart';
 import '../video_preferences_provider.dart';
 
 class MeetingPreferencesScreen extends ConsumerStatefulWidget {
@@ -65,6 +66,7 @@ class _MeetingPreferencesScreenState
     final muteOnJoin = ref.watch(muteOnJoinProvider);
     final noiseLevel = ref.watch(noiseSuppressionProvider);
     final videoQuality = ref.watch(outgoingVideoQualityProvider);
+    final confirmBeforeLeaving = ref.watch(confirmBeforeLeavingProvider);
     // Subtitle helper for the noise-suppression row — describes
     // what the *current* selection does so the row reads complete
     // without opening the picker.
@@ -350,6 +352,37 @@ class _MeetingPreferencesScreenState
                                       .read(outgoingVideoQualityProvider
                                           .notifier)
                                       .set(q),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+
+                      // ── Privacy & security section ────────────
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.42,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _SectionLabel(label: 'Privacy & security'),
+                              const SizedBox(height: 8),
+                              MizdahCard(
+                                padding: EdgeInsets.zero,
+                                child: _SwitchRow(
+                                  icon: Icons.exit_to_app_rounded,
+                                  label: 'Confirm before leaving',
+                                  sublabel:
+                                      'Ask for confirmation when you tap end-call.',
+                                  value: confirmBeforeLeaving,
+                                  onChanged: (v) => ref
+                                      .read(confirmBeforeLeavingProvider
+                                          .notifier)
+                                      .set(v),
                                 ),
                               ),
                             ],

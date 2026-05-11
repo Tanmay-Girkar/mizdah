@@ -3,6 +3,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
+import '../../settings/privacy_preferences_provider.dart';
 import 'meeting_effects_sheet.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
@@ -25,6 +26,78 @@ import 'widgets/whiteboard_view.dart';
 import '../providers/meeting_services_provider.dart';
 import '../../../../core/services/recording_service.dart';
 import '../../../core/utils/meeting_utils.dart';
+
+/// Confirmation dialog for "leave / end meeting" taps. Honours the
+/// user's `confirmBeforeLeavingProvider` preference: when ON, pops
+/// a Stay / Leave AlertDialog and returns the choice; when OFF,
+/// returns `true` immediately so the caller proceeds straight to
+/// `leaveMeeting()` / `endMeetingForAll()`.
+///
+/// `endForAll` switches the dialog copy between two flows:
+///   • host hanging up   → "End meeting for everyone?"
+///   • participant leaving → "Leave meeting?"
+Future<bool> _confirmLeave(
+  BuildContext context,
+  WidgetRef ref, {
+  required bool endForAll,
+}) async {
+  final shouldConfirm = ref.read(confirmBeforeLeavingProvider);
+  if (!shouldConfirm) return true;
+  final ok = await showDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      return AlertDialog(
+        backgroundColor: scheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Text(
+          endForAll ? 'End meeting for everyone?' : 'Leave meeting?',
+          style: TextStyle(
+            color: scheme.onSurface,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Text(
+          endForAll
+              ? 'All participants will be disconnected.'
+              : 'You can rejoin anytime with the meeting code.',
+          style: TextStyle(
+            color: scheme.onSurface.withValues(alpha: 0.66),
+            fontSize: 13.5,
+            fontWeight: FontWeight.w500,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Stay',
+              style: TextStyle(
+                color: scheme.onSurface,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFB71C1C),
+            ),
+            child: Text(
+              endForAll ? 'End meeting' : 'Leave',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+  return ok == true;
+}
 
 class MeetingRoomScreen extends ConsumerStatefulWidget {
   final String meetingId;
@@ -313,15 +386,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                   isCameraOn: meetingState.isCameraOn,
                   onMicToggle: meetingNotifier.toggleMic,
                   onCameraToggle: meetingNotifier.toggleCamera,
-                  onHangup: () {
-                    // Host hanging up = meeting ends for everyone.
-                    // Non-hosts just leave their own seat in the room.
-                    if (meetingState.isHost) {
+                  onHangup: () async {
+                    // Confirm-before-leaving pref check first. When
+                    // the user is the host the dialog uses the
+                    // "end for everyone" copy; otherwise the
+                    // softer "leave meeting" copy.
+                    final endForAll = meetingState.isHost;
+                    final ok = await _confirmLeave(context, ref,
+                        endForAll: endForAll);
+                    if (!ok) return;
+                    if (endForAll) {
                       meetingNotifier.endMeetingForAll();
                     } else {
                       meetingNotifier.leaveMeeting();
                     }
-                    context.go('/');
+                    if (context.mounted) context.go('/');
                   },
                   onOptionsTap: () => _showOptionsBottomSheet(context),
                   onReactions: () => _showReactionsPicker(context),
@@ -481,9 +560,12 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
                       const SizedBox(height: 48),
                       MizdahButton(
                         label: 'Leave Meeting',
-                        onTap: () {
+                        onTap: () async {
+                          final ok = await _confirmLeave(context, ref,
+                              endForAll: false);
+                          if (!ok) return;
                           meetingNotifier.leaveMeeting();
-                          context.go('/');
+                          if (context.mounted) context.go('/');
                         },
                         isFullWidth: false,
                         backgroundColor: Colors.white10,
@@ -1616,9 +1698,17 @@ class _OnTheGoViewState extends ConsumerState<_OnTheGoView> {
                   _BigCircleButton(
                     icon: Icons.call_end_rounded,
                     color: const Color(0xFFB71C1C),
-                    onTap: () {
+                    onTap: () async {
+                      // Confirm-before-leaving pref applies here too.
+                      // This is the on-the-go compact view's end-
+                      // call button, which always leaves (never
+                      // ends for everyone — the host-only options
+                      // sheet has a separate "End meeting" flow).
+                      final ok = await _confirmLeave(context, ref,
+                          endForAll: false);
+                      if (!ok) return;
                       notifier.leaveMeeting();
-                      context.go('/');
+                      if (context.mounted) context.go('/');
                     },
                   ),
                 ],
