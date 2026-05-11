@@ -49,7 +49,7 @@ void main() async {
   );
 
   // ── Dev-only: trust self-signed certs from local backend hosts ──
-  // The local backend at https://192.168.1.100:3001 (and similar
+  // The local backend at https://192.168.1.18:3001 (and similar
   // 192.168.x.x dev boxes) typically presents a self-signed cert
   // that Dart's HttpClient rejects with CERTIFICATE_VERIFY_FAILED.
   //
@@ -91,6 +91,7 @@ class _DevHttpOverrides extends HttpOverrides {
   // Hosts whose self-signed certs we accept in dev. Add new dev
   // boxes here as needed.
   static const _trustedDevHosts = <String>{
+    '192.168.1.18',
     '192.168.1.100',
     '192.168.1.48',
     '192.168.1.117',
