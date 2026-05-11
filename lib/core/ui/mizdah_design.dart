@@ -3,7 +3,7 @@
 //  ────────────────────────────────────────────────────────────────────
 //  Single source of truth for the premium look established in the
 //  redesigned home screen. Centralised so the four "tab" screens
-//  (Home, Meetings, Call, Chats, Settings) share an identical
+//  (Meetings, Chats, Home, Call, Settings) share an identical
 //  palette / shadow recipe / nav layout without copy-paste drift.
 //
 //  IF YOU CHANGE COLOURS OR THE GRADIENT, you only need to edit
@@ -466,7 +466,7 @@ class MizdahTabsShell extends StatelessWidget {
 // ────────────────────────────────────────────────────────────────────
 
 class MizdahFloatingNav extends StatefulWidget {
-  /// 0 = Call, 1 = Meetings, 2 = Home (centre), 3 = Chats, 4 = Settings.
+  /// 0 = Meetings, 1 = Chats, 2 = Home (centre), 3 = Call, 4 = Settings.
   final int activeIndex;
 
   /// Optional tap handler. When supplied, this is called instead of
@@ -477,9 +477,9 @@ class MizdahFloatingNav extends StatefulWidget {
 
   /// Tab → route map, exposed so the shell route can keep the same
   /// list as the in-widget fallback.
-  // Tab order: 0 = Call (flat, left edge) · 1 = Meetings · 2 = Home
-  // (prominent gradient centre) · 3 = Chats · 4 = Settings.
-  static const tabRoutes = ['/call-hub', '/meetings', '/', '/chats', '/settings'];
+  // Tab order: 0 = Meetings · 1 = Chats · 2 = Home (prominent
+  // gradient centre) · 3 = Call · 4 = Settings.
+  static const tabRoutes = ['/meetings', '/chats', '/', '/call-hub', '/settings'];
 
   const MizdahFloatingNav({
     super.key,
@@ -619,8 +619,8 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   index: 0,
                   activeIndex: widget.activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.videocam_rounded,
-                  label: 'Call',
+                  icon: Icons.calendar_month_rounded,
+                  label: 'Meetings',
                   onTap: () => _go(0),
                 ),
               ),
@@ -629,8 +629,8 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   index: 1,
                   activeIndex: widget.activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.calendar_month_rounded,
-                  label: 'Meetings',
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: 'Chats',
                   onTap: () => _go(1),
                 ),
               ),
@@ -651,8 +651,8 @@ class _MizdahFloatingNavState extends State<MizdahFloatingNav>
                   index: 3,
                   activeIndex: widget.activeIndex,
                   pulseCtrl: _pulseCtrl,
-                  icon: Icons.chat_bubble_outline_rounded,
-                  label: 'Chats',
+                  icon: Icons.videocam_rounded,
+                  label: 'Call',
                   onTap: () => _go(3),
                 ),
               ),

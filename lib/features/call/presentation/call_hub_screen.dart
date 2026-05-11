@@ -114,7 +114,7 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
   @override
   Widget build(BuildContext context) {
     return MizdahTabScaffold(
-      activeIndex: 0,
+      activeIndex: 3,
       body: SafeArea(
         bottom: false,
         // Pinned header + search field above a scrollable result

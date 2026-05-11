@@ -64,7 +64,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
     final async = ref.watch(conversationsProvider);
 
     return MizdahTabScaffold(
-      activeIndex: 3,
+      activeIndex: 1,
       body: SafeArea(
         bottom: false,
         child: Stack(

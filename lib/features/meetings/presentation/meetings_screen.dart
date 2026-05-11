@@ -58,7 +58,7 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
   @override
   Widget build(BuildContext context) {
     return MizdahTabScaffold(
-      activeIndex: 1,
+      activeIndex: 0,
       body: SafeArea(
         bottom: false,
         // Pinned header + segment switcher above a scrollable body.

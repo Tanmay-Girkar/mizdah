@@ -64,17 +64,8 @@ final appRouter = GoRouter(
       builder: (context, state, navigationShell) =>
           MizdahTabsShell(navigationShell: navigationShell),
       branches: [
-        // Branch 0 — Call hub (flat tab on the left edge)
-        StatefulShellBranch(
-          routes: [
-            GoRoute(
-              path: '/call-hub',
-              pageBuilder: (context, state) =>
-                  _branchPage(state, const CallHubScreen()),
-            ),
-          ],
-        ),
-        // Branch 1 — Meetings (deep-linkable via ?tab=recent)
+        // Branch 0 — Meetings (flat tab on the left edge,
+        // deep-linkable via ?tab=recent)
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -91,6 +82,16 @@ final appRouter = GoRouter(
             ),
           ],
         ),
+        // Branch 1 — Chats
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/chats',
+              pageBuilder: (context, state) =>
+                  _branchPage(state, const ChatsScreen()),
+            ),
+          ],
+        ),
         // Branch 2 — Home (prominent centre tab)
         StatefulShellBranch(
           routes: [
@@ -101,13 +102,13 @@ final appRouter = GoRouter(
             ),
           ],
         ),
-        // Branch 3 — Chats (replaces the legacy People tab)
+        // Branch 3 — Call hub
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/chats',
+              path: '/call-hub',
               pageBuilder: (context, state) =>
-                  _branchPage(state, const ChatsScreen()),
+                  _branchPage(state, const CallHubScreen()),
             ),
           ],
         ),
