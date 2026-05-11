@@ -679,6 +679,19 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
               .read(meetingProvider(widget.meetingId).notifier)
               .toggleOnTheGoMode();
         },
+        onOpenEffects: () {
+          // Close this sheet first so MeetingEffectsSheet doesn't
+          // stack on top of it — the options sheet's dimmer
+          // would compound with the effects sheet's dimmer.
+          Navigator.pop(context);
+          showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: Colors.transparent,
+            isScrollControlled: true,
+            useRootNavigator: true,
+            builder: (_) => const MeetingEffectsSheet(),
+          );
+        },
         isScreenSharing: ref.watch(meetingProvider(widget.meetingId)).isScreenSharing,
         isCaptionsEnabled: ref.watch(captionServiceProvider(widget.meetingId)).isEnabled,
         isOnTheGoMode:
@@ -2490,23 +2503,10 @@ class _MeetingTopBar extends StatelessWidget {
             icon: Icons.cameraswitch_outlined,
             onTap: onSwitchCamera,
           ),
-          const SizedBox(width: 8),
-          // Video effects sheet — Touch up, Background blur,
-          // Outgoing video quality. Opens a modal bottom sheet so
-          // the meeting view stays visible underneath while the
-          // user tweaks settings.
-          _TopBarIconButton(
-            icon: Icons.auto_awesome_rounded,
-            onTap: () {
-              showModalBottomSheet<void>(
-                context: context,
-                backgroundColor: Colors.transparent,
-                isScrollControlled: true,
-                useRootNavigator: true,
-                builder: (_) => const MeetingEffectsSheet(),
-              );
-            },
-          ),
+          // (Effects ✨ used to live here but added a fifth icon
+          // that overflowed the row on narrow screens. Moved into
+          // the 3-dots options sheet — same one tap away, no
+          // overflow.)
         ],
       ),
     );
@@ -2639,6 +2639,7 @@ class _MoreOptionsSheet extends StatelessWidget {
   final VoidCallback onToggleScreenShare;
   final VoidCallback onToggleCaptions;
   final VoidCallback onToggleOnTheGo;
+  final VoidCallback onOpenEffects;
   final bool isScreenSharing;
   final bool isCaptionsEnabled;
   final bool isOnTheGoMode;
@@ -2653,6 +2654,7 @@ class _MoreOptionsSheet extends StatelessWidget {
     required this.onToggleScreenShare,
     required this.onToggleCaptions,
     required this.onToggleOnTheGo,
+    required this.onOpenEffects,
     required this.isScreenSharing,
     required this.isCaptionsEnabled,
     required this.isOnTheGoMode,
@@ -2737,6 +2739,19 @@ class _MoreOptionsSheet extends StatelessWidget {
                 isWideRow: true,
                 isActive: isOnTheGoMode,
                 onTap: onToggleOnTheGo,
+              ),
+
+              const SizedBox(height: 8),
+
+              // Video effects — Touch up appearance, Background
+              // blur, Outgoing video quality. Used to live in the
+              // top bar but overflowed on narrow screens; same
+              // sheet, one tap further.
+              _SheetButton(
+                icon: Icons.auto_awesome_rounded,
+                label: 'Video effects',
+                isWideRow: true,
+                onTap: onOpenEffects,
               ),
 
               const SizedBox(height: 8),
