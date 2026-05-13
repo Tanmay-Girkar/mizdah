@@ -1,9 +1,13 @@
 package com.mizdah.mizdah
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PictureInPictureParams
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Bundle
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -14,6 +18,32 @@ class MainActivity : FlutterActivity() {
     private val screenShareChannel = "com.mizdah/screen_share_fg"
     private val pipChannel = "com.mizdah/pip"
     private var pipMethodChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Notification channel referenced by
+        //   <meta-data android:name="com.google.firebase.messaging
+        //               .default_notification_channel_id"
+        //              android:value="mizdah_general_v1" />
+        // in AndroidManifest.xml. The channel MUST exist on Android 8+
+        // before the first FCM message arrives — otherwise the OS
+        // silently drops the notification (no error, no log). Channels
+        // are idempotent: re-creating an existing channel is a no-op.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "mizdah_general_v1",
+                "General notifications",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Chats, calls, meetings, and scheduling alerts."
+                enableLights(true)
+                enableVibration(true)
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE)
+                as NotificationManager
+            nm.createNotificationChannel(channel)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

@@ -15,6 +15,16 @@ class ApiConfig {
   static const String signalingUrl = _devHost;
   static const String signalingPath = '/signaling-fresh';
   static const String chatSocketUrl = _devHost;
+  // Per docs/CHATS_API.md §3 the chat namespace `/chats` lives on the
+  // SAME socket.io server that hosts meeting signaling — so the
+  // engine.io mount path is identical. Without this, socket.io_client
+  // falls back to the default `/socket.io/` path and the chat socket
+  // silently fails to connect (no chat:message deltas → recipients
+  // only see new messages after the 4s REST poll fallback, which
+  // looks like "messages aren't instant"). Keep aliased rather than
+  // duplicating the literal — if the backend ever splits chats onto
+  // its own engine.io instance, flip this single line.
+  static const String chatSocketPath = signalingPath;
   static const String mediaPath = '/media-fresh';
 
   // API Endpoints

@@ -120,6 +120,25 @@ class CallHistory {
   final String? meetingCode;
   final String? hostId;
 
+  /// Whether the meeting is currently live (≥1 active participant).
+  /// Populated only when the REST payload carries the meeting-level
+  /// `is_active` field — see docs/MEETING_PRESENCE_PROTOCOL.md §4.1.
+  ///
+  /// `null` means **unknown** from REST alone; the
+  /// `meetingPresenceProvider` overlay supplies the live value when
+  /// the `meeting-updated` socket event arrives. UI should treat
+  /// `null` and `false` the same way (render as ended) until the
+  /// presence overlay says otherwise.
+  final bool? isActive;
+
+  /// Current participant count. Mirrors `meetings.members_count` on
+  /// the server. `null` when REST didn't carry it.
+  final int? membersCount;
+
+  /// Timestamp the meeting ended. Non-null iff `isActive == false`
+  /// per the invariant in protocol §2.
+  final DateTime? endedAt;
+
   CallHistory({
     required this.id,
     required this.title,
@@ -128,7 +147,32 @@ class CallHistory {
     required this.isMissed,
     this.meetingCode,
     this.hostId,
+    this.isActive,
+    this.membersCount,
+    this.endedAt,
   });
+
+  /// Copy with a presence overlay applied. Used by
+  /// `recentMeetingsProvider` to merge live socket state into the
+  /// REST snapshot without mutating the original.
+  CallHistory copyWithPresence({
+    bool? isActive,
+    int? membersCount,
+    DateTime? endedAt,
+  }) {
+    return CallHistory(
+      id: id,
+      title: title,
+      timestamp: timestamp,
+      duration: duration,
+      isMissed: isMissed,
+      meetingCode: meetingCode,
+      hostId: hostId,
+      isActive: isActive ?? this.isActive,
+      membersCount: membersCount ?? this.membersCount,
+      endedAt: endedAt ?? this.endedAt,
+    );
+  }
 
   factory CallHistory.fromJson(Map<String, dynamic> json) {
     String title = json['meeting_title'] ?? json['title'] ?? '';
@@ -175,6 +219,36 @@ class CallHistory {
     final meetingCode = (json['meeting_code'] ?? json['meetingCode'] ?? json['meeting_id'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString().replaceAll('-', '');
     final hostId = json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString();
 
+    // Live-state fields from protocol §4.1. All three are null on
+    // payloads from the legacy `/api/participant/user/:userId`
+    // endpoint (raw participation rows don't carry meeting-level
+    // state) — they're only set when this row came from
+    // `/api/meetings/user/:userId` or `/api/meeting/:code`, both of
+    // which include the meeting's live state. The socket overlay
+    // (`meetingPresenceProvider`) fills the gap for participation
+    // rows. Accept both snake_case and camelCase to match every
+    // other field in this model.
+    bool? isActive;
+    final rawIsActive = json['is_active'] ?? json['isActive'];
+    if (rawIsActive is bool) {
+      isActive = rawIsActive;
+    } else if (rawIsActive is String) {
+      final v = rawIsActive.toLowerCase();
+      if (v == 'true') isActive = true;
+      if (v == 'false') isActive = false;
+    }
+
+    int? membersCount;
+    final rawMembers = json['members_count'] ?? json['membersCount'];
+    if (rawMembers is num) membersCount = rawMembers.toInt();
+    if (rawMembers is String) membersCount = int.tryParse(rawMembers);
+
+    DateTime? endedAt;
+    final rawEnded = json['ended_at'] ?? json['endedAt'];
+    if (rawEnded is String && rawEnded.isNotEmpty) {
+      endedAt = DateTime.tryParse(rawEnded)?.toLocal();
+    }
+
     return CallHistory(
       id: json['meeting_id']?.toString() ?? json['meetingId']?.toString() ?? json['id']?.toString() ?? '',
       title: title,
@@ -183,6 +257,9 @@ class CallHistory {
       isMissed: false,
       meetingCode: meetingCode,
       hostId: hostId,
+      isActive: isActive,
+      membersCount: membersCount,
+      endedAt: endedAt,
     );
   }
 }

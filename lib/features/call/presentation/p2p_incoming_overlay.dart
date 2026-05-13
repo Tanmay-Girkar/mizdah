@@ -14,8 +14,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../../core/navigation/app_router.dart';
 import '../../../core/ui/mizdah_design.dart';
 import '../p2p_call_provider.dart';
 
@@ -90,14 +90,41 @@ class _P2PIncomingOverlayState extends ConsumerState<P2PIncomingOverlay>
                     call: call,
                     ringPulse: _ringPulse,
                     onAccept: (withVideo) {
+                      debugPrint('[P2P] accept tapped '
+                          '(incomingCallType=${call.withVideo ? "video" : "audio"} '
+                          'acceptedAs=${withVideo ? "video" : "audio"})');
+                      // 1. Move state to `connecting` and kick off
+                      //    WebRTC setup BEFORE navigating. The
+                      //    provider's `acceptIncoming` emits
+                      //    `accept-call` to the caller; the caller
+                      //    replies with `call-offer` which triggers
+                      //    `_bringUpCalleeSide` → getUserMedia +
+                      //    setRemoteDescription + answer + onTrack.
+                      //    By the time the call screen renders its
+                      //    first frame, the local stream is already
+                      //    in flight.
                       ref
                           .read(p2pCallProvider.notifier)
                           .acceptIncoming(withVideo: withVideo);
-                      // Move the user onto the call screen so they
-                      // see the active video as soon as media is up.
-                      final ctx = context;
+                      // 2. Navigate via the GLOBAL router rather than
+                      //    this overlay's BuildContext. The overlay
+                      //    sits OUTSIDE the GoRouter shell and
+                      //    collapses on accept (_slideCtrl.reverse →
+                      //    AnimatedBuilder returns SizedBox.shrink
+                      //    within 320ms). If we tried to `context.push`
+                      //    from this disposing subtree, the navigation
+                      //    could be silently dropped — that was the
+                      //    "incoming UI vanishes but call UI never
+                      //    opens" bug. Going through the singleton
+                      //    `appRouter` keeps the push independent of
+                      //    widget-tree lifecycle. We schedule it for
+                      //    the next frame so the state update above
+                      //    has already settled, which lets the screen
+                      //    pick up the right phase on its first build.
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (ctx.mounted) ctx.push('/p2p-call');
+                        debugPrint('[P2P] navigatingToVideoCallScreen '
+                            'withVideo=$withVideo');
+                        appRouter.push('/p2p-call');
                       });
                     },
                     onDecline: () {
@@ -132,6 +159,18 @@ class _IncomingSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ─── STEP 9: UI RENDER LOGS ────────────────────────────────────
+    // What the incoming UI actually sees just before painting. If
+    // `Current callType` reads `video` here but the screen shows
+    // audio chrome, the bug is in the conditional below this build
+    // method (Icons.call_rounded vs Icons.videocam_rounded). If it
+    // reads `audio` here, the bug is upstream (Step 8 state update).
+    debugPrint('==============================');
+    debugPrint('BUILDING INCOMING CALL UI');
+    debugPrint('Current callType: ${call.withVideo ? "video" : "audio"}');
+    debugPrint('Current withVideo: ${call.withVideo}');
+    debugPrint('Current callId: ${call.callId}');
+    debugPrint('==============================');
     return Material(
       type: MaterialType.transparency,
       child: SafeArea(
@@ -192,46 +231,87 @@ class _IncomingSheet extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  'is calling you',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.7),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.4,
-                  ),
+                // Subtle hint about the call type so the user knows
+                // what they're accepting before tapping. Matches the
+                // accept-button choice below.
+                //
+                // Copy is intentionally asymmetric: audio is the
+                // baseline call experience so it gets the plain
+                // "is calling you", while video gets the explicit
+                // "is video calling you" qualifier. The leading icon
+                // mirrors the same distinction (phone vs videocam).
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      call.withVideo
+                          ? Icons.videocam_rounded
+                          : Icons.call_rounded,
+                      size: 14,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      call.withVideo
+                          ? 'is video calling you'
+                          : 'is calling you',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ],
                 ),
                 const Spacer(),
+                // Show the SINGLE accept button that matches the
+                // caller's media intent (video / audio). Previously
+                // we showed both regardless, which was confusing
+                // (and let the user accept a video call as audio
+                // — which isn't actually supported by the WebRTC
+                // handshake in the current backend). `call.withVideo`
+                // comes from the signaling payload via
+                // p2p_call_service.dart's `incoming-call` handler.
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  mainAxisAlignment:
+                      MainAxisAlignment.spaceEvenly,
                   children: [
                     _IncomingAction(
                       label: 'Decline',
                       icon: Icons.call_end_rounded,
                       gradient: const LinearGradient(
-                        colors: [Color(0xFFEF4444), Color(0xFFB91C1C)],
+                        colors: [
+                          Color(0xFFEF4444),
+                          Color(0xFFB91C1C),
+                        ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                       onTap: onDecline,
                     ),
-                    _IncomingAction(
-                      label: 'Audio',
-                      icon: Icons.call_rounded,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF10B981), Color(0xFF059669)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                    if (call.withVideo)
+                      _IncomingAction(
+                        label: 'Accept',
+                        icon: Icons.videocam_rounded,
+                        gradient: MizdahTokens.heroGradient,
+                        onTap: () => onAccept(true),
+                      )
+                    else
+                      _IncomingAction(
+                        label: 'Accept',
+                        icon: Icons.call_rounded,
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFF10B981),
+                            Color(0xFF059669),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        onTap: () => onAccept(false),
                       ),
-                      onTap: () => onAccept(false),
-                    ),
-                    _IncomingAction(
-                      label: 'Video',
-                      icon: Icons.videocam_rounded,
-                      gradient: MizdahTokens.heroGradient,
-                      onTap: () => onAccept(true),
-                    ),
                   ],
                 ),
               ],

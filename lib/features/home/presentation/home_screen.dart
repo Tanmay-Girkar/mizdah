@@ -17,9 +17,15 @@ import '../../../data/repositories/mizdah_repository.dart';
 import '../../../data/repositories/participant_repository.dart';
 import '../../../data/repositories/scheduling_repository.dart';
 import '../../auth/auth_provider.dart';
+import '../../../core/services/push_notification_service.dart';
+import '../../scheduling/calendar_event_sync.dart';
 import '../../scheduling/data/calendar_payload.dart';
-import '../../chats/chats_provider.dart';
+import '../../scheduling/data/scheduled_meeting.dart';
+import '../../scheduling/scheduled_meetings_provider.dart';
 import '../../scheduling/scheduling_provider.dart';
+import '../../chats/chats_provider.dart';
+import '../../meeting/recent_meetings_provider.dart';
+import '../../meetings/presentation/rejoin_sheet.dart';
 import '../notification_provider.dart';
 
 // ════════════════════════════════════════════════════════════════════
@@ -1213,9 +1219,16 @@ class _MeetingRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final start = DateTime.tryParse(schedule['startTime']?.toString() ?? '') ??
-        DateTime.now();
-    final end = DateTime.tryParse(schedule['endTime']?.toString() ?? '');
+    // `.toLocal()` is what flips the UTC wire-format back to the
+    // device's wall clock. Without it, a meeting scheduled for 4PM
+    // local arrives back as `2026-05-11T10:30:00Z`, parses as a
+    // UTC DateTime, and `DateFormat('h:mm a')` renders "10:30 AM"
+    // instead of "4:00 PM" because DateFormat is timezone-agnostic.
+    final start =
+        DateTime.tryParse(schedule['startTime']?.toString() ?? '')?.toLocal() ??
+            DateTime.now();
+    final end =
+        DateTime.tryParse(schedule['endTime']?.toString() ?? '')?.toLocal();
     final rawTitle = schedule['title']?.toString() ?? 'Meeting';
     final title = _displayTitle(rawTitle);
     final code = _extractMeetingCode(schedule);
@@ -1437,7 +1450,11 @@ class _RecentActivityCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final historyAsync = ref.watch(callHistoryProvider);
+    // Use the MERGED provider — REST snapshot overlaid with live
+    // socket presence. The home recent-activity card and the
+    // Meetings → Recent list now read from the same source, so a
+    // meeting that ends in real-time updates both screens together.
+    final historyAsync = ref.watch(recentMeetingsProvider);
     final user = ref.watch(authProvider).user;
 
     return _FadeUp(
@@ -1641,7 +1658,11 @@ class _RecentActivityRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.read(authProvider).user;
+    // `ref` is intentionally unread here — the parent already
+    // computed `isHost` against the current user. We still keep it
+    // a `ConsumerWidget` build signature so future presence-aware
+    // additions to this row (LIVE pill etc.) can read providers
+    // without changing the class shape.
     final palette = _palette(isHost);
     final displayTitle = (item.title.contains('http') ||
             item.title.length > 24)
@@ -1650,17 +1671,15 @@ class _RecentActivityRow extends ConsumerWidget {
 
     return InkWell(
       onTap: () {
-        showModalBottomSheet(
-          context: context,
-          backgroundColor: Colors.transparent,
-          isScrollControlled: true,
-          builder: (_) => _HistoryDetailModal(
-            item: item,
-            isHost: item.hostId != null &&
-                user != null &&
-                item.hostId == user.id,
-          ),
-        );
+        // Route through the unified presence-aware sheet defined in
+        // `lib/features/meetings/presentation/rejoin_sheet.dart`. It
+        // handles BOTH active and ended states — shows the rejoin
+        // button (live count, etc.) when the meeting is live, or the
+        // "Meeting ended" state when it's not. Clears the floating
+        // bottom nav via navBarBottomInset, so the action row never
+        // hides behind the tab bar — that was the previous bug where
+        // _HistoryDetailModal's Rejoin button rendered under the nav.
+        showRejoinSheet(context, meeting: item);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -2481,11 +2500,76 @@ final callHistoryProvider = FutureProvider<List<CallHistory>>((ref) async {
   return repo.getUserHistory(authState.user!.id);
 });
 
+/// Schedules visible in "Upcoming Meetings" — merges three sources
+/// in this priority order:
+///
+///   1. **Local sheet-scheduled meetings** (`scheduledMeetingsProvider`)
+///      — the user just tapped Save in the in-app schedule sheet.
+///      Local-first so the row appears INSTANTLY, no network wait.
+///   2. **Backend schedules** (`schedulingRepositoryProvider.getUserSchedules`)
+///      — meetings the user (or invitee) made through some other
+///      surface (web, another device).
+///
+/// On top of the merge we apply two transforms:
+///
+///   • **Drop already-ended meetings.** Without this filter, a
+///     meeting that ended an hour ago still shows in "Upcoming
+///     Meetings" until the user logs out — the row is technically
+///     still in the database, the backend doesn't auto-archive past
+///     schedules. We hide anything whose end time (or `start + 1h`
+///     fallback) is older than 10 minutes ago so a meeting that
+///     just started doesn't vanish out from under joiners.
+///   • **Sort by start time ascending.** Older meetings near the top
+///     ("starting next") makes "Upcoming" scannable.
+///
+/// **Dedupe rule:** if a local row and a backend row have the same
+/// `meetingCode`, the local row wins (we just typed it; it has the
+/// most up-to-date title / description). This handles the case where
+/// the user's own `scheduleMeeting` POST round-trips back via the
+/// backend list.
 final schedulesProvider = FutureProvider<List<dynamic>>((ref) async {
+  // 1. Local rows — `.watch` so a new schedule re-fires this future.
+  final local = ref.watch(scheduledMeetingsProvider);
+
+  // 2. Backend rows — best-effort. Repo already returns [] on failure.
   final authState = ref.watch(authProvider);
-  if (authState.user == null) return [];
-  final repo = ref.watch(schedulingRepositoryProvider);
-  return repo.getUserSchedules(authState.user!.id);
+  List<dynamic> remote = const [];
+  if (authState.user != null) {
+    final repo = ref.read(schedulingRepositoryProvider);
+    remote = await repo.getUserSchedules(authState.user!.id);
+  }
+
+  // 3. Merge with dedupe — local takes precedence on meetingCode match.
+  final localCodes = {for (final m in local) m.meetingCode};
+  final merged = <dynamic>[
+    for (final m in local) m.toScheduleMap(),
+    for (final r in remote)
+      if (r is Map &&
+          !localCodes.contains(r['meetingCode']?.toString()))
+        r,
+  ];
+
+  // 4. Filter past + sort.
+  final cutoff = DateTime.now().subtract(const Duration(minutes: 10));
+  final out = <dynamic>[];
+  for (final s in merged) {
+    if (s is! Map) continue;
+    final start =
+        DateTime.tryParse(s['startTime']?.toString() ?? '')?.toLocal();
+    if (start == null) continue;
+    final end = DateTime.tryParse(s['endTime']?.toString() ?? '')?.toLocal() ??
+        start.add(const Duration(hours: 1));
+    if (end.isBefore(cutoff)) continue;
+    out.add(s);
+  }
+  out.sort((a, b) {
+    final ay = DateTime.tryParse(a['startTime']?.toString() ?? '')?.toLocal() ??
+        DateTime.now();
+    final by = DateTime.tryParse(b['startTime']?.toString() ?? '')?.toLocal() ??
+        DateTime.now();
+    return ay.compareTo(by);
+  });
+  return out;
 });
 
 final googleCalendarServiceProvider =
@@ -2677,73 +2761,93 @@ class _NewMeetingOptions extends StatelessWidget {
   /// the meeting-service migration is currently broken on the dev
   /// gateway, but `/api/scheduling/schedule` is independent and was
   /// confirmed live with curl on 2026-05-09.
+  /// **Direct Google Calendar launch — no intermediate UI, save-detected.**
+  ///
+  /// 1. Generate placeholder times (now + 10 min) + unique tag
+  ///    `#mizdah:<code>` embedded in the description.
+  /// 2. Launch Google Calendar with all fields prefilled. User edits
+  ///    time/date as desired inside Calendar.
+  /// 3. **Nothing is saved locally yet.** No row in Upcoming
+  ///    Meetings, no snackbar, no reminders scheduled — because we
+  ///    don't yet know if the user will save or cancel.
+  /// 4. Once the user returns to our app, `CalendarEventSync` polls
+  ///    the device's native calendar for any event carrying the tag.
+  ///    • Match → user saved. Read the REAL start/end times from the
+  ///      calendar event (which the user may have edited), persist
+  ///      locally, schedule reminders, show "Meeting added" snackbar.
+  ///    • No match within 60s → user cancelled. Do nothing.
+  ///
+  /// This is why we needed READ_CALENDAR permission + the
+  /// `device_calendar` package; URL launch alone can't tell us
+  /// whether Save was tapped, and what the saved time was.
   Future<void> _scheduleMeeting(BuildContext context) async {
-    final scheduling = ref.read(calendarSchedulingServiceProvider);
-    final scheduleRepo = ref.read(schedulingRepositoryProvider);
+    Navigator.pop(context); // dismiss the Start-a-Meeting sheet
+
     final user = ref.read(authProvider).user;
+    final scheduling = ref.read(calendarSchedulingServiceProvider);
+    final meetingRepo = ref.read(mizdahRepositoryProvider);
     final messenger = ScaffoldMessenger.of(context);
+    final sync = CalendarEventSync();
 
-    Navigator.pop(context);
+    // Ensure we can read the calendar BEFORE launching Calendar UI —
+    // otherwise we'd open Calendar, the user would save, and then we
+    // couldn't fulfill our "show in Upcoming Meetings" promise. If
+    // they decline, fall back to a one-off "we'll launch Calendar
+    // but can't auto-add it to Upcoming" message so behaviour is
+    // honest.
+    final hasPerm = await sync.ensurePermissions();
+    if (!context.mounted) return;
 
-    final startTime = DateTime.now().add(const Duration(hours: 1));
-    final endTime = startTime.add(const Duration(hours: 1));
-    final code = MeetingUtils.generateMeetingCode();
-    final link = MeetingUtils.generateMeetingLink(code);
-    final timezone = DateTime.now().timeZoneName;
+    // Generate identifying details up-front so we can embed the tag
+    // in Calendar's description for the post-launch read-back.
+    final meetingCode = MeetingUtils.generateMeetingCode();
+    final tag = '#mizdah:$meetingCode';
+    final joinLink = MeetingUtils.generateMeetingLink(meetingCode);
+    final placeholderStart =
+        DateTime.now().add(const Duration(minutes: 10));
+    final placeholderEnd =
+        placeholderStart.add(const Duration(hours: 1));
 
-    final payload = CalendarPayload(
+    debugPrint('[schedule] launching Calendar with tag=$tag '
+        'placeholderStart=${placeholderStart.toIso8601String()} '
+        'placeholderEnd=${placeholderEnd.toIso8601String()}');
+
+    final calendarPayload = CalendarPayload(
       title: 'Mizdah Meeting',
-      meetingLink: link,
-      meetingId: code,
-      hostName: (user?.name.trim().isNotEmpty ?? false) ? user!.name : null,
-      startTime: startTime,
-      endTime: endTime,
-      timezone: timezone,
+      meetingLink: joinLink,
+      meetingId: meetingCode,
+      hostName: user?.name,
+      // Embed the tag at the top of the description so our post-
+      // launch poll can identify "this is the event the user just
+      // saved". The format helper renders the tag, link, and code
+      // as a clean description block.
+      agenda: tag,
+      startTime: placeholderStart,
+      endTime: placeholderEnd,
+      timezone: DateTime.now().timeZoneName,
     );
 
-    // (1) Persist in the background — don't await. Upcoming Meetings
-    // refreshes itself via `ref.invalidate(schedulesProvider)` when
-    // the POST resolves; if it fails we log and move on (the user's
-    // Google Calendar entry already captured the meeting).
-    if (user != null) {
-      // Encode the join code in the title so the meeting code is
-      // recoverable on the Upcoming list even though `meetingId` /
-      // `meetingCode` are nullable on the backend (we still send
-      // `meetingCode` so future server versions can wire it).
-      unawaited(_persistSchedule(
-        scheduleRepo: scheduleRepo,
-        hostId: user.id,
-        title: 'Mizdah Meeting [$code]',
-        startTime: startTime,
-        endTime: endTime,
-        timezone: timezone,
-        meetingCode: code,
-      ));
-    }
+    final launched = await scheduling.schedule(calendarPayload);
+    if (!context.mounted) return;
 
-    // (2) Open Google Calendar instantly.
-    final ok = await scheduling.schedule(payload);
-    if (!ok && context.mounted) {
-      // Last-resort fallback so the user can still get the link out.
-      final fallbackUrl = scheduling.resolveUrl(payload);
+    if (!launched) {
+      final fallbackUrl = scheduling.resolveUrl(calendarPayload);
       messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: md.MizdahTokens.surface(context),
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 5),
           content: Row(
             children: [
               const Icon(Icons.error_outline_rounded,
                   color: Color(0xFFB42318), size: 18),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Unable to open calendar',
-                  style: TextStyle(
-                    color: md.MizdahTokens.inkOf(context),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                child: Text('Unable to open calendar',
+                    style: TextStyle(
+                      color: md.MizdahTokens.inkOf(context),
+                      fontWeight: FontWeight.w700,
+                    )),
               ),
               if (fallbackUrl.isNotEmpty)
                 TextButton(
@@ -2755,39 +2859,185 @@ class _NewMeetingOptions extends StatelessWidget {
           ),
         ),
       );
+      return;
     }
+
+    if (!hasPerm) {
+      // Calendar opened, but we can't read it back. Be honest with
+      // the user instead of guessing a time and lying.
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: md.MizdahTokens.surface(context),
+          duration: const Duration(seconds: 5),
+          content: Text(
+            'Calendar access denied — the meeting won\'t auto-appear in Upcoming Meetings.',
+            style: TextStyle(
+              color: md.MizdahTokens.inkOf(context),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Snapshot the theme tokens we'll need for the eventual
+    // success-snackbar BEFORE the long async wait — the sheet's
+    // BuildContext is gone after Navigator.pop, so we can't read
+    // theme off it later.
+    final surfaceColor = md.MizdahTokens.surface(context);
+    final inkColor = md.MizdahTokens.inkOf(context);
+
+    // Kick the poll. Fire-and-forget at the call-site so we don't
+    // block the UI — the helper schedules its own snackbar /
+    // persistence when the event surfaces.
+    // ignore: discarded_futures
+    _waitForAndPersistCalendarEvent(
+      sync: sync,
+      tag: tag,
+      meetingCode: meetingCode,
+      joinLink: joinLink,
+      hostName: user?.name,
+      meetingRepo: meetingRepo,
+      messenger: messenger,
+      surfaceColor: surfaceColor,
+      inkColor: inkColor,
+    );
   }
 
-  Future<void> _persistSchedule({
-    required SchedulingRepository scheduleRepo,
-    required String hostId,
-    required String title,
-    required DateTime startTime,
-    required DateTime endTime,
-    required String timezone,
+  /// Polls the device calendar (via `CalendarEventSync`) for an
+  /// event carrying [tag]. On match, persists locally + schedules
+  /// reminders + shows snackbar. On timeout (user cancelled), no-op.
+  Future<void> _waitForAndPersistCalendarEvent({
+    required CalendarEventSync sync,
+    required String tag,
     required String meetingCode,
+    required String joinLink,
+    required String? hostName,
+    required MizdahRepository meetingRepo,
+    required ScaffoldMessengerState messenger,
+    required Color surfaceColor,
+    required Color inkColor,
   }) async {
-    try {
-      await scheduleRepo.scheduleMeeting(
-        hostId: hostId,
-        title: title,
-        startTime: startTime,
-        endTime: endTime,
-        recurrence: 'none',
-        timezone: timezone,
-        // meetingId: null — the dedicated meeting-service has a
-        // pending Prisma migration; the scheduling service is
-        // independent and accepts a null meeting reference.
-        meetingId: null,
-        meetingCode: meetingCode,
-      );
-      ref.invalidate(schedulesProvider);
-      ref.invalidate(callHistoryProvider);
-    } catch (e) {
-      // Calendar entry already saved on Google's side; the user is
-      // not blocked. Just log so devs can spot regressions.
-      debugPrint('[schedule] persist failed: $e');
+    final found = await sync.waitForEventByTag(tag);
+    if (found == null) {
+      debugPrint('[schedule] no calendar event with tag=$tag — '
+          'user cancelled or save timed out');
+      return;
     }
+
+    debugPrint('[schedule] calendar event found: '
+        'eventId=${found.eventId} '
+        'realStart=${found.startTime.toIso8601String()} '
+        'realEnd=${found.endTime.toIso8601String()}');
+
+    // Build the local ScheduledMeeting from the REAL times the
+    // calendar gave us — not the placeholders we sent. This is the
+    // fix for "5:30 PM picked in Calendar but 5:35 PM in Upcoming".
+    final meeting = ScheduledMeeting(
+      id: '${DateTime.now().millisecondsSinceEpoch}_$meetingCode',
+      title: found.title,
+      description: found.description ?? '',
+      meetingCode: meetingCode,
+      startTime: found.startTime.toUtc(),
+      endTime: found.endTime.toUtc(),
+      participants: const [],
+      meetingType: MeetingType.video,
+      createdBy: hostName,
+      createdAt: DateTime.now().toUtc(),
+      calendarEventId: found.eventId,
+    );
+
+    final notifier = ref.read(scheduledMeetingsProvider.notifier);
+    await notifier.add(meeting);
+
+    // Best-effort backend create — uses the REAL start time so any
+    // /pre-join lookups round-trip the same instant.
+    // ignore: discarded_futures
+    meetingRepo
+        .createMeeting(
+      title: meeting.title,
+      dateTime: meeting.startTime.toLocal(),
+      code: meeting.meetingCode,
+    )
+        .catchError((Object e) {
+      debugPrint('[schedule] createMeeting failed: $e');
+      return null as dynamic;
+    });
+
+    // Schedule the two reminder notifications against the REAL
+    // start (not the placeholder).
+    final push = PushNotificationService.instance;
+    final localStart = meeting.startTime.toLocal();
+    final payload = <String, dynamic>{
+      'type': 'meeting',
+      'meeting_code': meeting.meetingCode,
+      'meeting_id': meeting.id,
+    };
+    final baseId = meeting.id.hashCode & 0x7fffffff;
+    // ignore: discarded_futures
+    push.scheduleLocalNotification(
+      id: baseId,
+      when: localStart.subtract(const Duration(minutes: 10)),
+      title: meeting.title,
+      body: 'Starts in 10 min — ${_fmtTime(localStart)}',
+      payload: payload,
+    );
+    // ignore: discarded_futures
+    push.scheduleLocalNotification(
+      id: baseId + 1,
+      when: localStart,
+      title: '${meeting.title} is starting',
+      body: 'Tap to join now',
+      payload: payload,
+    );
+
+    // Snackbar fires regardless of where the user navigated after
+    // launching Calendar — `messenger` was captured before the
+    // calendar launch and survives screen changes within the shell.
+    // We use `messenger.mounted` (no original BuildContext is
+    // available — the sheet that called us was popped).
+    if (!messenger.mounted) return;
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: surfaceColor,
+        elevation: 6,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 110),
+        duration: const Duration(seconds: 4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded,
+                color: Color(0xFF10B981), size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Meeting added — ${_fmtTime(localStart)}',
+                style: TextStyle(
+                  color: inkColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Tiny helper — same `h:mm a` format the home meeting rows use,
+  /// inlined so we don't lug `package:intl` into this file just for
+  /// the reminder body.
+  String _fmtTime(DateTime dt) {
+    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour < 12 ? 'AM' : 'PM';
+    return '$h:$m $ampm';
   }
 }
 
@@ -3037,125 +3287,9 @@ class _ShareLinkModal extends StatelessWidget {
   }
 }
 
-class _HistoryDetailModal extends StatelessWidget {
-  final CallHistory item;
-  final bool isHost;
-  const _HistoryDetailModal({required this.item, required this.isHost});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final displayTitle = (item.title.contains('http') || item.title.length > 20)
-        ? (item.meetingCode ?? 'Meeting')
-        : item.title;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1F2E) : Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white24 : Colors.black12,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 24),
-          CircleAvatar(
-            radius: 32,
-            backgroundColor: isHost
-                ? Colors.green.withValues(alpha: 0.1)
-                : _Tokens.primary.withValues(alpha: 0.1),
-            child: Icon(
-              isHost ? Icons.outbound_rounded : Icons.call_received_rounded,
-              color: isHost ? Colors.green : _Tokens.primary,
-              size: 32,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            displayTitle,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            isHost ? 'Meeting you hosted' : 'Meeting you joined',
-            style: TextStyle(
-              color: isHost ? Colors.green : _Tokens.primary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 24),
-          if (item.meetingCode != null)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : const Color(0xFFF6F7FB),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.link_rounded, color: _Tokens.primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Meeting Code',
-                            style: TextStyle(
-                                fontSize: 11, color: Colors.grey)),
-                        const SizedBox(height: 2),
-                        Text(
-                          item.meetingCode!,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy_rounded,
-                        color: _Tokens.primary),
-                    onPressed: () {
-                      Clipboard.setData(
-                          ClipboardData(text: item.meetingCode!));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Code copied')),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 16),
-          Text(
-            DateFormat('EEE, MMM d · h:mm a').format(item.timestamp),
-            style: const TextStyle(color: Colors.grey, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-          if (item.meetingCode != null)
-            MizdahButton(
-              label: 'Rejoin meeting',
-              icon: Icons.video_call_rounded,
-              onTap: () {
-                Navigator.pop(context);
-                context.push('/pre-join/${item.meetingCode}');
-              },
-            ),
-        ],
-      ),
-    );
-  }
-}
+// _HistoryDetailModal was removed when the home screen migrated to
+// the unified presence-aware rejoin sheet
+// (`lib/features/meetings/presentation/rejoin_sheet.dart`). The old
+// modal rendered without accounting for the floating bottom nav and
+// hid its own Rejoin button under the tab bar — the new sheet uses
+// `MizdahTokens.navBarBottomInset` to clear it.

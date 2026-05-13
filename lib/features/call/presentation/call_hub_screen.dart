@@ -104,6 +104,20 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
   }
 
   void _placeCall(User target, {required bool withVideo}) {
+    // ─── STEP 1: CALL BUTTON LOGS ──────────────────────────────────
+    // First chance to confirm the right intent left the UI. If this
+    // line prints `audio` for a video-button tap, the bug is in the
+    // button wiring (highly unlikely — see `_PersonRow` below where
+    // the two buttons hardcode `withVideo: false` / `withVideo: true`).
+    final auth = ref.read(authProvider);
+    final callType = withVideo ? 'video' : 'audio';
+    debugPrint('==============================');
+    debugPrint('CALL BUTTON PRESSED');
+    debugPrint('Selected call type: $callType');
+    debugPrint('Caller ID: ${auth.user?.id}');
+    debugPrint('Receiver ID: ${target.id}');
+    debugPrint('Receiver Name: ${target.name}');
+    debugPrint('==============================');
     FocusScope.of(context).unfocus();
     ref
         .read(p2pCallProvider.notifier)

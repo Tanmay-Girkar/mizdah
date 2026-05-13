@@ -111,12 +111,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   @override
   void initState() {
     super.initState();
-    // Mark conversation read on enter — fire after first frame so the
-    // provider tree is mounted.
+    // Mark conversation read AND tell the server we're actively
+    // viewing this thread — fire after first frame so the provider
+    // tree is mounted. `focusConversation` makes the server push
+    // `delivered` acks for inbound messages immediately, which is
+    // what closes the perceived gap between "peer sent" and "I see
+    // it" to under a second on a healthy network.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref
-          .read(chatRepositoryProvider)
-          .markRead(widget.conversationId);
+      final repo = ref.read(chatRepositoryProvider);
+      repo.markRead(widget.conversationId);
+      repo.focusConversation(widget.conversationId);
     });
     // Periodic REST refresh — picks up status changes (sent →
     // delivered → read) and any messages that arrived without a
@@ -134,18 +138,39 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     _scrollCtrl.dispose();
     _textCtrl.dispose();
     _focusNode.dispose();
+    // Tell the server we backed out + pull a fresh conversations
+    // list so the chats screen we're about to land on shows the
+    // up-to-date `lastMessage` preview for THIS thread (the messages
+    // we sent or received while inside). Best-effort — `read` was
+    // already called via markRead on enter, so the server has the
+    // authoritative read receipt regardless of whether this lands.
+    try {
+      final repo = ref.read(chatRepositoryProvider);
+      repo.blurConversation(widget.conversationId);
+      // ignore: discarded_futures
+      repo.refreshConversations();
+    } catch (_) {}
     super.dispose();
   }
 
   /// Background refresh that doesn't reset the scroll position or
   /// flicker the list. Merges server messages into `_messages` —
   /// optimistic temp messages survive until their server ack arrives.
+  /// Also kicks a conversations-list refresh in parallel so the
+  /// chats screen's `lastMessage` preview stays current while the
+  /// user is inside a thread (without this, opening a chat, sending
+  /// a few messages, and backing out shows a stale preview row).
   Future<void> _refreshMessagesQuiet() async {
     if (!mounted || !_hydrated) return;
+    final repo = ref.read(chatRepositoryProvider);
+    // Fire conversations refresh in parallel — don't await it from
+    // the messages path so a slow conversations endpoint can't stall
+    // message updates. Errors are swallowed inside the repo.
+    // ignore: discarded_futures
+    repo.refreshConversations();
     try {
-      final fresh = await ref
-          .read(chatRepositoryProvider)
-          .fetchMessages(conversationId: widget.conversationId);
+      final fresh =
+          await repo.fetchMessages(conversationId: widget.conversationId);
       if (!mounted) return;
       _mergeServerMessages(fresh);
     } catch (_) {
@@ -249,16 +274,66 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     if (body.isEmpty) return;
     _textCtrl.clear();
     if (_emojiOpen) setState(() => _emojiOpen = false);
-    final repo = ref.read(chatRepositoryProvider);
-    final optimistic = await repo.sendMessage(
+
+    // ── True optimistic UI ──────────────────────────────────────
+    // Old code awaited the REST round-trip BEFORE adding the bubble,
+    // which left the user staring at an empty composer for the
+    // duration of the request — looks like "the app ate my message".
+    //
+    // New flow:
+    //   1. Build a local `sending` message with a client-generated
+    //      temp id. Render it instantly.
+    //   2. Fire the REST call in the background.
+    //   3. The repo's response (or the socket's `chat:message` echo
+    //      — whichever arrives first) is matched against this temp
+    //      by `_applyDelta` and replaces it in place. Bubble flips
+    //      from clock-tick → single-tick → double / blue ticks as
+    //      status events flow in.
+    //   4. On error we flip the temp's status to `failed` so the
+    //      bubble shows the retry affordance.
+    final me = ref.read(authProvider).user;
+    final selfEmail = ref.read(effectiveSelfEmailProvider);
+    final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
+    final optimistic = ChatMessage(
+      id: tempId,
       conversationId: widget.conversationId,
+      senderEmail: selfEmail.isNotEmpty
+          ? selfEmail
+          : (me?.email ?? ''),
+      senderUserId: me?.id,
       body: body,
+      sentAt: DateTime.now(),
+      status: MessageStatus.sending,
     );
     setState(() {
-      _myMessageIds.add(optimistic.id);
+      _myMessageIds.add(tempId);
       _messages.add(optimistic);
     });
     _scrollToBottom();
+
+    // Fire-and-forget the network call. The repo's `_applyDelta`
+    // reconciliation handles both the REST ack and the socket echo.
+    final repo = ref.read(chatRepositoryProvider);
+    try {
+      final server = await repo.sendMessage(
+        conversationId: widget.conversationId,
+        body: body,
+      );
+      // Manually reconcile the temp in case the socket echo doesn't
+      // arrive (e.g. socket disconnected mid-send). `_applyDelta`'s
+      // matcher already handles the temp→server id swap by body +
+      // status:sending.
+      _applyDelta(server);
+    } catch (e) {
+      debugPrint('[chats] send failed: $e');
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere((m) => m.id == tempId);
+        if (i >= 0) {
+          _messages[i] = _messages[i].copyWith(status: MessageStatus.failed);
+        }
+      });
+    }
   }
 
   @override

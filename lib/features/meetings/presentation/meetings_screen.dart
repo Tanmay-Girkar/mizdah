@@ -3,9 +3,13 @@
 //  ────────────────────────────────────────────────────────────────────
 //  Two segmented sections:
 //    • Upcoming (schedulesProvider)
-//    • Recent   (callHistoryProvider)
+//    • Recent   (recentMeetingsProvider — REST snapshot overlaid
+//               with live socket presence; see
+//               docs/MEETING_PRESENCE_PROTOCOL.md)
 //  Reuses the home screen's data sources so invalidation in one place
-//  refreshes both views.
+//  refreshes both views. The recent list separately subscribes to
+//  meeting-updated socket events so cards downgrade from LIVE to
+//  ended without a manual refresh.
 // ════════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -20,6 +24,8 @@ import '../../auth/auth_provider.dart';
 import '../../home/presentation/home_screen.dart' show
     schedulesProvider,
     callHistoryProvider;
+import '../../meeting/recent_meetings_provider.dart';
+import 'rejoin_sheet.dart';
 
 class MeetingsScreen extends ConsumerStatefulWidget {
   /// Optional initial segment — `0` for Upcoming, `1` for Recent.
@@ -314,9 +320,13 @@ class _UpcomingMeetingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final start = DateTime.tryParse(schedule['startTime']?.toString() ?? '') ??
-        DateTime.now();
-    final end = DateTime.tryParse(schedule['endTime']?.toString() ?? '');
+    // `.toLocal()` converts the UTC wire-format back to the user's
+    // wall clock. See scheduling_repository.dart for the contract.
+    final start =
+        DateTime.tryParse(schedule['startTime']?.toString() ?? '')?.toLocal() ??
+            DateTime.now();
+    final end =
+        DateTime.tryParse(schedule['endTime']?.toString() ?? '')?.toLocal();
     final rawTitle = schedule['title']?.toString() ?? 'Meeting';
     final title = _displayTitle(rawTitle);
     final code = _extractCode(schedule);
@@ -501,7 +511,11 @@ class _RecentList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(callHistoryProvider);
+    // Watch the MERGED provider — REST snapshot overlaid with live
+    // socket presence (see `recentMeetingsProvider`). Every
+    // `meeting-updated` socket event rebuilds matching cards
+    // without a refresh.
+    final async = ref.watch(recentMeetingsProvider);
     final user = ref.watch(authProvider).user;
     return async.when(
       loading: () => const _Loader(),
@@ -584,7 +598,16 @@ class _RecentList extends ConsumerWidget {
 
 /// One row in the Recent list. Mirrors the home Recent Activity row:
 /// gradient pill icon (purple = hosted, emerald = joined) + role chip
-/// + meeting code/title + absolute date + chevron.
+/// + meeting code/title + absolute date.
+///
+/// Trailing widget swaps based on live state (protocol-driven):
+///   • ACTIVE meeting   → LIVE pill + chevron, onTap opens rejoin sheet
+///   • ENDED / unknown  → no chevron, dimmed, onTap is a no-op (and
+///                        the card is not InkWell-rippling)
+///
+/// The AnimatedSwitcher on the trailing widget gives a smooth fade
+/// when a meeting deactivates while the user is looking at the list —
+/// matches the WhatsApp pattern of "live indicator just slid off".
 class _RecentCard extends StatelessWidget {
   final CallHistory item;
   final bool isHost;
@@ -601,91 +624,119 @@ class _RecentCard extends StatelessWidget {
         ? (item.meetingCode ?? 'Meeting')
         : item.title;
 
+    // Source of truth for "is this meeting live right now": the
+    // model's `isActive` field, which the merged provider patches
+    // from the live presence socket. `null` is treated as ended
+    // (protocol §1: null means unknown → render as ended).
+    final isLive = item.isActive == true;
+    final memberCount = item.membersCount ?? 0;
+
+    final tap = !isLive || code == null
+        ? null
+        : () => showRejoinSheet(context, meeting: item);
+
     return InkWell(
-      onTap: code == null ? null : () => context.push('/pre-join/$code'),
+      onTap: tap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: palette.iconGradient,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: palette.glow.withValues(alpha: 0.30),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Icon(
-                isHost
-                    ? Icons.video_call_rounded
-                    : Icons.call_received_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: palette.chipBg,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          isHost ? 'HOSTED' : 'JOINED',
-                          style: TextStyle(
-                            color: palette.chipFg,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.0,
+        child: Opacity(
+          // Slight dim for ended meetings — emphasises live ones
+          // without making ended cards look broken.
+          opacity: isLive ? 1.0 : 0.78,
+          child: Row(
+            children: [
+              _LeadingIcon(palette: palette, isHost: isHost, isLive: isLive),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: palette.chipBg,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            isHost ? 'HOSTED' : 'JOINED',
+                            style: TextStyle(
+                              color: palette.chipFg,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.0,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          displayTitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: MizdahTokens.inkOf(context),
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.2,
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: MizdahTokens.inkOf(context),
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    DateFormat('MMM d, h:mm a').format(item.timestamp),
-                    style: TextStyle(
-                      color: MizdahTokens.mutedOf(context),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Text(
+                          DateFormat('MMM d, h:mm a').format(item.timestamp),
+                          style: TextStyle(
+                            color: MizdahTokens.mutedOf(context),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        // When live and >1 person in the room, show
+                        // the count next to the timestamp — gives the
+                        // user a sense of how big the meeting is
+                        // before they tap rejoin.
+                        if (isLive && memberCount > 1) ...[
+                          Text(
+                            '  ·  ',
+                            style: TextStyle(
+                              color: MizdahTokens.mutedOf(context),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          Text(
+                            '$memberCount in meeting',
+                            style: TextStyle(
+                              color: MizdahTokens.primary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            if (code != null)
-              Icon(Icons.chevron_right_rounded,
-                  color: MizdahTokens.mutedOf(context), size: 18),
-          ],
+              // Trailing widget — fades between LIVE pill+chevron and
+              // a small "Ended" muted label. AnimatedSwitcher keeps
+              // it visually stable as state flips mid-view.
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                transitionBuilder: (child, anim) =>
+                    FadeTransition(opacity: anim, child: child),
+                child: isLive && code != null
+                    ? const _RecentTrailingLive(key: ValueKey('live'))
+                    : const _RecentTrailingEnded(key: ValueKey('ended')),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -727,6 +778,243 @@ class _RolePalette {
     required this.chipBg,
     required this.chipFg,
   });
+}
+
+/// Leading 40×40 icon tile. For ACTIVE meetings we wrap the tile in
+/// a soft pulsing ring so the user catches it at a glance — same
+/// affordance as WhatsApp's call list "ongoing" indicator. For ended
+/// meetings, just the gradient tile.
+class _LeadingIcon extends StatelessWidget {
+  final _RolePalette palette;
+  final bool isHost;
+  final bool isLive;
+  const _LeadingIcon({
+    required this.palette,
+    required this.isHost,
+    required this.isLive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tile = Container(
+      width: 40,
+      height: 40,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: palette.iconGradient,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: palette.glow.withValues(alpha: isLive ? 0.45 : 0.30),
+            blurRadius: isLive ? 14 : 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Icon(
+        isHost ? Icons.video_call_rounded : Icons.call_received_rounded,
+        color: Colors.white,
+        size: 20,
+      ),
+    );
+    if (!isLive) return tile;
+    // Subtle outer pulsing ring — purely visual signal.
+    return _PulseRing(color: palette.glow, child: tile);
+  }
+}
+
+class _PulseRing extends StatefulWidget {
+  final Color color;
+  final Widget child;
+  const _PulseRing({required this.color, required this.child});
+
+  @override
+  State<_PulseRing> createState() => _PulseRingState();
+}
+
+class _PulseRingState extends State<_PulseRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, child) {
+        final t = _c.value;
+        return SizedBox(
+          width: 48,
+          height: 48,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Expanding ring — fades from solid to transparent as
+              // it grows. Reads as a "heartbeat" without being noisy.
+              Container(
+                width: 40 + t * 14,
+                height: 40 + t * 14,
+                decoration: BoxDecoration(
+                  shape: BoxShape.rectangle,
+                  borderRadius: BorderRadius.circular(14 + t * 4),
+                  border: Border.all(
+                    color: widget.color.withValues(alpha: (1 - t) * 0.55),
+                    width: 1.6,
+                  ),
+                ),
+              ),
+              child!,
+            ],
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// Trailing widget for an ACTIVE recent meeting card — LIVE pill +
+/// chevron, separated by spacing. The whole row is wrapped in the
+/// card's InkWell so the user can tap anywhere.
+class _RecentTrailingLive extends StatelessWidget {
+  const _RecentTrailingLive({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            gradient: MizdahTokens.heroGradient,
+            borderRadius: BorderRadius.circular(999),
+            boxShadow: [
+              BoxShadow(
+                color: MizdahTokens.primary.withValues(alpha: 0.35),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _LiveDot(),
+              SizedBox(width: 6),
+              Text(
+                'LIVE',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Icon(
+          Icons.chevron_right_rounded,
+          color: MizdahTokens.mutedOf(context),
+          size: 18,
+        ),
+      ],
+    );
+  }
+}
+
+/// Trailing widget for an ENDED meeting card — small muted "Ended"
+/// chip, no chevron. Card is non-tappable in this state.
+class _RecentTrailingEnded extends StatelessWidget {
+  const _RecentTrailingEnded({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = MizdahTokens.inkOf(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: ink.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        'Ended',
+        style: TextStyle(
+          color: ink.withValues(alpha: 0.5),
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+}
+
+class _LiveDot extends StatefulWidget {
+  const _LiveDot();
+
+  @override
+  State<_LiveDot> createState() => _LiveDotState();
+}
+
+class _LiveDotState extends State<_LiveDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, _) {
+        final t = _c.value;
+        return Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.6 + 0.4 * t),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.white.withValues(alpha: t * 0.6),
+                blurRadius: 4,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _DiagonalPattern extends CustomPainter {

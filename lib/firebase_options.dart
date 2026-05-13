@@ -51,19 +51,19 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCITrljOBuLucW8eJ81k6_eJgDRRc9XD1w',
-    appId: '1:422783082004:android:66f66acc47b8cf3dc0d101',
-    messagingSenderId: '422783082004',
-    projectId: 'mizdah-ce042',
-    storageBucket: 'mizdah-ce042.firebasestorage.app',
+    apiKey: 'AIzaSyCD1mLf-ORF5u58WIIwg_ERxg-qZsrhxcc',
+    appId: '1:125536522841:android:496db9c72899f4d7f51748',
+    messagingSenderId: '125536522841',
+    projectId: 'mizdah-ed0c6',
+    storageBucket: 'mizdah-ed0c6.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCEg_Xly0x_-h8CN0zxjjhxmSO321YjnW0',
-    appId: '1:422783082004:ios:55b366a6db71c738c0d101',
-    messagingSenderId: '422783082004',
-    projectId: 'mizdah-ce042',
-    storageBucket: 'mizdah-ce042.firebasestorage.app',
+    apiKey: 'AIzaSyBVg0T6QN0DOgGO7VBCGbyD6sk-bRGUSTE',
+    appId: '1:125536522841:ios:cfbf2ee21534f277f51748',
+    messagingSenderId: '125536522841',
+    projectId: 'mizdah-ed0c6',
+    storageBucket: 'mizdah-ed0c6.firebasestorage.app',
     iosBundleId: 'com.mizdah.mizdah',
   );
 

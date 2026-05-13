@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Tint colour used by the small status-bar notification icon
+         (FCM falls back to this when the payload doesn't specify a
+         per-message colour). Matches MizdahTokens.primary so the
+         system-tray icon reads as part of the app's brand. -->
+    <color name="notification_color">#FF6C63FF</color>
 </resources>

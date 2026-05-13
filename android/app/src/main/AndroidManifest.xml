@@ -20,6 +20,13 @@
     <!-- Wake the device for incoming-call notifications so the
          ringtone fires even when the screen is off. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Read-back of meetings the user saved in Google Calendar via
+         the in-app "Schedule Meeting" flow. We only READ — write is
+         done by Calendar itself when the user taps Save. Without
+         this we can never know the actual saved start/end times and
+         Upcoming Meetings would have to display a guess. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
     
@@ -58,17 +65,24 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- Default notification icon. We deliberately omit the
-             `default_notification_channel_id` meta-data — Android 8+
-             drops notifications silently when the target channel
-             doesn't exist, and we never created `mizdah_general_v1`
-             via flutter_local_notifications. Without this meta-data
-             FCM falls back to its auto-created "Miscellaneous"
-             channel, which is good enough for v1. Add a real
-             channel + meta-data once we ship per-category sounds. -->
+        <!-- ── FCM display defaults ──────────────────────────────
+             These three meta-data entries are what Android uses when
+             the FCM payload doesn't specify them per-message. The
+             `default_notification_channel_id` is REQUIRED on Android
+             8+ — without it, a notification whose payload omits a
+             channel id gets silently dropped (the OS won't fall back
+             to a magic "Miscellaneous" channel any more). The matching
+             channel is created from Kotlin in MainActivity.onCreate so
+             it exists before the first push lands. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="mizdah_general_v1" />
 
         <!-- Foreground service for screen capture on Android 14+.
              Starting Android 14, MediaProjection requires a running

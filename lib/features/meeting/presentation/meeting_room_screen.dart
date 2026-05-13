@@ -18,6 +18,7 @@ import '../../auth/auth_provider.dart';
 import '../../../core/widgets/control_icon_button.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/theme/theme_provider.dart';
+import '../../../core/ui/mizdah_design.dart' show MizdahTokens;
 import '../../../core/widgets/mizdah_button.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -1847,14 +1848,19 @@ class _SolitaryHeroView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
-          MizdahButton(
+          // Brand-themed share button — wraps the meeting link share-sheet
+          // launcher in the same lavender gradient pill used elsewhere in
+          // the meeting UI (Admit, Confirm, etc.) so this primary CTA reads
+          // as part of the app's design language instead of stock Material
+          // blue.
+          _GradientPillButton(
             label: 'Share invite',
             icon: Icons.share_outlined,
-            isFullWidth: false,
             onTap: () {
               SharePlus.instance.share(
                 ShareParams(
-                  text: 'Join my Mizdah meeting using this link: ${MeetingUtils.generateMeetingLink(meetingId)}',
+                  text:
+                      'Join my Mizdah meeting using this link: ${MeetingUtils.generateMeetingLink(meetingId)}',
                 ),
               );
             },
@@ -3965,57 +3971,173 @@ class _JoinRequestBanner extends StatelessWidget {
     // (`g`, `f`, `w`, `a`, `n`, `t`, `s`, `t`, `o`, …). Stacking gives
     // the name the full row width and the buttons their own row, so
     // the dialog reads cleanly even with long names.
+    //
+    // Brand-styled surface — previously this was a GlassCard which renders
+    // as opaque black in light mode, jarringly off-theme against the rest
+    // of the meeting UI. Now it uses the app's surface + border tokens
+    // with a soft purple-tinted shadow so it reads as part of the same
+    // design language as every other card in the app.
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final message = count > 1
         ? '$firstName and ${count - 1} others want to join'
         : '$firstName wants to join';
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 10),
-      radius: 16,
-      opacity: 0.95,
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 10),
+      decoration: BoxDecoration(
+        color: MizdahTokens.surface(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: MizdahTokens.border(context)),
+        boxShadow: [
+          BoxShadow(
+            color: MizdahTokens.primary
+                .withValues(alpha: isDark ? 0.25 : 0.14),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.person_add_rounded,
-                  color: MizdahTheme.primaryBlue),
+              // Brand-tinted icon tile — same pattern as setting rows.
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: MizdahTokens.iconTileBg(context),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.person_add_rounded,
+                  size: 20,
+                  color: MizdahTokens.primary,
+                ),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   message,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 14),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: MizdahTokens.inkOf(context),
+                    height: 1.25,
+                  ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
                 onPressed: onView,
-                child: const Text('View',
-                    style: TextStyle(color: MizdahTheme.primaryBlue)),
+                style: TextButton.styleFrom(
+                  foregroundColor: MizdahTokens.primary,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'View',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
               ),
               const SizedBox(width: 2),
               TextButton(
                 onPressed: onDeny,
-                child: const Text('Deny',
-                    style: TextStyle(color: Colors.redAccent)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFFE53935),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Deny',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
               ),
-              const SizedBox(width: 6),
-              MizdahButton(
+              const SizedBox(width: 10),
+              // Premium gradient Admit button — primary affirmative action.
+              _GradientPillButton(
                 label: 'Admit',
-                isFullWidth: false,
                 onTap: onAdmit,
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact pill button filled with the app's brand gradient. Used for
+/// primary affirmative actions inside cards/banners where a full-width
+/// `MizdahButton` would be too large but plain Material blue would
+/// clash with the lavender brand.
+class _GradientPillButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final IconData? icon;
+  const _GradientPillButton({
+    required this.label,
+    required this.onTap,
+    this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
+        decoration: BoxDecoration(
+          gradient: MizdahTokens.heroGradient,
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: MizdahTokens.primary.withValues(alpha: 0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(22),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 10,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 18, color: Colors.white),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

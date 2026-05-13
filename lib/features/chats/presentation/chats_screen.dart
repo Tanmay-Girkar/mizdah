@@ -4,6 +4,8 @@
 //  detail thread; the FAB opens the New Chat search by gmail.
 // ════════════════════════════════════════════════════════════════════
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,9 +24,17 @@ class ChatsScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatsScreenState extends ConsumerState<ChatsScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _entryCtrl;
   String _query = '';
+  /// Background poll that keeps each row's `lastMessage` preview
+  /// fresh even when the WebSocket misses a `chat:message` event
+  /// (or the backend hasn't mounted the `/chats` namespace yet).
+  /// Without this, the list shows whatever the conversations cache
+  /// held at last app start — which is why "test1" used to read
+  /// `You: Hi` long after newer messages had arrived inside the
+  /// thread; the conversation cache had no refresh path.
+  Timer? _pollTimer;
 
   @override
   void initState() {
@@ -33,10 +43,32 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
       duration: const Duration(milliseconds: 700),
       vsync: this,
     )..forward();
+    WidgetsBinding.instance.addObserver(this);
+    // Pull once now and then every 8s while we're on this screen.
+    // Cancelled in dispose. Errors are swallowed inside the repo;
+    // failures are non-fatal — the next tick retries.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(chatRepositoryProvider).refreshConversations();
+    });
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted) return;
+      ref.read(chatRepositoryProvider).refreshConversations();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Pull fresh the moment the app comes back to the foreground —
+    // we may have missed socket events while backgrounded.
+    if (state == AppLifecycleState.resumed && mounted) {
+      ref.read(chatRepositoryProvider).refreshConversations();
+    }
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _entryCtrl.dispose();
     super.dispose();
   }

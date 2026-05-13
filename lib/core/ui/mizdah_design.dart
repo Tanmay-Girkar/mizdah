@@ -288,6 +288,16 @@ class MizdahTabScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final navInset = MizdahTokens.navBarBottomInset(context);
     return Scaffold(
+      // Let the keyboard slide UP OVER our body instead of shrinking
+      // the scaffold. With the default (true), the shell's bottom-
+      // aligned floating nav rides the keyboard upward and sits
+      // awkwardly above it whenever a TextField is focused (the
+      // chats-search bar being the obvious case). Setting this false
+      // keeps the tab content at its original height; any field that
+      // needs to stay visible while typing should scroll itself or
+      // sit near the top of the body. The shell scaffold uses the
+      // same flag for the same reason.
+      resizeToAvoidBottomInset: false,
       backgroundColor: MizdahTokens.bg(context),
       body: Stack(
         children: [
@@ -418,12 +428,22 @@ class MizdahTabsShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Detect keyboard so we can hide the floating nav while typing.
+    // WhatsApp / Telegram / Instagram all do this — keeps the nav
+    // from sliding up on top of the keyboard, and gives the user
+    // the full vertical space for the keyboard + field combo.
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
     return Scaffold(
       // Background lives at the tab level (each tab paints its own
       // gradient via MizdahTabScaffold or HomeScreen's own scaffold);
       // we just need the shell to be transparent so the tab body
       // shows through.
       backgroundColor: Colors.transparent,
+      // CRITICAL: don't let the keyboard resize the shell — otherwise
+      // the floating nav (positioned at bottomCenter of this Stack)
+      // gets pushed upward with the keyboard. With this off, the nav
+      // simply stays put and we animate it out below.
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // 1. The IndexedStack of branches. Mounted once, never
@@ -433,24 +453,44 @@ class MizdahTabsShell extends StatelessWidget {
           // 2. Floating nav — single instance for the whole app.
           //    Tapping a tab calls `goBranch` which flips the
           //    visible child of the IndexedStack instantly.
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: MizdahFloatingNav(
-                  activeIndex: navigationShell.currentIndex,
-                  onTabTap: (i) {
-                    navigationShell.goBranch(
-                      i,
-                      // Re-tapping the active tab → reset to its
-                      // initial location (mirrors iOS / WhatsApp
-                      // behaviour where the active tab "scrolls to
-                      // top" on re-tap if it has nested routes).
-                      initialLocation: i == navigationShell.currentIndex,
-                    );
-                  },
+          //
+          //    Slides off the bottom + fades when a TextField has
+          //    focus. IgnorePointer makes sure stray touches don't
+          //    register during the slide-out. The slide curve matches
+          //    the OS keyboard rise so the two animations read as one
+          //    motion to the user.
+          AnimatedSlide(
+            offset: keyboardOpen ? const Offset(0, 1.4) : Offset.zero,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            child: AnimatedOpacity(
+              opacity: keyboardOpen ? 0 : 1,
+              duration: const Duration(milliseconds: 180),
+              child: IgnorePointer(
+                ignoring: keyboardOpen,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      child: MizdahFloatingNav(
+                        activeIndex: navigationShell.currentIndex,
+                        onTabTap: (i) {
+                          navigationShell.goBranch(
+                            i,
+                            // Re-tapping the active tab → reset to its
+                            // initial location (mirrors iOS / WhatsApp
+                            // behaviour where the active tab "scrolls
+                            // to top" on re-tap if it has nested
+                            // routes).
+                            initialLocation:
+                                i == navigationShell.currentIndex,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),

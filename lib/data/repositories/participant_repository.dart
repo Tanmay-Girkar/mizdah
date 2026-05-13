@@ -195,14 +195,46 @@ class ParticipantRepository {
         return (e['meeting_code'] ?? e['meetingCode'] ?? e['id'] ?? '').toString().replaceAll('-', '');
       }).toSet();
 
+      // Index hosted meetings by meeting_code so we can splice the
+      // meeting-level live state (is_active / members_count /
+      // ended_at) into each participation row. The participation
+      // endpoint doesn't carry those fields per protocol §4.1 — they
+      // live on the meetings endpoint. Without this merge, every
+      // joined meeting would render as "unknown" until the socket
+      // overlay arrives, which means the entire Recent tab would
+      // look ended on cold start.
+      final Map<String, Map<String, dynamic>> hostedByCode = {
+        for (final m in hostedMeetings)
+          (m['meeting_code'] ?? m['meetingCode'] ?? m['id'] ?? '')
+                  .toString()
+                  .replaceAll('-', ''):
+              Map<String, dynamic>.from(m as Map)
+      };
+
       // Merge with integrated meetings for demonstration/integration
       final integrated = _integratedMeetings.map((json) => CallHistory.fromJson(json)).toList();
-      
+
       final history = rawList.map((json) {
         final meetingCode = (json['meeting_id'] ?? json['meetingId'] ?? '').toString().replaceAll('-', '');
         if (hostedMeetingCodes.contains(meetingCode)) {
           // Inject host_id if this is a hosted meeting
           json['host_id'] = userId;
+        }
+        // Splice in meeting-level live state if we have it for this
+        // meeting. The participation row's `is_active` is per-user
+        // and unreliable (ghost rows when sockets drop) — we DROP it
+        // in favour of the meeting endpoint's authoritative value.
+        final hosted = hostedByCode[meetingCode];
+        if (hosted != null) {
+          json['is_active'] = hosted['is_active'];
+          json['members_count'] = hosted['members_count'];
+          json['ended_at'] = hosted['ended_at'];
+        } else {
+          // No meeting-level state available from REST. Strip any
+          // participation-row `is_active` so it doesn't get confused
+          // with the meeting-level field of the same name. The
+          // socket overlay or a future direct fetch will fill in.
+          json.remove('is_active');
         }
         return CallHistory.fromJson(json);
       }).toList();

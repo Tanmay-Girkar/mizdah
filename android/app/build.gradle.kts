@@ -21,6 +21,12 @@ android {
     ndkVersion = "28.2.13676358"
 
     compileOptions {
+        // flutter_local_notifications 17.x calls into java.time.* APIs
+        // that didn't exist on Android until API 26. Core library
+        // desugaring backports them through D8 so the plugin works on
+        // every minSdk we ship. The matching desugar_jdk_libs runtime
+        // is pulled in via the `coreLibraryDesugaring` dep below.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -71,4 +77,12 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Runtime stubs for java.time / java.util.stream / java.util.function
+    // APIs used by flutter_local_notifications (and any future plugin
+    // that opts into desugaring). Version must be 2.1.4+ — earlier
+    // 1.x releases miss several APIs the plugin needs.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

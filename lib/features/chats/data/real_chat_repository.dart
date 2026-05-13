@@ -45,6 +45,10 @@ class RealChatRepository implements ChatRepository {
   /// Cursor for `chat:resume` — set on every event we observe so the
   /// next reconnect can request only the diff.
   DateTime? _lastEventAt;
+  /// Conversation ids the UI currently has open. We re-emit
+  /// `chat:focus` for each on every (re)connect so the server knows
+  /// to send `delivered` immediately for inbound messages.
+  final Set<String> _focusedConversations = {};
 
   // ── REST helpers ────────────────────────────────────────────────
 
@@ -104,22 +108,50 @@ class RealChatRepository implements ChatRepository {
         debugPrint('[chats] no JWT — skipping socket');
         return;
       }
-      // The chats namespace lives at <baseUrl>/chats per
-      // docs/CHATS_API.md §3. We pass the JWT via auth payload so
-      // the server can authorise the connection.
-      final url = '${ApiConfig.baseUrl}/chats';
+      // ── Engine.io connection contract ───────────────────────────
+      // Per docs/CHATS_API.md §3 the `/chats` namespace lives on the
+      // SAME socket.io server that hosts meeting signaling — so the
+      // engine.io mount path is `ApiConfig.chatSocketPath` (currently
+      // aliased to `signalingPath = /signaling-fresh`). Connecting
+      // without an explicit `path:` falls back to the default
+      // `/socket.io/` mount which doesn't exist on the dev backend,
+      // so the socket would silently fail to attach and inbound
+      // `chat:message` deltas never arrive — recipients only see
+      // new messages after the 4s REST poll fallback. Hence the
+      // explicit `path` option here, mirroring p2p_call_service /
+      // meeting_provider's signaling socket setup.
+      //
+      // The namespace is set by appending `/chats` to the URL; the
+      // engine.io path is set via the separate `path` option. These
+      // are independent — namespace is the multiplexing label on
+      // top of the engine.io transport.
+      final url = '${ApiConfig.chatSocketUrl}/chats';
+      debugPrint('[chats] opening socket → '
+          '$url (path=${ApiConfig.chatSocketPath})');
       final socket = io.io(url, <String, dynamic>{
+        'path': ApiConfig.chatSocketPath,
         'transports': ['websocket', 'polling'],
         'autoConnect': false,
+        'forceNew': true,
         'reconnection': true,
         'reconnectionAttempts': 10,
         'reconnectionDelay': 2000,
+        // Pass JWT via both `auth` payload (preferred per the doc)
+        // AND `?token=` query string — some socket.io middleware
+        // only reads one or the other. Belt and braces, no harm.
         'auth': {'token': token},
+        'query': {'token': token},
       });
       _socket = socket;
 
       socket.onConnect((_) {
-        debugPrint('[chats] socket connected sid=${socket.id}');
+        debugPrint('[chats] ✅ socket connected sid=${socket.id}');
+        // Re-establish "currently viewing" state on every (re)connect
+        // so the server emits `delivered` for inbound messages even
+        // after a brief disconnect.
+        for (final convId in _focusedConversations) {
+          socket.emit('chat:focus', {'conversation_id': convId});
+        }
         if (_lastEventAt != null) {
           socket.emit('chat:resume', {
             'since': _lastEventAt!.toUtc().toIso8601String(),
@@ -333,6 +365,32 @@ class RealChatRepository implements ChatRepository {
     if (s == null || !s.connected) return;
     s.emit('chat:typing', {'conversation_id': conversationId});
   }
+
+  @override
+  void focusConversation(String conversationId) {
+    _focusedConversations.add(conversationId);
+    final s = _socket;
+    if (s != null && s.connected) {
+      s.emit('chat:focus', {'conversation_id': conversationId});
+    }
+    // Make sure the socket is up — opening a thread via deep link
+    // (push tap) can land us here before the conversations list ever
+    // mounted, in which case _ensureSocket hasn't been kicked yet.
+    // ignore: discarded_futures
+    _ensureSocket();
+  }
+
+  @override
+  void blurConversation(String conversationId) {
+    _focusedConversations.remove(conversationId);
+    final s = _socket;
+    if (s != null && s.connected) {
+      s.emit('chat:blur', {'conversation_id': conversationId});
+    }
+  }
+
+  @override
+  Future<void> refreshConversations() => _refreshConversations();
 
   @override
   Stream<({String conversationId, String senderEmail})> watchTyping() =>

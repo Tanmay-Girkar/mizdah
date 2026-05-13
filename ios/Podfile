@@ -1,5 +1,10 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+# Firebase 11.x requires iOS 13+. flutter_local_notifications 18.x
+# requires iOS 11+. Pin to 13.0 so the Podfile, the Xcode Runner
+# target, and every transitive pod agree — without this declaration
+# CocoaPods auto-assigned 13.0 with a warning and a handful of pods
+# defaulted to 9.0 which made the build noisy and occasionally
+# broke FirebaseCore's Swift module map.
+platform :ios, '13.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -39,5 +44,15 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    # Force every pod target to compile against the same iOS
+    # deployment target as the Runner. Without this, individual
+    # pods inherit their own podspec defaults (some still ship
+    # `s.platform = :ios, '9.0'`) and Xcode emits
+    # "deployment target lower than target" warnings on every
+    # build. Aligning everything kills those warnings + ensures
+    # Firebase's Swift module map compiles correctly.
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+    end
   end
 end

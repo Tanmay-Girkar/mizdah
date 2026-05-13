@@ -32,6 +32,10 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Mizdah reads the meeting you just saved in Calendar so it can show up in your Upcoming Meetings list with the correct time.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Mizdah reads the meeting you just saved in Calendar so it can show up in your Upcoming Meetings list with the correct time.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -55,6 +59,10 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

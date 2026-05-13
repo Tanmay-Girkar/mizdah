@@ -58,6 +58,25 @@ abstract class ChatRepository {
   /// Open or create a 1:1 conversation with `peerEmail`. Backend
   /// upserts so calling twice is idempotent.
   Future<Conversation> openConversationWith(String peerEmail);
+
+  /// Tell the server the UI just opened this conversation. The server
+  /// uses this to push `delivered` acks immediately for new inbound
+  /// messages instead of waiting for the next REST poll. Idempotent
+  /// — safe to call repeatedly.
+  void focusConversation(String conversationId) {}
+
+  /// Tell the server the user backed out of the conversation. Server
+  /// stops the "actively viewing" treatment and may down-rank
+  /// delivery for this conversation. Idempotent.
+  void blurConversation(String conversationId) {}
+
+  /// Force-refresh the conversations list from REST. Used as a safety
+  /// net when the WebSocket is unreliable — the chats screen polls
+  /// this every few seconds and the chat-detail screen calls it
+  /// alongside its own message refresh so the row's `lastMessage`
+  /// preview never lags more than a tick behind the actual thread.
+  /// Implementations must emit the fresh list on `watchConversations`.
+  Future<void> refreshConversations() async {}
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -349,4 +368,20 @@ class MockChatRepository implements ChatRepository {
     return fresh;
   }
 
+  // The mock has no backend to inform about focus/blur — these are
+  // no-ops. The interface defaults would inherit, but MockChatRepository
+  // uses `implements ChatRepository` (not `extends`) so every method
+  // must be concretely declared.
+  @override
+  void focusConversation(String conversationId) {}
+
+  @override
+  void blurConversation(String conversationId) {}
+
+  @override
+  Future<void> refreshConversations() async {
+    // Mock is fully in-memory — there's no "fresher" state to fetch.
+    // Re-emit the current cache so listeners still get a tick.
+    _emitConversations();
+  }
 }

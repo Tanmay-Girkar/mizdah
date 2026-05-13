@@ -23,13 +23,21 @@ import 'firebase_options.dart';
 /// payload has a `notification` block; this hook is for analytics /
 /// silent-data side-effects (e.g. pre-fetching the message body so
 /// the app is warm when the user taps).
+///
+/// Why the `Firebase.apps.isEmpty` guard: a separate isolate has its
+/// own zero state, so on a "cold" wake-up `Firebase.apps` is empty
+/// and we must init. But if FCM has already kept this isolate warm
+/// from a previous message and we re-enter, the [DEFAULT] app is
+/// still around — calling `initializeApp(options:)` again with the
+/// same options throws `[core/duplicate-app]`. The guard makes the
+/// handler idempotent across both cases.
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundMessageHandler(RemoteMessage message) async {
-  // Initialise Firebase in the background isolate — required because
-  // `main()` ran in a different isolate and the bindings don't carry.
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
   debugPrint('[push] background message data=${message.data}');
 }
 
@@ -65,21 +73,49 @@ void main() async {
     HttpOverrides.global = _DevHttpOverrides();
   }
 
-  // ── Firebase + push notifications ─────────────────────────────
-  // Initialised before runApp so the app sees notifications fired
-  // during the launch boot. Errors are swallowed to keep the app
-  // bootable even when Firebase is misconfigured (e.g. missing
-  // google-services.json on a fresh checkout).
+  // ── Firebase + push notifications bootstrap ────────────────────
+  //
+  // Strict ordering — every step depends on the previous one:
+  //
+  //   1.  Firebase.initializeApp        — must complete before any
+  //                                       FirebaseMessaging call.
+  //                                       Guarded with `apps.isEmpty`
+  //                                       so we never throw
+  //                                       `duplicate-app` if some
+  //                                       earlier path (or the native
+  //                                       Google-Services gradle
+  //                                       plugin) already initialised
+  //                                       the [DEFAULT] app.
+  //   2.  onBackgroundMessage           — registers the top-level
+  //                                       isolate entry-point. MUST
+  //                                       happen before runApp so a
+  //                                       launch-time message routes
+  //                                       correctly.
+  //   3.  PushNotificationService.init  — owns permission prompt,
+  //                                       token retrieval, foreground
+  //                                       message listener, and the
+  //                                       flutter_local_notifications
+  //                                       plugin. Does NOT call
+  //                                       Firebase.initializeApp again
+  //                                       (that was the root cause of
+  //                                       the [core/duplicate-app]
+  //                                       error). `unawaited` so we
+  //                                       don't block runApp on the
+  //                                       OS permission dialog.
+  //
+  // Errors are swallowed so the app still boots when Firebase is
+  // misconfigured on a fresh checkout (e.g. missing
+  // google-services.json) — the rest of the app works without push.
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
     FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundMessageHandler);
-    // Wire the foreground / tap listeners + permission prompt + token
-    // registration. Doesn't block runApp — the rest is a Future.
     unawaited(PushNotificationService.instance.init());
-  } catch (e) {
-    debugPrint('[push] Firebase init failed: $e');
+  } catch (e, st) {
+    debugPrint('[push] bootstrap failed: $e\n$st');
   }
 
   runApp(const ProviderScope(child: MizdahApp()));

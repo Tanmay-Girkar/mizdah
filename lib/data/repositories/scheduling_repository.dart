@@ -29,6 +29,26 @@ class SchedulingRepository {
     String? meetingCode,
   }) async {
     try {
+      // ── Timezone wire contract ────────────────────────────────
+      // Always send the absolute instant in UTC (ISO string ending
+      // in `Z`). The previous code sent `startTime.toIso8601String()`
+      // which for a local DateTime produces a naive string like
+      // `2026-05-11T16:00:00.000` — no timezone marker at all.
+      //
+      // What that did wrong: most backends storing into a TIMESTAMPTZ
+      // column interpret a naive string as UTC, so 4PM IST got stored
+      // as 4PM UTC. When the row came back the client parsed the
+      // (now Z-suffixed) string as UTC and DateFormat rendered it in
+      // the local clock — turning 4PM IST into 9:30 PM IST (or
+      // whatever the local offset happens to flip it into). That's
+      // exactly what the "wrong time on Upcoming Meetings" bug was.
+      //
+      // Sending UTC fixes it deterministically: the backend stores
+      // the right instant, the client parses Z → UTC and `.toLocal()`
+      // converts back to wall-clock 4PM regardless of host TZ. The
+      // separate `timezone` field is preserved (Google Calendar wants
+      // it for the event description) but no longer load-bearing for
+      // time accuracy.
       final response = await _apiClient.post(
         ApiConfig.scheduling,
         data: {
@@ -37,8 +57,8 @@ class SchedulingRepository {
           // forwards/backwards compat with the meeting service.
           'topic': title,
           'title': title,
-          'startTime': startTime.toIso8601String(),
-          'endTime': endTime.toIso8601String(),
+          'startTime': startTime.toUtc().toIso8601String(),
+          'endTime': endTime.toUtc().toIso8601String(),
           'recurrence': recurrence,
           'timezone': timezone,
           if (meetingId != null) 'meetingId': meetingId,

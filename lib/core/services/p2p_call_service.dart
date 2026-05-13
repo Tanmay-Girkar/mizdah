@@ -24,6 +24,44 @@
 //
 //  State changes are reported via the `onState` callback so the
 //  Riverpod provider can rebuild without owning sockets directly.
+//
+//  ─── DEBUGGING: call-type loss ───────────────────────────────────
+//  If a video call arrives on the receiver as an audio call, the
+//  client logs ten ====-bordered blocks across the flow:
+//
+//    Step  1  CALL BUTTON PRESSED              (call_hub_screen.dart)
+//    Step  2  EMITTING CALL PAYLOAD             (this file)
+//    Step  5  RECEIVED INCOMING CALL            (this file)
+//    Step  6  PARSING CALL MODEL                (this file)
+//    Step  7  ENUM PARSE RESULT                 (this file)
+//    Step  8  UPDATING INCOMING CALL STATE      (p2p_call_provider.dart)
+//    Step  9  BUILDING INCOMING CALL UI         (p2p_incoming_overlay.dart)
+//    Step 10  ACCEPT CALL                       (p2p_call_provider.dart)
+//
+//  Steps 3 / 4 happen on the signaling SERVER (Node.js, NOT in this
+//  repo). Drop these logs into the server to close the loop:
+//
+//    // Step 3 — when server receives `initiate-call`
+//    socket.on('initiate-call', (data) => {
+//      console.log('==============================');
+//      console.log('SERVER RECEIVED CALL');
+//      console.log(data);
+//      console.log('callType:', data.callType);
+//      console.log('==============================');
+//      // ... lookup target socket ...
+//      // Step 4 — before forwarding to receiver
+//      const payloadToReceiver = { ...data };
+//      console.log('==============================');
+//      console.log('SERVER RELAYING CALL');
+//      console.log(payloadToReceiver);
+//      console.log('callType:', payloadToReceiver.callType);
+//      console.log('==============================');
+//      io.to(targetSocketId).emit('incoming-call', payloadToReceiver);
+//    });
+//
+//  If Step 2 prints `callType: video` but Step 5 prints `callType:
+//  null`, the server stripped the field — Step 3/4 will pinpoint
+//  whether it was on receive or on relay.
 // ════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
@@ -49,6 +87,104 @@ String _uuidV4() {
       '${hex(10)}${hex(11)}${hex(12)}${hex(13)}${hex(14)}${hex(15)}';
 }
 
+/// Parse the caller's media intent from an `incoming-call` payload.
+///
+/// Different backend builds settle on different field names for the same
+/// concept — historically we shipped `withVideo` (boolean), but the most
+/// recent docs and several intermediate refactors used `callType` /
+/// `type` (string: `'audio'` | `'video'`). Rather than couple the
+/// client to one specific convention, we accept any of them and resolve
+/// in priority order:
+///
+///   1. `callType` / `type` / `kind` / `callKind` /
+///      `media` / `mediaType` (string)            — explicit and unambiguous
+///   2. `withVideo` / `video` / `hasVideo` /
+///      `isVideo` / `videoCall` (bool)            — legacy
+///   3. Same lookups inside common nesting keys —
+///      `data`, `payload`, `call`, `meta`, `callMeta`
+///
+/// When NOTHING is set we default to `false` (audio). This is the
+/// safer fallback: defaulting to video means a stray audio call
+/// suddenly demands the receiver's camera and shows the video accept
+/// button — the surprise-camera UX bug. Defaulting to audio at worst
+/// means the receiver sees an audio button for a video call (a
+/// recoverable backend regression). Heavy aliasing + nested lookup
+/// makes the audio default mostly theoretical in practice.
+bool _parseCallTypeAsVideo(Map<String, dynamic> data) {
+  bool? resolved = _resolveCallTypeIn(data);
+  if (resolved != null) {
+    debugPrint('[P2P] ENUM PARSE RESULT: ${resolved ? "video" : "audio"} '
+        '(matched at top level)');
+    return resolved;
+  }
+  // Some servers wrap the actual call payload inside another object
+  // (e.g. `{event: 'incoming-call', data: {...}}`). Re-scan the
+  // canonical nesting keys before giving up.
+  for (final key in const ['data', 'payload', 'call', 'meta', 'callMeta']) {
+    final nested = data[key];
+    if (nested is Map) {
+      resolved = _resolveCallTypeIn(Map<String, dynamic>.from(nested));
+      if (resolved != null) {
+        debugPrint('[P2P] ENUM PARSE RESULT: ${resolved ? "video" : "audio"} '
+            '(matched in nested "$key")');
+        return resolved;
+      }
+    }
+  }
+  // No signal anywhere — default to AUDIO. SCREAM about this so the
+  // bug is impossible to miss in field logs. The user explicitly
+  // asked us NOT to silently fall back, and this is the loudest we
+  // can be without crashing legitimate audio calls (which have
+  // `callType: 'audio'` and would never reach this branch).
+  debugPrint('==============================');
+  debugPrint('!!!!! CALL TYPE FALLBACK HIT !!!!!');
+  debugPrint('No callType / type / kind / withVideo / video / hasVideo / '
+      'isVideo / callMeta field found in incoming-call payload.');
+  debugPrint('Backend is STRIPPING the call-type field. Fix the signaling '
+      'server to forward it. Defaulting to AUDIO for safety.');
+  debugPrint('Raw payload keys: ${data.keys.toList()}');
+  debugPrint('Raw payload: $data');
+  debugPrint('==============================');
+  return false;
+}
+
+/// Inspects a single map for any of the known call-type field names.
+/// Returns `null` when no field is present (so the caller can fall
+/// through to nested-object scanning), `true` for video, `false` for
+/// audio.
+bool? _resolveCallTypeIn(Map<String, dynamic> data) {
+  // 1) String fields take priority — they're explicit. Values are
+  //    lower-cased + trimmed because backends have a habit of
+  //    normalising on the way through.
+  const stringKeys = ['callType', 'type', 'kind', 'callKind', 'media', 'mediaType'];
+  for (final k in stringKeys) {
+    final raw = data[k];
+    if (raw == null) continue;
+    final s = raw.toString().trim().toLowerCase();
+    if (s.isEmpty) continue;
+    if (s == 'video' || s == 'videocall' || s == 'video-call') return true;
+    if (s == 'audio' || s == 'voice' || s == 'audiocall' || s == 'audio-call') {
+      return false;
+    }
+    // Unknown string — try next key / fall through to bools.
+  }
+
+  // 2) Boolean (or stringly-typed boolean) fields.
+  const boolKeys = ['withVideo', 'video', 'hasVideo', 'isVideo', 'videoCall', 'isVideoCall'];
+  for (final k in boolKeys) {
+    final raw = data[k];
+    if (raw == null) continue;
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    if (raw is String) {
+      final v = raw.toLowerCase().trim();
+      if (v == 'true' || v == '1' || v == 'yes') return true;
+      if (v == 'false' || v == '0' || v == 'no') return false;
+    }
+  }
+  return null;
+}
+
 class P2PCallParticipant {
   final String userId;
   final String name;
@@ -65,11 +201,24 @@ class P2PIncomingCall {
   final String fromUserId;
   final String fromName;
   final String callerSocketId;
+
+  /// True when the caller initiated a VIDEO call; false for AUDIO.
+  ///
+  /// The signaling backend forwards this from the caller's
+  /// `initiate-call` payload to our `incoming-call` payload. We
+  /// resolve the actual value via `_parseCallTypeAsVideo` at receive
+  /// time. The default here is `false` (audio) — see the helper's
+  /// doc-comment for the reasoning. Construction-site callers should
+  /// almost always pass `withVideo:` explicitly; the default exists
+  /// only so the field can stay `final`.
+  final bool withVideo;
+
   const P2PIncomingCall({
     required this.callId,
     required this.fromUserId,
     required this.fromName,
     required this.callerSocketId,
+    this.withVideo = false,
   });
 }
 
@@ -131,6 +280,20 @@ class P2PCallService {
   /// Fires when the remote renderer is wired up.
   void Function(MediaStream)? onRemoteStream;
 
+  /// Fires whenever the REMOTE peer toggles their camera. `enabled`
+  /// is the peer's new video state. Used by the UI to swap the
+  /// remote video tile for an avatar placeholder when they turn
+  /// their camera off (instead of showing a frozen / black frame).
+  ///
+  /// Driven by the `call-media-state` socket event — the peer emits
+  /// it from `setLocalVideo` so both sides stay in sync without
+  /// renegotiating the WebRTC track.
+  void Function(bool enabled)? onRemoteVideoToggled;
+
+  /// Same idea for the peer's mic. Optional — used by the UI to
+  /// render a "Muted" badge on the remote tile.
+  void Function(bool enabled)? onRemoteAudioToggled;
+
   void _log(String s) {
     onLog?.call(s);
     if (kDebugMode) debugPrint('[P2P] $s');
@@ -191,12 +354,39 @@ class P2PCallService {
     socket.on('incoming-call', (raw) {
       if (raw is! Map) return;
       final data = Map<String, dynamic>.from(raw);
-      _log('incoming-call: $data');
+      // ─── STEP 5: RECEIVER SOCKET LOGS ───────────────────────────
+      // What the receiver's socket ACTUALLY got from the signaling
+      // server. If `callType` reads `video` here, the field made it
+      // through the wire. If it's null/missing, the signaling server
+      // is stripping it (Step 3/4 backend log will pinpoint where).
+      debugPrint('==============================');
+      debugPrint('RECEIVED INCOMING CALL');
+      debugPrint('$data');
+      debugPrint('Incoming callType: ${data["callType"]}');
+      debugPrint('Incoming type: ${data["type"]}');
+      debugPrint('Incoming withVideo: ${data["withVideo"]}');
+      debugPrint('Incoming video: ${data["video"]}');
+      debugPrint('Incoming callMeta: ${data["callMeta"]}');
+      debugPrint('==============================');
+
+      // ─── STEP 6: CALL MODEL PARSING LOGS ────────────────────────
+      // Detect call type defensively. `_parseCallTypeAsVideo` checks
+      // every known alias + nested object. If it falls through to
+      // the audio default (returns false with no field set), it
+      // prints a SCREAMING warning so the bug is unmissable.
+      final withVideo = _parseCallTypeAsVideo(data);
+      debugPrint('==============================');
+      debugPrint('PARSING CALL MODEL');
+      debugPrint('Raw callType: ${data["callType"]}');
+      debugPrint('Parsed callType: ${withVideo ? "video" : "audio"}');
+      debugPrint('Parsed withVideo: $withVideo');
+      debugPrint('==============================');
       onIncomingCall?.call(P2PIncomingCall(
         callId: data['callId']?.toString() ?? '',
         fromUserId: data['fromUserId']?.toString() ?? '',
         fromName: data['fromName']?.toString() ?? 'Caller',
         callerSocketId: data['callerSocketId']?.toString() ?? '',
+        withVideo: withVideo,
       ));
     });
 
@@ -243,6 +433,33 @@ class P2PCallService {
       _log('call-user-offline callId=$callId');
       onCalleeOffline?.call(callId);
       _resetCallState();
+    });
+
+    // ── Peer media-state — peer toggled their mic / camera ─────────
+    // This is OUT-OF-BAND from the WebRTC track itself; it tells our
+    // UI to swap the remote video tile for an avatar placeholder
+    // when the peer disables their camera (instead of showing a
+    // frozen / black frame). The peer's WebRTC track stays attached
+    // throughout — only its `enabled` flag flips on their side.
+    socket.on('call-media-state', (raw) {
+      if (raw is! Map) return;
+      final data = Map<String, dynamic>.from(raw);
+      final callId = data['callId']?.toString();
+      if (callId != _currentCallId) {
+        _log('ignoring media-state for foreign callId=$callId '
+            '(current=$_currentCallId)');
+        return;
+      }
+      _log('==============================');
+      _log('← media-state SOCKET EVENT');
+      _log('payload: $data');
+      _log('video: ${data['video']}');
+      _log('audio: ${data['audio']}');
+      _log('==============================');
+      final video = data['video'];
+      final audio = data['audio'];
+      if (video is bool) onRemoteVideoToggled?.call(video);
+      if (audio is bool) onRemoteAudioToggled?.call(audio);
     });
 
     // ── WebRTC SDP + ICE ────────────────────────────────────────────
@@ -339,12 +556,50 @@ class P2PCallService {
 
     _log('→ initiate-call to ${target.userId} (${target.name}) '
         'video=$withVideo callId=$callId');
-    _socket!.emit('initiate-call', {
+    final mediaType = withVideo ? 'video' : 'audio';
+    final payload = <String, dynamic>{
       'toUserId': target.userId,
       'fromUserId': _myUserId,
       'fromName': _myName,
       'callId': callId,
-    });
+      // Forward the caller's media intent under every field name the
+      // backend / receiver might inspect. The signaling server is
+      // expected to round-trip these into `incoming-call`, but some
+      // intermediate revisions only forward a subset — sending the
+      // intent through MANY channels guarantees the receiver's
+      // `_parseCallTypeAsVideo` finds *something* and never falls
+      // through to the audio default for a video call.
+      //
+      //   callType / type / kind  — string ('audio' | 'video')
+      //   withVideo / video       — boolean
+      //   callMeta                — nested object with the same intent
+      //                             for backends that strip top-level
+      //                             fields but pass meta through whole.
+      'callType': mediaType,
+      'type': mediaType,
+      'kind': mediaType,
+      'withVideo': withVideo,
+      'video': withVideo,
+      'hasVideo': withVideo,
+      'callMeta': {
+        'callType': mediaType,
+        'withVideo': withVideo,
+      },
+    };
+    // ─── STEP 2: OUTGOING PAYLOAD LOGS ─────────────────────────────
+    // Last chance to confirm the field is set BEFORE leaving the
+    // device. If `callType in payload` here reads `video` but the
+    // receiver's incoming log (Step 5) reads anything else, the
+    // problem is on the wire / in the signaling server — not the
+    // client.
+    debugPrint('==============================');
+    debugPrint('EMITTING CALL PAYLOAD');
+    debugPrint('$payload');
+    debugPrint('callType in payload: ${payload["callType"]}');
+    debugPrint('withVideo in payload: ${payload["withVideo"]}');
+    debugPrint('==============================');
+    _socket!.emit('initiate-call', payload);
+    _log('initiate-call emitted callType=$mediaType withVideo=$withVideo');
     return callId;
   }
 
@@ -406,21 +661,53 @@ class P2PCallService {
   // ──────────────────────────────────────────────────────────────────
 
   /// Toggle the local mic. Returns the new enabled state.
+  /// Also broadcasts the new state to the peer over signaling so
+  /// their UI can render a "Muted" badge in real time.
   bool setLocalAudio(bool enabled) {
     final tracks = _localStream?.getAudioTracks() ?? const [];
     for (final t in tracks) {
       t.enabled = enabled;
     }
+    _emitMediaState(audio: enabled);
     return enabled;
   }
 
   /// Toggle the local camera. Returns the new enabled state.
+  /// Also broadcasts the new state to the peer so their UI can swap
+  /// the remote video tile for an avatar placeholder when we turn
+  /// the camera off (and back to live video when we turn it on).
+  ///
+  /// IMPORTANT: this only flips `track.enabled` — the WebRTC track
+  /// stays attached and the peer connection isn't renegotiated. So
+  /// turning the camera on/off mid-call is instant and costs nothing
+  /// on the wire. Disposing the track / renderer would force a full
+  /// SDP renegotiation which is slow and visually jarring.
   bool setLocalVideo(bool enabled) {
     final tracks = _localStream?.getVideoTracks() ?? const [];
     for (final t in tracks) {
       t.enabled = enabled;
     }
+    _emitMediaState(video: enabled);
     return enabled;
+  }
+
+  /// Fires a `call-media-state` socket event so the peer's UI knows
+  /// which of our tracks just toggled. Either field can be omitted
+  /// when only one media kind changed. No-op when the call hasn't
+  /// reached the active phase yet (no socket / no peer to inform).
+  void _emitMediaState({bool? audio, bool? video}) {
+    final callId = _currentCallId;
+    final peerSid = _peerSocketId;
+    final socket = _socket;
+    if (callId == null || peerSid == null || socket == null) return;
+    if (audio == null && video == null) return;
+    socket.emit('call-media-state', {
+      'callId': callId,
+      'peerSocketId': peerSid,
+      if (audio != null) 'audio': audio,
+      if (video != null) 'video': video,
+    });
+    _log('→ media-state audio=$audio video=$video');
   }
 
   /// End the active call and emit `end-call`.
@@ -526,9 +813,61 @@ class P2PCallService {
     pc.onTrack = (RTCTrackEvent event) {
       if (event.streams.isEmpty) return;
       _remoteStream = event.streams.first;
-      _log('onTrack ← remote ${event.track.kind} '
-          'streamId=${event.streams.first.id}');
+      final track = event.track;
+      _log('onTrack ← remote kind=${track.kind} '
+          'streamId=${event.streams.first.id} '
+          'muted=${track.muted} enabled=${track.enabled}');
       onRemoteStream?.call(event.streams.first);
+
+      // ── Native WebRTC mute/unmute detection ────────────────────
+      // When the remote peer disables their video (or mic) track via
+      // `track.enabled = false`, the WebRTC engine eventually stops
+      // sending RTP packets (or sends substitute zero-content frames).
+      // The local engine fires `onMute` on the receiver track once
+      // it concludes the upstream is silent. When the peer re-enables,
+      // `onUnMute` fires. This is the canonical WebRTC API for
+      // "peer turned their camera off" and works regardless of
+      // whether the signaling backend forwards our `call-media-state`
+      // event — though the event-driven path is much faster (instant
+      // vs. ~3–10s for `onMute`), so we keep both.
+      //
+      // We also seed the initial state from `track.muted` because a
+      // peer who joined with their camera already off would never
+      // fire `onMute` (it's already in that state on first delivery).
+      if (track.kind == 'video') {
+        // Seed initial state. `track.muted` reads the current value.
+        if (track.muted == true) {
+          _log('remote video track delivered ALREADY MUTED');
+          onRemoteVideoToggled?.call(false);
+        }
+        track.onMute = () {
+          _log('==============================');
+          _log('REMOTE TRACK MUTED (video)');
+          _log('REMOTE VIDEO ENABLED: false');
+          _log('==============================');
+          onRemoteVideoToggled?.call(false);
+        };
+        track.onUnMute = () {
+          _log('==============================');
+          _log('REMOTE TRACK UNMUTED (video)');
+          _log('REMOTE VIDEO ENABLED: true');
+          _log('==============================');
+          onRemoteVideoToggled?.call(true);
+        };
+      } else if (track.kind == 'audio') {
+        if (track.muted == true) {
+          _log('remote audio track delivered ALREADY MUTED');
+          onRemoteAudioToggled?.call(false);
+        }
+        track.onMute = () {
+          _log('REMOTE TRACK MUTED (audio)');
+          onRemoteAudioToggled?.call(false);
+        };
+        track.onUnMute = () {
+          _log('REMOTE TRACK UNMUTED (audio)');
+          onRemoteAudioToggled?.call(true);
+        };
+      }
     };
 
     pc.onConnectionState = (state) {
@@ -572,6 +911,16 @@ class P2PCallService {
     for (final track in stream.getTracks()) {
       await _pc!.addTrack(track, stream);
     }
+    // Proactively tell the peer about our starting media state.
+    // Without this, the peer doesn't know our camera is on until we
+    // first toggle it — which means the peer's `call-media-state`
+    // listener never fires for the initial "on" state and they have
+    // to rely on slower `track.onMute` / `onUnMute` events. Emitting
+    // here lets the peer's UI flip to "remote video on" the moment
+    // the signaling round-trip completes, instead of waiting for
+    // WebRTC to confirm via track events.
+    _emitMediaState(audio: true, video: _withVideo);
+    _log('initial media-state emitted audio=true video=$_withVideo');
   }
 
   Future<void> _flushIceBuffer() async {
