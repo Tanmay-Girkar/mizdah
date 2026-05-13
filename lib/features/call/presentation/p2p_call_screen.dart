@@ -279,17 +279,17 @@ class _P2PCallScreenState extends ConsumerState<P2PCallScreen>
             child: _TopBar(call: call),
           ),
 
-          // Minimize chip — top-left, always present during a live
-          // call so the user can drop into the floating mini-bubble
-          // with a tap instead of needing the system back gesture.
-          // Hidden during outgoing/failed/ended phases (nothing to
-          // minimize yet) and during the brief active-but-fading-
-          // out window (auto-pop already scheduled).
+          // Minimize button — top-RIGHT, icon-only, sized to match
+          // the height of the connecting-status pill on the LEFT so
+          // the two read as a single header strip. Hidden during
+          // outgoing/failed/ended phases (nothing to minimize yet)
+          // and during the brief active-but-fading-out window
+          // (auto-pop already scheduled).
           if (call.phase == P2PCallPhase.connecting ||
               call.phase == P2PCallPhase.active)
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
-              left: 16,
+              right: 16,
               child: _MinimizeChip(
                 onTap: () => ref
                     .read(p2pCallProvider.notifier)
@@ -1324,9 +1324,10 @@ class _ControlsDock extends ConsumerWidget {
   }
 }
 
-/// Top-left "minimize" chip — drops the user into the floating
-/// mini-call overlay (WhatsApp-style). Tapping it leaves the call
-/// running; the peer connection, tracks, and renderers all survive.
+/// Top-right minimize button — icon-only circle matching the
+/// connection-pill height on the left of the header strip. Tapping
+/// drops the user into the floating mini-call overlay; the peer
+/// connection, tracks, and renderers all survive.
 class _MinimizeChip extends StatelessWidget {
   final VoidCallback onTap;
   const _MinimizeChip({required this.onTap});
@@ -1336,31 +1337,25 @@ class _MinimizeChip extends StatelessWidget {
     return MizdahPressScale(
       scaleTo: 0.90,
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.25),
-          ),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.expand_more_rounded,
-                color: Colors.white, size: 18),
-            SizedBox(width: 4),
-            Text(
-              'Minimize',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.3,
-              ),
+      child: Tooltip(
+        message: 'Minimize',
+        child: Container(
+          width: 34,
+          height: 34,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.40),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.22),
+              width: 1,
             ),
-          ],
+          ),
+          child: const Icon(
+            Icons.expand_more_rounded,
+            color: Colors.white,
+            size: 20,
+          ),
         ),
       ),
     );
