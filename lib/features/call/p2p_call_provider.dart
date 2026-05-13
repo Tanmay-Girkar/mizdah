@@ -21,6 +21,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/services/p2p_call_service.dart';
 import '../../data/models/models.dart';
@@ -37,6 +38,13 @@ enum P2PCallPhase {
   ended, // transient — UI shows "Call ended" briefly
   failed, // transient — declined / offline / failed
 }
+
+/// Drives the incoming-call overlay's camera-preview UI.
+///   • `idle`     — no warm-up requested (audio call, or pre-permission).
+///   • `warming`  — `getUserMedia()` in flight, show a loading shimmer.
+///   • `ready`    — local renderer is attached, paint live preview.
+///   • `denied`   — user denied camera/mic, fall back to avatar UI.
+enum P2PPreviewState { idle, warming, ready, denied }
 
 class P2PCallState {
   final P2PCallPhase phase;
@@ -77,6 +85,14 @@ class P2PCallState {
   // Raw incoming-call payload (so the UI can pass it back to
   // accept/decline without re-deriving).
   final P2PIncomingCall? incoming;
+  // Tri-state for the warm-up camera preview shown over the
+  // incoming-call overlay. `idle` is the resting state; `warming`
+  // means we're awaiting `getUserMedia()`; `ready` means the
+  // renderer is attached and frames are flowing; `denied` means the
+  // camera/mic permission was declined and the overlay should fall
+  // back to its plain avatar UI. Only meaningful while
+  // `phase == incoming`.
+  final P2PPreviewState previewState;
 
   const P2PCallState({
     this.phase = P2PCallPhase.idle,
@@ -94,6 +110,7 @@ class P2PCallState {
     this.mediaConnected = false,
     this.failureMessage,
     this.incoming,
+    this.previewState = P2PPreviewState.idle,
   });
 
   P2PCallState copyWith({
@@ -112,9 +129,11 @@ class P2PCallState {
     bool? mediaConnected,
     String? failureMessage,
     P2PIncomingCall? incoming,
+    P2PPreviewState? previewState,
     bool clearCallId = false,
     bool clearRemote = false,
     bool clearRenderers = false,
+    bool clearLocalRenderer = false,
     bool clearFailure = false,
     bool clearIncoming = false,
   }) {
@@ -129,7 +148,7 @@ class P2PCallState {
       remoteVideo: remoteVideo ?? this.remoteVideo,
       remoteAudio: remoteAudio ?? this.remoteAudio,
       isSpeakerphoneOn: isSpeakerphoneOn ?? this.isSpeakerphoneOn,
-      localRenderer: clearRenderers
+      localRenderer: (clearRenderers || clearLocalRenderer)
           ? null
           : (localRenderer ?? this.localRenderer),
       remoteRenderer: clearRenderers
@@ -139,6 +158,7 @@ class P2PCallState {
       failureMessage:
           clearFailure ? null : (failureMessage ?? this.failureMessage),
       incoming: clearIncoming ? null : (incoming ?? this.incoming),
+      previewState: previewState ?? this.previewState,
     );
   }
 }
@@ -281,7 +301,22 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         // `withVideo` / `video` booleans) and defaults to `false`
         // (audio) when the backend forwards none of them.
         withVideo: call.withVideo,
+        previewState: P2PPreviewState.idle,
       );
+      // For video calls, kick off the WhatsApp-style live self
+      // preview NOW — even before the user taps Accept. The stream
+      // we acquire here is reused as the call's outgoing video track
+      // once acceptance fires, so the transition is flicker-free
+      // (no second `getUserMedia()` round-trip on accept).
+      //
+      // We do NOT block the incoming-state update on this — the
+      // overlay should render the moment the ring lands; the
+      // preview slides in underneath when getUserMedia resolves.
+      if (call.withVideo) {
+        // Fire-and-forget; errors / denials surface via state.
+        // ignore: discarded_futures
+        startIncomingPreview();
+      }
       // ─── STEP 8: STATE MANAGEMENT LOGS ──────────────────────────
       // What the Riverpod state now holds for the incoming call.
       // If `State callType` here disagrees with the receiver socket
@@ -317,13 +352,16 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       _scheduleResetToIdle();
     };
 
-    _service.onCallCancelled = (callId) {
+    _service.onCallCancelled = (callId) async {
       // Callee side: caller hung up before I answered → I missed it.
       _appendLog(CallOutcome.missed, overrideCallId: callId);
+      // Kill any warm-up preview we kicked off when the ring landed.
+      await stopIncomingPreview();
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'Caller cancelled',
         clearIncoming: true,
+        previewState: P2PPreviewState.idle,
       );
       _scheduleResetToIdle();
     };
@@ -544,16 +582,21 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   }
 
   /// Callee side — reject the ringing call.
-  void declineIncoming() {
+  Future<void> declineIncoming() async {
     final incoming = state.incoming;
     if (incoming != null) _service.declineCall(incoming);
     _appendLog(CallOutcome.declined, overrideCallId: state.callId);
+    // Tear down the warm-up preview (camera + mic + renderer) — the
+    // call never reached the active phase, so no PC holds the
+    // stream and we own teardown end-to-end.
+    await stopIncomingPreview();
     state = state.copyWith(
       phase: P2PCallPhase.idle,
       clearCallId: true,
       clearRemote: true,
       clearIncoming: true,
       clearFailure: true,
+      previewState: P2PPreviewState.idle,
     );
   }
 
@@ -636,6 +679,155 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         state.phase == P2PCallPhase.ended) {
       state = const P2PCallState();
     }
+  }
+
+  // ── Ringing preview (WhatsApp-style self-camera while incoming) ───
+
+  /// Kick off the live self-preview shown over the incoming-call
+  /// overlay. Requests camera + mic permission first; on denial the
+  /// overlay falls back to its plain avatar UI. On success the
+  /// service's `onLocalStream` callback fires and the renderer gets
+  /// attached through the normal pipeline — the overlay reads
+  /// `state.localRenderer` to paint frames.
+  ///
+  /// Idempotent: returns early if a warm-up is already in flight or
+  /// completed for this ring cycle.
+  Future<void> startIncomingPreview() async {
+    if (state.phase != P2PCallPhase.incoming) {
+      debugPrint('[P2P] startIncomingPreview ignored — phase=${state.phase}');
+      return;
+    }
+    if (state.previewState == P2PPreviewState.warming ||
+        state.previewState == P2PPreviewState.ready) {
+      return;
+    }
+    debugPrint('[P2P] PREVIEW WARMING — requesting camera+mic permission');
+    state = state.copyWith(previewState: P2PPreviewState.warming);
+    // permission_handler returns a map; we accept "granted" OR
+    // "limited" (iOS) as a green light. Anything else is denial.
+    final results = await [
+      Permission.camera,
+      Permission.microphone,
+    ].request();
+    final camOk = results[Permission.camera]?.isGranted == true ||
+        results[Permission.camera]?.isLimited == true;
+    final micOk = results[Permission.microphone]?.isGranted == true ||
+        results[Permission.microphone]?.isLimited == true;
+    if (!camOk || !micOk) {
+      debugPrint('[P2P] PREVIEW DENIED camera=$camOk microphone=$micOk');
+      state = state.copyWith(previewState: P2PPreviewState.denied);
+      return;
+    }
+    // Re-check phase — the ring could have been cancelled while
+    // we were waiting on the permission dialog.
+    if (state.phase != P2PCallPhase.incoming) {
+      debugPrint('[P2P] PREVIEW abort — phase flipped during permission wait');
+      return;
+    }
+    try {
+      await _service.startLocalPreview(withVideo: true);
+      // `onLocalStream` fires synchronously from the service when the
+      // stream resolves; that handler attaches the renderer into
+      // `state.localRenderer`. We just flip the preview-state flag
+      // so the UI knows to show the live feed instead of a shimmer.
+      if (state.phase == P2PCallPhase.incoming) {
+        state = state.copyWith(previewState: P2PPreviewState.ready);
+        debugPrint('[P2P] PREVIEW READY — local renderer attached');
+      }
+    } catch (e) {
+      debugPrint('[P2P] PREVIEW FAILED — $e');
+      state = state.copyWith(previewState: P2PPreviewState.denied);
+    }
+  }
+
+  /// Stop a warm-up preview that didn't lead to an accepted call —
+  /// safe to call multiple times. Disposes the local renderer ONLY
+  /// when no peer connection is alive; once the call is connected
+  /// the renderer belongs to the call lifecycle.
+  Future<void> stopIncomingPreview() async {
+    debugPrint('[P2P] stopIncomingPreview previewState=${state.previewState}');
+    await _service.stopLocalPreview();
+    // Dispose the renderer if we own it (no PC alive).
+    final r = state.localRenderer;
+    if (r != null) {
+      try {
+        r.srcObject = null;
+        await r.dispose();
+      } catch (_) {}
+    }
+    state = state.copyWith(
+      previewState: P2PPreviewState.idle,
+      clearLocalRenderer: true,
+    );
+  }
+
+  /// Flip the camera between front and back. Works during ringing
+  /// preview AND during an active call — the underlying flutter_webrtc
+  /// `Helper.switchCamera` operates on the live MediaStreamTrack.
+  Future<void> switchCamera() async {
+    await _service.switchCamera();
+  }
+
+  // ── Lifecycle recovery (screen-lock / app background) ────────────
+
+  /// Called by the call screen's `WidgetsBindingObserver` when the
+  /// host app returns to the foreground. Re-applies audio routing,
+  /// pokes the renderer's srcObject so the platform view re-paints
+  /// (an Android quirk: after a long screen-off the SurfaceView can
+  /// keep its last frame frozen until the source is re-bound), and
+  /// logs the state of every load-bearing handle for field triage.
+  Future<void> onAppResumed() async {
+    if (state.phase != P2PCallPhase.active &&
+        state.phase != P2PCallPhase.connecting) {
+      return;
+    }
+    debugPrint('==============================');
+    debugPrint('CALL: APP RESUMED');
+    debugPrint('phase=${state.phase} '
+        'callId=${state.callId} '
+        'localAudio=${state.localAudio} '
+        'localVideo=${state.localVideo} '
+        'remoteVideo=${state.remoteVideo} '
+        'speakerphone=${state.isSpeakerphoneOn}');
+    await _service.recoverFromBackground(
+      wantSpeakerphone: state.isSpeakerphoneOn,
+    );
+    // Defensive re-attach: re-set srcObject on both renderers. Same
+    // MediaStream object; this just nudges the underlying SurfaceView
+    // / OpenGL texture to repaint. No flicker since the stream is
+    // identical — flutter_webrtc compares by reference and short-
+    // circuits when the value is unchanged on iOS, but the Android
+    // implementation reschedules a redraw which is exactly what we
+    // want here.
+    final l = state.localRenderer;
+    final r = state.remoteRenderer;
+    if (l != null) {
+      final s = l.srcObject;
+      if (s != null) l.srcObject = s;
+    }
+    if (r != null) {
+      final s = r.srcObject;
+      if (s != null) r.srcObject = s;
+    }
+    debugPrint('==============================');
+  }
+
+  /// Called by the call screen when the host app moves to the
+  /// background. We DELIBERATELY do not pause tracks here — pausing
+  /// would mute the user without their consent and is the WhatsApp
+  /// anti-pattern we're fixing. We just log the transition so the
+  /// field log makes background timing obvious.
+  void onAppPaused() {
+    if (state.phase != P2PCallPhase.active &&
+        state.phase != P2PCallPhase.connecting) {
+      return;
+    }
+    debugPrint('==============================');
+    debugPrint('CALL: APP PAUSED');
+    debugPrint('phase=${state.phase} '
+        'callId=${state.callId} '
+        'tracks stay LIVE (audio continues, video stays available)');
+    debugPrint('==============================');
   }
 
   // ── Helpers ──────────────────────────────────────────────────────

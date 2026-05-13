@@ -37,10 +37,14 @@ class P2PCallScreen extends ConsumerStatefulWidget {
 }
 
 class _P2PCallScreenState extends ConsumerState<P2PCallScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _ringPulse;
   Timer? _autoPopTimer;
   bool _popScheduled = false;
+  // Tracks the last observed lifecycle so we can log meaningful
+  // transitions (paused → resumed = "back from screen-lock /
+  // app-switch") rather than every spurious tick.
+  AppLifecycleState? _lastLifecycle;
 
   @override
   void initState() {
@@ -49,13 +53,56 @@ class _P2PCallScreenState extends ConsumerState<P2PCallScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
+    // Subscribe to lifecycle events so we can recover the audio
+    // session and renderers after screen lock / app-switcher /
+    // incoming-notification interrupts. WhatsApp-style: the call
+    // never visibly breaks across a power-button press.
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _autoPopTimer?.cancel();
     _ringPulse.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final prev = _lastLifecycle;
+    _lastLifecycle = state;
+    debugPrint('==============================');
+    debugPrint('CALL LIFECYCLE: $prev → $state');
+    debugPrint('==============================');
+    final notifier = ref.read(p2pCallProvider.notifier);
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+        // App backgrounded — most often a power-button press / lock
+        // screen / app-switcher / incoming system notification. We
+        // INTENTIONALLY do not pause any tracks here: the audio
+        // session stays alive on the platform side as long as we
+        // don't touch it, and the OS will keep delivering remote
+        // audio through the earpiece / speaker. See `onAppPaused`
+        // for the matching log.
+        notifier.onAppPaused();
+        break;
+      case AppLifecycleState.resumed:
+        // Coming back from background. Re-poke the audio route +
+        // both renderers so the call instantly looks alive again
+        // (no frozen-frame quirk on Android SurfaceView).
+        // ignore: discarded_futures
+        notifier.onAppResumed();
+        break;
+      case AppLifecycleState.detached:
+        // Engine teardown — the OS is killing the process. Nothing
+        // to recover from; the call will end naturally as services
+        // dispose.
+        break;
+    }
   }
 
   void _maybeSchedulePop(P2PCallPhase phase) {

@@ -14,6 +14,28 @@
          SecurityException and the app crashes. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Permissions for keeping the mic + camera alive while a P2P call
+         is in progress AND the screen is off / app is in the background.
+         On Android 14+ the OS revokes runtime mic/camera access from any
+         non-foreground process after a few seconds. Holding a foreground
+         service of the appropriate type tells the OS "this app is doing
+         a phone call right now, do NOT revoke" — same mechanism every
+         system dialer uses.
+
+         IMPORTANT: declaring the permission alone is NOT enough. To
+         actually use it, a Kotlin foreground service class with the
+         matching `android:foregroundServiceType` must be running for
+         the duration of the call. See `MediaProjectionFgService.kt`
+         for the existing pattern used by screen sharing; an analogous
+         `OngoingCallFgService.kt` should be added and started from
+         the Flutter side via a method channel the moment a call
+         enters the `connecting` phase, and stopped on `ended`. Without
+         that service running, these permissions are inert — the
+         declarations below are wired so the eventual service class
+         can claim them without another manifest change. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <!-- Android 13+ requires a runtime grant for showing notifications.
          FCM uses this for chat / call / meeting push messages. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

@@ -252,6 +252,18 @@ class P2PCallService {
 
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  // Tracks an in-flight `getUserMedia()` so concurrent callers (e.g.
+  // the overlay starting a warm-up preview just as the user taps
+  // Accept and `_attachLocalMedia` fires) reuse the same Future
+  // instead of racing two camera acquisitions. Cleared on dispose /
+  // stop / failure.
+  Future<MediaStream>? _localStreamFuture;
+  // Latched true once the warmed stream has been requested as a
+  // ringing preview (vs. acquired as part of a live call). Used by
+  // `stopLocalPreview` to refuse teardown when a real call is in
+  // flight — only the call's own teardown should kill the stream
+  // in that case.
+  bool _previewActive = false;
   // ignore: unused_field
   MediaStream? _remoteStream;
 
@@ -890,11 +902,22 @@ class P2PCallService {
     };
   }
 
-  Future<void> _attachLocalMedia() async {
-    if (_localStream != null) return;
+  /// Acquire the local camera/mic stream. Race-safe: concurrent
+  /// callers share one in-flight `getUserMedia()` Future, so the
+  /// ringing-preview warmup and the post-accept `_attachLocalMedia`
+  /// never end up holding two cameras open at once.
+  ///
+  /// Returns the existing stream immediately if one is already
+  /// warmed. On failure the Future bubbles the error and the
+  /// internal cache is cleared so the next call retries cleanly
+  /// (otherwise a denied permission would latch forever).
+  Future<MediaStream> _acquireLocalStream({required bool withVideo}) {
+    if (_localStream != null) return Future.value(_localStream!);
+    final inflight = _localStreamFuture;
+    if (inflight != null) return inflight;
     final constraints = <String, dynamic>{
       'audio': true,
-      'video': _withVideo
+      'video': withVideo
           ? {
               'mandatory': {
                 'minWidth': '640',
@@ -905,10 +928,116 @@ class P2PCallService {
             }
           : false,
     };
-    final stream = await navigator.mediaDevices.getUserMedia(constraints);
-    _localStream = stream;
+    _log('getUserMedia() begin audio=true video=$withVideo');
+    final future = navigator.mediaDevices.getUserMedia(constraints).then(
+      (stream) {
+        _localStream = stream;
+        _log('getUserMedia() ok videoTracks=${stream.getVideoTracks().length} '
+            'audioTracks=${stream.getAudioTracks().length}');
+        return stream;
+      },
+      onError: (Object e, StackTrace st) {
+        _localStreamFuture = null;
+        _log('getUserMedia() failed: $e');
+        throw e;
+      },
+    );
+    _localStreamFuture = future;
+    return future;
+  }
+
+  /// Warm up the camera + mic BEFORE the call is accepted so the
+  /// callee sees their own live preview while the phone is still
+  /// ringing (WhatsApp / FaceTime style). The same stream is later
+  /// reused as the call's outgoing video track — no flicker, no
+  /// black frame, no second `getUserMedia()` round-trip on accept.
+  ///
+  /// Idempotent: returns the existing warmed stream if one is
+  /// already in flight. Fires `onLocalStream` so the provider can
+  /// wire a renderer; provider-side handling is idempotent (renderer
+  /// is reused, srcObject re-set is a no-op).
+  ///
+  /// Audio is acquired even for video calls — there's no clean way
+  /// to add an audio track later without a renegotiation, and having
+  /// the mic alive during the preview matches every popular call
+  /// app's behaviour (you can hear your earpiece tone, the device's
+  /// audio session warms up early so accepting is instant).
+  Future<MediaStream> startLocalPreview({required bool withVideo}) async {
+    if (_disposed) throw StateError('service disposed');
+    _previewActive = true;
+    _withVideo = withVideo;
+    _log('startLocalPreview withVideo=$withVideo');
+    final stream = await _acquireLocalStream(withVideo: withVideo);
     onLocalStream?.call(stream);
+    return stream;
+  }
+
+  /// Tear down a warmed preview when the callee declines / misses /
+  /// the caller cancels before accept. Safely a no-op while a real
+  /// peer connection exists — only the call's normal teardown is
+  /// allowed to kill the stream once `_pc` is alive.
+  Future<void> stopLocalPreview() async {
+    if (!_previewActive) return;
+    _previewActive = false;
+    if (_pc != null) {
+      _log('stopLocalPreview skipped — peer connection is live');
+      return;
+    }
+    _log('stopLocalPreview disposing warmed stream');
+    final stream = _localStream;
+    _localStream = null;
+    _localStreamFuture = null;
+    if (stream == null) return;
+    try {
+      for (final t in stream.getTracks()) {
+        try {
+          await t.stop();
+        } catch (_) {}
+      }
+      await stream.dispose();
+    } catch (e) {
+      _log('stopLocalPreview dispose error (ignored): $e');
+    }
+  }
+
+  /// Flip the camera between front and back. Operates on the live
+  /// local video track via `Helper.switchCamera` — no renegotiation,
+  /// no track replacement, the peer keeps decoding the same stream.
+  /// Safe to call during the ringing preview as well as during an
+  /// active call.
+  Future<void> switchCamera() async {
+    final tracks = _localStream?.getVideoTracks() ?? const [];
+    if (tracks.isEmpty) {
+      _log('switchCamera no-op (no local video track)');
+      return;
+    }
+    try {
+      await Helper.switchCamera(tracks.first);
+      _log('switchCamera ok');
+    } catch (e) {
+      _log('switchCamera failed: $e');
+    }
+  }
+
+  Future<void> _attachLocalMedia() async {
+    // Reuse a warmed preview stream if one exists; otherwise
+    // acquire it now. The `_previewActive` flag is cleared because
+    // from this moment on the stream belongs to the call lifecycle —
+    // `stopLocalPreview` will refuse to touch it.
+    _previewActive = false;
+    final stream = await _acquireLocalStream(withVideo: _withVideo);
+    onLocalStream?.call(stream);
+    // Add each track to the PC only if not already a sender. After
+    // warm-up, calling addTrack twice for the same track would
+    // throw / produce duplicate transceivers, so we dedupe by
+    // existing sender track id.
+    final senders = await _pc!.getSenders();
+    final attachedIds = senders
+        .map((s) => s.track?.id)
+        .whereType<String>()
+        .toSet();
     for (final track in stream.getTracks()) {
+      if (attachedIds.contains(track.id)) continue;
       await _pc!.addTrack(track, stream);
     }
     // Proactively tell the peer about our starting media state.
@@ -956,11 +1085,71 @@ class P2PCallService {
       } catch (_) {}
     } finally {
       _localStream = null;
+      _localStreamFuture = null;
+      _previewActive = false;
       _remoteStream = null;
       _pc = null;
       _iceBuffer.clear();
       _remoteDescSet = false;
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  //  Lifecycle recovery (screen lock / app background → foreground)
+  // ──────────────────────────────────────────────────────────────────
+
+  /// Best-effort recovery after the host app comes back to the
+  /// foreground from a paused / inactive state (screen lock,
+  /// app-switcher, incoming-call interrupt). The renderers and PC
+  /// itself survive the transition — flutter_webrtc holds them on
+  /// the platform side — but a couple of side-effects need re-poking:
+  ///
+  ///   • The audio session may have been moved out of
+  ///     `MODE_IN_COMMUNICATION` (Android) or `playAndRecord`
+  ///     (iOS) by the OS while we were backgrounded. Re-applying
+  ///     the speakerphone route forces the WebRTC engine to refresh
+  ///     its session state.
+  ///   • Local tracks that were intentionally disabled before
+  ///     background should NOT be flipped back on automatically —
+  ///     `setLocalAudio` / `setLocalVideo` handle that explicitly
+  ///     via the provider. We only verify the track is still alive.
+  ///
+  /// Logs the state of every load-bearing handle so the field log
+  /// makes it obvious whether the renderer / PC / tracks actually
+  /// survived.
+  Future<void> recoverFromBackground({
+    required bool wantSpeakerphone,
+  }) async {
+    _log('==============================');
+    _log('LIFECYCLE RECOVER');
+    _log('pc=${_pc != null} '
+        'localStream=${_localStream != null} '
+        'remoteStream=${_remoteStream != null} '
+        'callId=$_currentCallId '
+        'previewActive=$_previewActive');
+    if (_localStream != null) {
+      final v = _localStream!.getVideoTracks();
+      final a = _localStream!.getAudioTracks();
+      _log('local tracks video=${v.length} '
+          '(enabled=${v.isNotEmpty ? v.first.enabled : 'n/a'}) '
+          'audio=${a.length} '
+          '(enabled=${a.isNotEmpty ? a.first.enabled : 'n/a'})');
+    }
+    if (_pc != null) {
+      try {
+        final st = await _pc!.getConnectionState();
+        _log('pc connectionState=$st');
+      } catch (_) {}
+    }
+    // Re-apply audio routing — see method header for why.
+    try {
+      await Helper.setSpeakerphoneOn(wantSpeakerphone);
+      _log('recover: speakerphone re-applied → '
+          '${wantSpeakerphone ? "SPEAKER" : "EARPIECE"}');
+    } catch (e) {
+      _log('recover: setSpeakerphoneOn failed: $e');
+    }
+    _log('==============================');
   }
 
   void _resetCallState() {

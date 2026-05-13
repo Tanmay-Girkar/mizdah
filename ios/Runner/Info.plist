@@ -62,6 +62,22 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<!-- Keep the audio session alive while the app is suspended so
+		     P2P calls don't drop the moment the user presses the power
+		     button or swipes to the home screen. `audio` lets the
+		     WebRTC engine continue routing earpiece / speaker audio
+		     in the background; `voip` keeps network sockets alive
+		     longer than a normal background task would.
+
+		     NOTE: full WhatsApp-style "keep the call running for an
+		     arbitrary screen-lock duration" also requires CallKit
+		     (CXProvider) integration — without it, iOS will still
+		     suspend the process after the standard background-
+		     execution window. The flags below buy us the typical
+		     30s–3min window in which most short screen-locks happen;
+		     for production-grade behaviour add CallKit. -->
+		<string>audio</string>
+		<string>voip</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
