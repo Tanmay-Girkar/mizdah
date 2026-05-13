@@ -118,6 +118,25 @@
             android:name=".MediaProjectionFgService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Foreground service for ongoing P2P video / voice calls.
+             Keeps mic + camera alive when the screen is locked or the
+             app is backgrounded. Without this, Android 14+ revokes
+             runtime mic/camera access from any non-foreground process
+             after a few seconds — which is exactly why audio dropped
+             2–3s after the power button was pressed.
+
+             Service type combines `microphone | camera | phoneCall`
+             so the OS treats this as a real phone call and applies
+             dialer-style affordances (do-not-disturb bypass, etc.).
+
+             Started/stopped from Dart via the com.mizdah/call_fg
+             method channel — see P2PCallNotifier in
+             lib/features/call/p2p_call_provider.dart. -->
+        <service
+            android:name=".OngoingCallFgService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera|phoneCall" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

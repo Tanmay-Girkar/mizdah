@@ -23,6 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
 import '../../data/models/models.dart';
 import '../auth/auth_provider.dart';
@@ -93,6 +94,12 @@ class P2PCallState {
   // back to its plain avatar UI. Only meaningful while
   // `phase == incoming`.
   final P2PPreviewState previewState;
+  /// Whether the user has minimized the active call. When `true` the
+  /// floating mini-call overlay paints (so the call is visually
+  /// present from any screen) and the full-screen call route is NOT
+  /// mounted. Tapping the mini-call sets this back to `false` and
+  /// the global router pushes /p2p-call.
+  final bool minimized;
 
   const P2PCallState({
     this.phase = P2PCallPhase.idle,
@@ -111,6 +118,7 @@ class P2PCallState {
     this.failureMessage,
     this.incoming,
     this.previewState = P2PPreviewState.idle,
+    this.minimized = false,
   });
 
   P2PCallState copyWith({
@@ -130,6 +138,7 @@ class P2PCallState {
     String? failureMessage,
     P2PIncomingCall? incoming,
     P2PPreviewState? previewState,
+    bool? minimized,
     bool clearCallId = false,
     bool clearRemote = false,
     bool clearRenderers = false,
@@ -159,6 +168,7 @@ class P2PCallState {
           clearFailure ? null : (failureMessage ?? this.failureMessage),
       incoming: clearIncoming ? null : (incoming ?? this.incoming),
       previewState: previewState ?? this.previewState,
+      minimized: minimized ?? this.minimized,
     );
   }
 }
@@ -339,15 +349,23 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       // to `active` once media flows.
       if (state.phase == P2PCallPhase.outgoing) {
         state = state.copyWith(phase: P2PCallPhase.connecting);
+        // Connecting = mic/camera about to be in heavy use; start the
+        // foreground service NOW so the OS keeps those resources alive
+        // even if the user immediately presses the power button.
+        // ignore: discarded_futures
+        _startFgService();
       }
     };
 
     _service.onCallDeclined = (callId) {
       // Caller side: my outgoing call was rejected by the peer.
       _appendLog(CallOutcome.declined, overrideCallId: callId);
+      // ignore: discarded_futures
+      _stopFgService();
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'Call declined',
+        minimized: false,
       );
       _scheduleResetToIdle();
     };
@@ -373,6 +391,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
           ? CallOutcome.answered
           : CallOutcome.failed;
       _appendLog(outcome, overrideCallId: callId);
+      await _stopFgService();
       await _disposeRenderers();
       // Mirror endCall(): drop the speaker route so the OS goes back
       // to its normal audio profile.
@@ -383,6 +402,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         isSpeakerphoneOn: false,
         clearRenderers: true,
         mediaConnected: false,
+        minimized: false,
       );
       _scheduleResetToIdle();
     };
@@ -390,9 +410,12 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     _service.onCalleeOffline = (callId) {
       // Caller side: peer was offline / unreachable.
       _appendLog(CallOutcome.missed, overrideCallId: callId);
+      // ignore: discarded_futures
+      _stopFgService();
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'User unavailable',
+        minimized: false,
       );
       _scheduleResetToIdle();
     };
@@ -576,7 +599,12 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       // audio. Applied for real once `onLocalStream` lands.
       isSpeakerphoneOn: withVideo,
       mediaConnected: false,
+      minimized: false,
     );
+    // Start the foreground service so mic + camera survive the user
+    // immediately pressing the power button after answering.
+    // ignore: discarded_futures
+    _startFgService();
     debugPrint('[P2P] incomingCallType=${withVideo ? "video" : "audio"} '
         'accepted speakerphoneState=${withVideo ? "ON" : "OFF"}');
   }
@@ -601,20 +629,23 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   }
 
   /// Caller side — cancel before the callee answers.
-  void cancelOutgoing() {
+  Future<void> cancelOutgoing() async {
     _service.cancelCall();
+    await _stopFgService();
     _appendLog(CallOutcome.cancelled, overrideCallId: state.callId);
     state = state.copyWith(
       phase: P2PCallPhase.idle,
       clearCallId: true,
       clearRemote: true,
       clearFailure: true,
+      minimized: false,
     );
   }
 
   /// Either side — hang up an active call.
   Future<void> endCall() async {
     await _service.endCall();
+    await _stopFgService();
     await _disposeRenderers();
     // Take the audio session out of speakerphone so the device's
     // next non-call audio (notification, ringtone) plays through
@@ -627,8 +658,39 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       isSpeakerphoneOn: false,
       clearRenderers: true,
       mediaConnected: false,
+      minimized: false,
     );
     _scheduleResetToIdle();
+  }
+
+  // ── Minimize / restore ───────────────────────────────────────────
+
+  /// Drop out of the full-screen call route into the floating mini
+  /// overlay. The call itself (peer connection, tracks, renderers)
+  /// is untouched — only the UI route changes. The mini overlay
+  /// reads `state.minimized` to decide whether to paint.
+  void minimize() {
+    if (state.phase != P2PCallPhase.active &&
+        state.phase != P2PCallPhase.connecting) {
+      return;
+    }
+    if (state.minimized) return;
+    debugPrint('==============================');
+    debugPrint('[P2P] MINIMIZE callId=${state.callId} '
+        'phase=${state.phase}');
+    debugPrint('==============================');
+    state = state.copyWith(minimized: true);
+  }
+
+  /// Inverse of [minimize]. The mini-overlay's tap handler calls
+  /// this AND pushes /p2p-call on the global router.
+  void restoreFromMinimized() {
+    if (!state.minimized) return;
+    debugPrint('==============================');
+    debugPrint('[P2P] RESTORE FROM MINIMIZED callId=${state.callId} '
+        'phase=${state.phase}');
+    debugPrint('==============================');
+    state = state.copyWith(minimized: false);
   }
 
   void toggleAudio() {
@@ -849,6 +911,24 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────
+
+  /// Start the Android foreground service that keeps mic + camera
+  /// alive while the app is backgrounded. Idempotent — re-firing for
+  /// the same call is harmless because the service wrapper coalesces
+  /// double-starts. No-op on iOS (the audio + voip background modes
+  /// in Info.plist handle the equivalent there, modulo CallKit).
+  Future<void> _startFgService() async {
+    await OngoingCallForegroundService.instance.start(
+      peerName: state.remoteName ?? 'Mizdah user',
+      withVideo: state.withVideo,
+    );
+  }
+
+  /// Stop the Android foreground service. Drops the persistent
+  /// notification. No-op on iOS. Idempotent.
+  Future<void> _stopFgService() async {
+    await OngoingCallForegroundService.instance.stop();
+  }
 
   Future<void> _disposeRenderers() async {
     final l = state.localRenderer;

@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
 
     private val screenShareChannel = "com.mizdah/screen_share_fg"
     private val pipChannel = "com.mizdah/pip"
+    private val callFgChannel = "com.mizdah/call_fg"
     private var pipMethodChannel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,6 +63,40 @@ class MainActivity : FlutterActivity() {
                     }
                     "stop" -> {
                         stopService(Intent(this, MediaProjectionFgService::class.java))
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Ongoing-call foreground service. Dart asks us to start it
+        // the moment a P2P call enters `connecting`, and stop it when
+        // the call ends. While the service runs the OS keeps the
+        // mic + camera alive in background — without it Android 14+
+        // revokes those resources ~30s after screen lock.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, callFgChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val peerName = call.argument<String>("peerName") ?: "On a call"
+                        val withVideo = call.argument<Boolean>("withVideo") ?: true
+                        val intent = Intent(this, OngoingCallFgService::class.java).apply {
+                            putExtra(OngoingCallFgService.EXTRA_PEER_NAME, peerName)
+                            putExtra(OngoingCallFgService.EXTRA_WITH_VIDEO, withVideo)
+                        }
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("START_FAILED", e.message, null)
+                        }
+                    }
+                    "stop" -> {
+                        stopService(Intent(this, OngoingCallFgService::class.java))
                         result.success(true)
                     }
                     else -> result.notImplemented()

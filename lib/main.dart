@@ -12,6 +12,7 @@ import 'core/theme/theme_provider.dart';
 import 'core/navigation/app_router.dart';
 import 'core/ui/mizdah_design.dart' show MizdahScrollBehavior;
 import 'features/call/presentation/p2p_incoming_overlay.dart';
+import 'features/call/presentation/p2p_mini_call_overlay.dart';
 import 'firebase_options.dart';
 
 /// FCM background-message handler. Must be a TOP-LEVEL function (not
@@ -253,8 +254,18 @@ class _MizdahAppState extends ConsumerState<MizdahApp> {
             systemNavigationBarDividerColor: Colors.transparent,
             systemNavigationBarContrastEnforced: false,
           ),
+          // Overlay order (top → bottom in z-order):
+          //   • P2PIncomingOverlay  — sits above everything, paints
+          //     the ringing UI when an incoming call arrives.
+          //   • P2PMiniCallOverlay  — sits below the incoming UI but
+          //     above all routes, paints the WhatsApp-style minimized
+          //     floating bubble when the user has minimized an active
+          //     call. Idle when no call or while the user is on the
+          //     full /p2p-call route.
           child: P2PIncomingOverlay(
-            child: child ?? const SizedBox.shrink(),
+            child: P2PMiniCallOverlay(
+              child: child ?? const SizedBox.shrink(),
+            ),
           ),
         );
       },

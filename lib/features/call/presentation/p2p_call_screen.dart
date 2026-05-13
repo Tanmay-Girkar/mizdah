@@ -136,6 +136,42 @@ class _P2PCallScreenState extends ConsumerState<P2PCallScreen>
     final call = ref.watch(p2pCallProvider);
     _maybeSchedulePop(call.phase);
 
+    // When the provider flips `minimized` to true (the user tapped
+    // the in-call minimize button, or hit system back), pop this
+    // route so the mini-call overlay can take over on whichever
+    // screen the user was on previously. The peer connection,
+    // tracks, and renderers stay alive in the provider/service —
+    // only the full-screen UI route exits.
+    ref.listen<bool>(p2pCallProvider.select((s) => s.minimized),
+        (prev, next) {
+      if (next == true && Navigator.of(context).canPop()) {
+        debugPrint('[P2P] call screen popping in response to minimize');
+        context.pop();
+      }
+    });
+
+    return PopScope(
+      // System back behaves like "minimize", NOT "end call". The user
+      // can always end via the red end-call button. Matches WhatsApp:
+      // back leaves the call running and drops you back to the chat
+      // / previous screen.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (call.phase == P2PCallPhase.active ||
+            call.phase == P2PCallPhase.connecting) {
+          ref.read(p2pCallProvider.notifier).minimize();
+        } else {
+          // Pre-active phases (outgoing / failed / ended) — let the
+          // user pop normally; nothing to keep alive.
+          context.pop();
+        }
+      },
+      child: _buildBody(context, call),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, P2PCallState call) {
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F1A),
       body: Stack(
@@ -242,6 +278,24 @@ class _P2PCallScreenState extends ConsumerState<P2PCallScreen>
             right: 16,
             child: _TopBar(call: call),
           ),
+
+          // Minimize chip — top-left, always present during a live
+          // call so the user can drop into the floating mini-bubble
+          // with a tap instead of needing the system back gesture.
+          // Hidden during outgoing/failed/ended phases (nothing to
+          // minimize yet) and during the brief active-but-fading-
+          // out window (auto-pop already scheduled).
+          if (call.phase == P2PCallPhase.connecting ||
+              call.phase == P2PCallPhase.active)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 12,
+              left: 16,
+              child: _MinimizeChip(
+                onTap: () => ref
+                    .read(p2pCallProvider.notifier)
+                    .minimize(),
+              ),
+            ),
 
           // Bottom dock — controls.
           Positioned(
@@ -1264,6 +1318,49 @@ class _ControlsDock extends ConsumerWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Top-left "minimize" chip — drops the user into the floating
+/// mini-call overlay (WhatsApp-style). Tapping it leaves the call
+/// running; the peer connection, tracks, and renderers all survive.
+class _MinimizeChip extends StatelessWidget {
+  final VoidCallback onTap;
+  const _MinimizeChip({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MizdahPressScale(
+      scaleTo: 0.90,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.25),
+          ),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.expand_more_rounded,
+                color: Colors.white, size: 18),
+            SizedBox(width: 4),
+            Text(
+              'Minimize',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
         ),
       ),
     );
