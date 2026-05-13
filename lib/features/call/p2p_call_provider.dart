@@ -693,12 +693,20 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   /// Idempotent: returns early if a warm-up is already in flight or
   /// completed for this ring cycle.
   Future<void> startIncomingPreview() async {
+    debugPrint('==============================');
+    debugPrint('[P2P] PREVIEW startIncomingPreview() called');
+    debugPrint('       phase=${state.phase}');
+    debugPrint('       previewState=${state.previewState}');
+    debugPrint('       withVideo=${state.withVideo}');
+    debugPrint('       localRenderer=${state.localRenderer != null}');
+    debugPrint('==============================');
     if (state.phase != P2PCallPhase.incoming) {
-      debugPrint('[P2P] startIncomingPreview ignored — phase=${state.phase}');
+      debugPrint('[P2P] PREVIEW ignored — phase=${state.phase}');
       return;
     }
     if (state.previewState == P2PPreviewState.warming ||
         state.previewState == P2PPreviewState.ready) {
+      debugPrint('[P2P] PREVIEW ignored — already ${state.previewState}');
       return;
     }
     debugPrint('[P2P] PREVIEW WARMING — requesting camera+mic permission');
@@ -709,12 +717,17 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       Permission.camera,
       Permission.microphone,
     ].request();
-    final camOk = results[Permission.camera]?.isGranted == true ||
-        results[Permission.camera]?.isLimited == true;
-    final micOk = results[Permission.microphone]?.isGranted == true ||
-        results[Permission.microphone]?.isLimited == true;
+    final camStatus = results[Permission.camera];
+    final micStatus = results[Permission.microphone];
+    debugPrint('[P2P] PREVIEW permission results '
+        'camera=$camStatus microphone=$micStatus');
+    final camOk = camStatus?.isGranted == true ||
+        camStatus?.isLimited == true;
+    final micOk = micStatus?.isGranted == true ||
+        micStatus?.isLimited == true;
     if (!camOk || !micOk) {
-      debugPrint('[P2P] PREVIEW DENIED camera=$camOk microphone=$micOk');
+      debugPrint('[P2P] PREVIEW DENIED camera=$camOk microphone=$micOk '
+          '(camStatus=$camStatus micStatus=$micStatus)');
       state = state.copyWith(previewState: P2PPreviewState.denied);
       return;
     }
@@ -725,6 +738,7 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       return;
     }
     try {
+      debugPrint('[P2P] PREVIEW calling service.startLocalPreview()');
       await _service.startLocalPreview(withVideo: true);
       // `onLocalStream` fires synchronously from the service when the
       // stream resolves; that handler attaches the renderer into
@@ -732,10 +746,14 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       // so the UI knows to show the live feed instead of a shimmer.
       if (state.phase == P2PCallPhase.incoming) {
         state = state.copyWith(previewState: P2PPreviewState.ready);
-        debugPrint('[P2P] PREVIEW READY — local renderer attached');
+        debugPrint('[P2P] PREVIEW READY — local renderer attached '
+            '(rendererAttached=${state.localRenderer != null})');
+      } else {
+        debugPrint('[P2P] PREVIEW stream ready but phase flipped to '
+            '${state.phase} — leaving state alone');
       }
-    } catch (e) {
-      debugPrint('[P2P] PREVIEW FAILED — $e');
+    } catch (e, st) {
+      debugPrint('[P2P] PREVIEW FAILED — $e\n$st');
       state = state.copyWith(previewState: P2PPreviewState.denied);
     }
   }

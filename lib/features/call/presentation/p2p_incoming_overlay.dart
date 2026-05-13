@@ -6,11 +6,11 @@
 //  `phase == incoming`. The sheet has Accept / Decline.
 //
 //  Video calls (`call.withVideo == true`) get a WhatsApp-style live
-//  self-camera preview painted fullscreen BEHIND the caller card,
-//  starting the moment the ring lands. The preview is the same
-//  MediaStream that gets attached to the WebRTC peer connection on
-//  accept — no flicker, no re-init, no second `getUserMedia()` call.
-//  Audio-only calls show the original avatar-pulse UI.
+//  self-camera preview painted fullscreen BEHIND the caller info,
+//  starting the moment the ring lands. The static avatar / profile
+//  layout is reserved for audio calls and for the "camera blocked"
+//  fallback — video rings ALWAYS show the camera (or a
+//  placeholder + status banner while it warms up).
 //
 //  We mount this OUTSIDE the router stack so the overlay survives
 //  route changes — important because incoming calls can land while
@@ -96,6 +96,23 @@ class _P2PIncomingOverlayState extends ConsumerState<P2PIncomingOverlay>
 
   @override
   Widget build(BuildContext context) {
+    // Defensive: listen for phase transitions into `incoming` and
+    // kick off the camera warm-up from here as a backup, in case
+    // the provider's `onIncomingCall` callback path missed it (build
+    // race, missed import, hot-reload edge case). `startIncomingPreview`
+    // is idempotent — calling it twice for the same ring cycle is a
+    // no-op after the first run.
+    ref.listen<P2PCallState>(p2pCallProvider, (prev, next) {
+      final justBecameIncoming = prev?.phase != P2PCallPhase.incoming &&
+          next.phase == P2PCallPhase.incoming;
+      if (justBecameIncoming && next.withVideo) {
+        debugPrint('[P2P] OVERLAY observed phase→incoming withVideo=true '
+            '— firing startIncomingPreview() as backup');
+        // ignore: discarded_futures
+        ref.read(p2pCallProvider.notifier).startIncomingPreview();
+      }
+    });
+
     final call = ref.watch(p2pCallProvider);
     _syncWithPhase(call.phase);
     _syncPreviewFade(call);
@@ -119,10 +136,16 @@ class _P2PIncomingOverlayState extends ConsumerState<P2PIncomingOverlay>
                     ringPulse: _ringPulse,
                     previewFade: _previewFade,
                     onAccept: (withVideo) {
-                      debugPrint('[P2P] accept tapped '
-                          '(incomingCallType=${call.withVideo ? "video" : "audio"} '
-                          'acceptedAs=${withVideo ? "video" : "audio"} '
-                          'previewState=${call.previewState})');
+                      debugPrint('==============================');
+                      debugPrint('[P2P] ACCEPT pressed');
+                      debugPrint('       incomingCallType='
+                          '${call.withVideo ? "video" : "audio"}');
+                      debugPrint('       acceptedAs='
+                          '${withVideo ? "video" : "audio"}');
+                      debugPrint('       previewState=${call.previewState}');
+                      debugPrint('       renderer reused='
+                          '${call.localRenderer != null}');
+                      debugPrint('==============================');
                       // 1. Move state to `connecting` and kick off
                       //    WebRTC setup BEFORE navigating. The
                       //    provider's `acceptIncoming` emits
@@ -147,20 +170,7 @@ class _P2PIncomingOverlayState extends ConsumerState<P2PIncomingOverlay>
                           .read(p2pCallProvider.notifier)
                           .acceptIncoming(withVideo: withVideo);
                       // 2. Navigate via the GLOBAL router rather than
-                      //    this overlay's BuildContext. The overlay
-                      //    sits OUTSIDE the GoRouter shell and
-                      //    collapses on accept (_slideCtrl.reverse →
-                      //    AnimatedBuilder returns SizedBox.shrink
-                      //    within 320ms). If we tried to `context.push`
-                      //    from this disposing subtree, the navigation
-                      //    could be silently dropped — that was the
-                      //    "incoming UI vanishes but call UI never
-                      //    opens" bug. Going through the singleton
-                      //    `appRouter` keeps the push independent of
-                      //    widget-tree lifecycle. We schedule it for
-                      //    the next frame so the state update above
-                      //    has already settled, which lets the screen
-                      //    pick up the right phase on its first build.
+                      //    this overlay's BuildContext.
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         debugPrint('[P2P] navigatingToVideoCallScreen '
                             'withVideo=$withVideo');
@@ -168,6 +178,8 @@ class _P2PIncomingOverlayState extends ConsumerState<P2PIncomingOverlay>
                       });
                     },
                     onDecline: () {
+                      debugPrint('[P2P] DECLINE pressed — '
+                          'previewState=${call.previewState}');
                       // ignore: discarded_futures
                       ref
                           .read(p2pCallProvider.notifier)
@@ -208,35 +220,33 @@ class _IncomingSheet extends StatelessWidget {
     required this.onFlipCamera,
   });
 
+  bool get _isVideoCall => call.withVideo;
   bool get _hasLivePreview =>
-      call.withVideo &&
+      _isVideoCall &&
       call.previewState == P2PPreviewState.ready &&
       call.localRenderer != null;
+  bool get _previewDenied =>
+      _isVideoCall && call.previewState == P2PPreviewState.denied;
 
   @override
   Widget build(BuildContext context) {
-    // ─── STEP 9: UI RENDER LOGS ────────────────────────────────────
-    // What the incoming UI actually sees just before painting. If
-    // `Current callType` reads `video` here but the screen shows
-    // audio chrome, the bug is in the conditional below this build
-    // method (Icons.call_rounded vs Icons.videocam_rounded). If it
-    // reads `audio` here, the bug is upstream (Step 8 state update).
     debugPrint('==============================');
-    debugPrint('BUILDING INCOMING CALL UI');
-    debugPrint('Current callType: ${call.withVideo ? "video" : "audio"}');
-    debugPrint('Current withVideo: ${call.withVideo}');
-    debugPrint('Current callId: ${call.callId}');
-    debugPrint('Current previewState: ${call.previewState}');
-    debugPrint('Live preview painting: $_hasLivePreview');
+    debugPrint('[P2P] BUILDING INCOMING UI');
+    debugPrint('       callType=${call.withVideo ? "video" : "audio"}');
+    debugPrint('       callId=${call.callId}');
+    debugPrint('       previewState=${call.previewState}');
+    debugPrint('       localRenderer=${call.localRenderer != null}');
+    debugPrint('       hasLivePreview=$_hasLivePreview');
+    debugPrint('       previewDenied=$_previewDenied');
     debugPrint('==============================');
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // ── Layer 1: solid gradient backdrop ─────────────────────
-          // Ensures the screen NEVER goes black, even before the
-          // camera preview fades in or if permission was denied.
+          // ── Layer 1: gradient floor ──────────────────────────────
+          // Always painted — guarantees no black flash before the
+          // camera preview lands.
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -247,12 +257,11 @@ class _IncomingSheet extends StatelessWidget {
             ),
           ),
 
-          // ── Layer 2: live self-camera preview (fades in) ────────
-          // Only mounted for video calls once the warmed stream is
-          // ready. Mirrored to match every selfie convention. Fades
-          // up via `previewFade` so the transition from gradient to
-          // live video is smooth — no harsh flash when frames start.
-          if (call.withVideo)
+          // ── Layer 2: live self-camera preview (fades in) ─────────
+          // Painted only for video calls. Sits on top of the gradient
+          // so when the camera hasn't started yet (or was denied),
+          // the gradient shows through naturally — no black void.
+          if (_isVideoCall)
             AnimatedBuilder(
               animation: previewFade,
               builder: (context, _) {
@@ -267,10 +276,9 @@ class _IncomingSheet extends StatelessWidget {
               },
             ),
 
-          // ── Layer 3: foreground tint so caller text reads ────────
-          // Heavier at the top and bottom (where the caller card and
-          // action buttons live), lighter in the middle to let the
-          // self-preview shine through.
+          // ── Layer 3: dim/blur overlay for text legibility ────────
+          // Stronger at top + bottom (caller card + action row), softer
+          // in the middle so the camera preview reads clearly.
           IgnorePointer(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -288,187 +296,293 @@ class _IncomingSheet extends StatelessWidget {
             ),
           ),
 
-          // ── Layer 4: foreground caller card + actions ────────────
+          // ── Layer 4: foreground UI ───────────────────────────────
+          // Branches by call type:
+          //   • Video → minimal WhatsApp-style chrome (compact chip,
+          //     name, status, buttons). NEVER the big pulse avatar —
+          //     even during warming the screen feels like a camera
+          //     view because the gradient + future preview occupies
+          //     the background.
+          //   • Audio → classic ringing UI (big pulse avatar centred).
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 36, 24, 36),
-              child: Column(
-                children: [
-                  // Tag chip
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.20)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.call_received_rounded,
-                            color: Colors.white, size: 14),
-                        SizedBox(width: 6),
-                        Text(
-                          'INCOMING CALL',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.6,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 28),
-                  // Avatar — shrinks when the live preview is up so
-                  // the caller's face stays visible without
-                  // dominating the screen. Hidden completely if
-                  // permission was denied — the user has already
-                  // seen the camera fail; doubling up on the avatar
-                  // is unnecessary chrome.
-                  if (!_hasLivePreview)
-                    _PulseAvatar(
-                      name: call.remoteName ?? 'Unknown',
-                      ringPulse: ringPulse,
+              child: _isVideoCall
+                  ? _VideoCallContent(
+                      call: call,
+                      hasLivePreview: _hasLivePreview,
+                      previewDenied: _previewDenied,
+                      onAccept: () => onAccept(true),
+                      onDecline: onDecline,
+                      onFlipCamera: onFlipCamera,
                     )
-                  else
-                    _CompactCallerChip(
-                      name: call.remoteName ?? 'Unknown',
+                  : _AudioCallContent(
+                      call: call,
+                      ringPulse: ringPulse,
+                      onAccept: () => onAccept(false),
+                      onDecline: onDecline,
                     ),
-                  const SizedBox(height: 20),
-                  Text(
-                    call.remoteName ?? 'Unknown caller',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.4,
-                      shadows: [
-                        Shadow(
-                          color: Colors.black54,
-                          offset: Offset(0, 1),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  // Subtle hint about the call type so the user knows
-                  // what they're accepting before tapping. Matches the
-                  // accept-button choice below.
-                  //
-                  // Copy is intentionally asymmetric: audio is the
-                  // baseline call experience so it gets the plain
-                  // "is calling you", while video gets the explicit
-                  // "is video calling you" qualifier. The leading icon
-                  // mirrors the same distinction (phone vs videocam).
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        call.withVideo
-                            ? Icons.videocam_rounded
-                            : Icons.call_rounded,
-                        size: 14,
-                        color: Colors.white.withValues(alpha: 0.85),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        call.withVideo
-                            ? 'is video calling you'
-                            : 'is calling you',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 0.4,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  // Preview status banner — surfaces what's happening
-                  // with the warmup attempt (loading shimmer, "camera
-                  // blocked" fallback). Only shown for video calls.
-                  if (call.withVideo) ...[
-                    const SizedBox(height: 14),
-                    _PreviewStatusBanner(
-                      previewState: call.previewState,
-                    ),
-                  ],
-
-                  const Spacer(),
-
-                  // Flip-camera affordance — only when the live
-                  // preview is actually painting, so users can
-                  // double-check their hair / lighting from the
-                  // right side of their face before picking up.
-                  if (_hasLivePreview) ...[
-                    Center(
-                      child: _FlipCameraButton(onTap: onFlipCamera),
-                    ),
-                    const SizedBox(height: 28),
-                  ],
-
-                  // Show the SINGLE accept button that matches the
-                  // caller's media intent (video / audio). Previously
-                  // we showed both regardless, which was confusing
-                  // (and let the user accept a video call as audio
-                  // — which isn't actually supported by the WebRTC
-                  // handshake in the current backend). `call.withVideo`
-                  // comes from the signaling payload via
-                  // p2p_call_service.dart's `incoming-call` handler.
-                  Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _IncomingAction(
-                        label: 'Decline',
-                        icon: Icons.call_end_rounded,
-                        gradient: const LinearGradient(
-                          colors: [
-                            Color(0xFFEF4444),
-                            Color(0xFFB91C1C),
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        onTap: onDecline,
-                      ),
-                      if (call.withVideo)
-                        _IncomingAction(
-                          label: 'Accept',
-                          icon: Icons.videocam_rounded,
-                          gradient: MizdahTokens.heroGradient,
-                          onTap: () => onAccept(true),
-                        )
-                      else
-                        _IncomingAction(
-                          label: 'Accept',
-                          icon: Icons.call_rounded,
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFF10B981),
-                              Color(0xFF059669),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          onTap: () => onAccept(false),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Video-call ringing UI (WhatsApp-style)
+//  ────────────────────────────────────────────────────────────────────
+//  Compact caller chip at the top, name + "is video calling you",
+//  warming/denied banner, and the action row at the bottom. The big
+//  pulse-avatar from the audio layout is deliberately omitted — the
+//  background IS the visual focus (live preview or its placeholder).
+// ────────────────────────────────────────────────────────────────────
+
+class _VideoCallContent extends StatelessWidget {
+  final P2PCallState call;
+  final bool hasLivePreview;
+  final bool previewDenied;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+  final VoidCallback onFlipCamera;
+  const _VideoCallContent({
+    required this.call,
+    required this.hasLivePreview,
+    required this.previewDenied,
+    required this.onAccept,
+    required this.onDecline,
+    required this.onFlipCamera,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Top tag chip
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.20)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.videocam_rounded,
+                  color: Colors.white, size: 14),
+              SizedBox(width: 6),
+              Text(
+                'INCOMING VIDEO CALL',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.6,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 28),
+        // Caller identity — compact chip so it doesn't dominate the
+        // live preview. Falls back to a denied-state badge if
+        // permission was rejected (the camera area otherwise would
+        // just be empty gradient — a hint helps the user understand
+        // why they're not seeing themselves).
+        if (previewDenied)
+          _CameraBlockedTile(name: call.remoteName ?? 'Unknown')
+        else
+          _CompactCallerChip(name: call.remoteName ?? 'Unknown'),
+        const SizedBox(height: 18),
+        Text(
+          call.remoteName ?? 'Unknown caller',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+            shadows: [
+              Shadow(
+                color: Colors.black54,
+                offset: Offset(0, 1),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.videocam_rounded,
+              size: 14,
+              color: Colors.white.withValues(alpha: 0.85),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'is video calling you',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.85),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _PreviewStatusBanner(previewState: call.previewState),
+        const Spacer(),
+        if (hasLivePreview) ...[
+          Center(child: _FlipCameraButton(onTap: onFlipCamera)),
+          const SizedBox(height: 28),
+        ],
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _IncomingAction(
+              label: 'Decline',
+              icon: Icons.call_end_rounded,
+              gradient: const LinearGradient(
+                colors: [Color(0xFFEF4444), Color(0xFFB91C1C)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              onTap: onDecline,
+            ),
+            _IncomingAction(
+              label: 'Accept',
+              icon: Icons.videocam_rounded,
+              gradient: MizdahTokens.heroGradient,
+              onTap: onAccept,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Audio-call ringing UI (classic pulse-avatar layout)
+//  ────────────────────────────────────────────────────────────────────
+//  Kept unchanged: audio calls don't benefit from a camera preview,
+//  and the big avatar tells the user immediately who's calling.
+// ────────────────────────────────────────────────────────────────────
+
+class _AudioCallContent extends StatelessWidget {
+  final P2PCallState call;
+  final AnimationController ringPulse;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+  const _AudioCallContent({
+    required this.call,
+    required this.ringPulse,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.20)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.call_received_rounded,
+                  color: Colors.white, size: 14),
+              SizedBox(width: 6),
+              Text(
+                'INCOMING CALL',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.6,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 36),
+        _PulseAvatar(
+          name: call.remoteName ?? 'Unknown',
+          ringPulse: ringPulse,
+        ),
+        const SizedBox(height: 28),
+        Text(
+          call.remoteName ?? 'Unknown caller',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.call_rounded,
+              size: 14,
+              color: Colors.white.withValues(alpha: 0.7),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'is calling you',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ],
+        ),
+        const Spacer(),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _IncomingAction(
+              label: 'Decline',
+              icon: Icons.call_end_rounded,
+              gradient: const LinearGradient(
+                colors: [Color(0xFFEF4444), Color(0xFFB91C1C)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              onTap: onDecline,
+            ),
+            _IncomingAction(
+              label: 'Accept',
+              icon: Icons.call_rounded,
+              gradient: const LinearGradient(
+                colors: [Color(0xFF10B981), Color(0xFF059669)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              onTap: onAccept,
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -489,6 +603,7 @@ class _LivePreviewLayer extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = renderer;
     if (r == null) return const SizedBox.shrink();
+    debugPrint('[P2P] OVERLAY painting live preview RTCVideoView');
     return RTCVideoView(
       r,
       mirror: true,
@@ -498,12 +613,7 @@ class _LivePreviewLayer extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────────
-//  Preview status banner
-//  ────────────────────────────────────────────────────────────────────
-//  Tiny pill under the caller name explaining what's happening with
-//  the camera warmup — a loading shimmer while `getUserMedia()` is
-//  in flight, a "camera blocked" hint if permission was denied.
-//  Hidden once the preview is live (the video itself is the signal).
+//  Preview status banner — tiny pill explaining the camera state.
 // ────────────────────────────────────────────────────────────────────
 
 class _PreviewStatusBanner extends StatelessWidget {
@@ -516,6 +626,11 @@ class _PreviewStatusBanner extends StatelessWidget {
     IconData icon;
     Color tint;
     switch (previewState) {
+      case P2PPreviewState.idle:
+        label = 'Starting camera…';
+        icon = Icons.videocam_rounded;
+        tint = Colors.white.withValues(alpha: 0.85);
+        break;
       case P2PPreviewState.warming:
         label = 'Starting camera…';
         icon = Icons.videocam_rounded;
@@ -527,7 +642,6 @@ class _PreviewStatusBanner extends StatelessWidget {
         tint = const Color(0xFFFCA5A5);
         break;
       case P2PPreviewState.ready:
-      case P2PPreviewState.idle:
         return const SizedBox.shrink();
     }
     return AnimatedSwitcher(
@@ -543,7 +657,8 @@ class _PreviewStatusBanner extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (previewState == P2PPreviewState.warming)
+            if (previewState == P2PPreviewState.warming ||
+                previewState == P2PPreviewState.idle)
               const SizedBox(
                 width: 12,
                 height: 12,
@@ -572,11 +687,7 @@ class _PreviewStatusBanner extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────────
-//  Compact caller chip (used when the live preview is painting)
-//  ────────────────────────────────────────────────────────────────────
-//  A small avatar circle that sits where the big pulse-avatar
-//  normally lives. Keeps the visual identity of the caller present
-//  without obscuring the self-preview.
+//  Compact caller chip (used as the identity marker on video rings)
 // ────────────────────────────────────────────────────────────────────
 
 class _CompactCallerChip extends StatelessWidget {
@@ -586,8 +697,8 @@ class _CompactCallerChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 78,
-      height: 78,
+      width: 84,
+      height: 84,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         gradient: MizdahTokens.heroGradient,
@@ -608,7 +719,7 @@ class _CompactCallerChip extends StatelessWidget {
         _initials(name),
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 26,
+          fontSize: 28,
           fontWeight: FontWeight.w800,
           letterSpacing: 0.5,
         ),
@@ -622,6 +733,41 @@ class _CompactCallerChip extends StatelessWidget {
     if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
     return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
         .toUpperCase();
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Camera-blocked fallback tile
+//  ────────────────────────────────────────────────────────────────────
+//  Replaces the compact caller chip when permission was denied, so the
+//  user has a clear visual signal that "the avatar is here because the
+//  camera couldn't open" — not because we forgot to start it.
+// ────────────────────────────────────────────────────────────────────
+
+class _CameraBlockedTile extends StatelessWidget {
+  final String name;
+  const _CameraBlockedTile({required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 96,
+      height: 96,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: const Color(0xFFFCA5A5).withValues(alpha: 0.65),
+          width: 1.4,
+        ),
+      ),
+      child: const Icon(
+        Icons.videocam_off_rounded,
+        color: Color(0xFFFCA5A5),
+        size: 36,
+      ),
+    );
   }
 }
 
