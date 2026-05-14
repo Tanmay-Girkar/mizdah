@@ -24,12 +24,19 @@ class AuthState {
   final String? token;
   final User? user;
   final String? errorMessage;
+  /// One-shot signal raised when login hits `404 USER_NOT_FOUND` —
+  /// the login screen listens for this, auto-routes to /register
+  /// with the typed email + password in `GoRouterState.extra`, then
+  /// calls `clearRegisterRedirect()` to drop it back to false.
+  /// Avoids the previous "Create new account →" intermediate tap.
+  final bool needsRegister;
 
   AuthState({
     this.status = AuthStatus.initial,
     this.token,
     this.user,
     this.errorMessage,
+    this.needsRegister = false,
   });
 
   AuthState copyWith({
@@ -37,12 +44,15 @@ class AuthState {
     String? token,
     User? user,
     String? errorMessage,
+    bool? needsRegister,
+    bool clearError = false,
   }) {
     return AuthState(
       status: status ?? this.status,
       token: token ?? this.token,
       user: user ?? this.user,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      needsRegister: needsRegister ?? this.needsRegister,
     );
   }
 }
@@ -126,20 +136,25 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> login(String email, String password) async {
-    state = state.copyWith(status: AuthStatus.authenticating, errorMessage: null);
-    
+    state = state.copyWith(
+      status: AuthStatus.authenticating,
+      clearError: true,
+      needsRegister: false,
+    );
+
     try {
       final data = await _authRepository.login(email, password);
-      
+
       if (data['token'] == null) {
-        if (data['requires2FA'] == true || data['message']?.toString().contains('OTP') == true) {
+        if (data['requires2FA'] == true ||
+            data['message']?.toString().contains('OTP') == true) {
           state = state.copyWith(
             status: AuthStatus.unauthenticated,
-            errorMessage: "2FA Required. Please verify your OTP.",
+            errorMessage: "2FA required. Please verify your OTP.",
           );
           return;
         }
-        throw Exception("Login failed: Missing token in response");
+        throw Exception("Login failed: missing token in response");
       }
 
       final token = data['token'];
@@ -152,21 +167,64 @@ class AuthNotifier extends StateNotifier<AuthState> {
         email: user.email,
         avatarUrl: user.avatarUrl,
       );
-      state = state.copyWith(status: AuthStatus.authenticated, token: token, user: user);
+      state = state.copyWith(
+        status: AuthStatus.authenticated,
+        token: token,
+        user: user,
+      );
       // Push the FCM token to the backend now that we have an auth
       // token. Best-effort; backend rejection is non-fatal.
       // ignore: discarded_futures
       PushNotificationService.instance.registerCurrentToken();
     } catch (e) {
       debugPrint("Login error: $e");
-      String message = "Invalid email or password";
+      // Map backend response → friendly UX. The backend distinguishes:
+      //   404 + code USER_NOT_FOUND       → no account exists
+      //   401 + Invalid credentials       → account exists, wrong pw
+      //   403 + code EMAIL_NOT_VERIFIED   → account exists, unverified
+      //   other                           → generic fallback
+      String? message;
+      bool routeToRegister = false;
       if (e is DioException) {
-        message = e.response?.data['message'] ?? e.message ?? message;
+        final status = e.response?.statusCode;
+        final body = e.response?.data;
+        final code = body is Map ? body['code']?.toString() : null;
+        final humanError = body is Map
+            ? (body['error']?.toString() ?? body['message']?.toString())
+            : null;
+
+        if (status == 404 || code == 'USER_NOT_FOUND') {
+          // Don't show a red error — we're about to auto-route. The
+          // login screen reacts to `needsRegister` and pushes
+          // /register with the email + password prefilled.
+          routeToRegister = true;
+        } else if (status == 401) {
+          message = 'Incorrect password. Try again.';
+        } else if (status == 403 && code == 'EMAIL_NOT_VERIFIED') {
+          message = 'Verify your email first, then sign in.';
+        } else if (humanError != null && humanError.isNotEmpty) {
+          message = humanError;
+        } else {
+          message = 'Could not sign in. Check your connection and retry.';
+        }
+      } else {
+        message = 'Could not sign in. Check your connection and retry.';
       }
       state = state.copyWith(
         status: AuthStatus.unauthenticated,
         errorMessage: message,
+        needsRegister: routeToRegister,
+        clearError: message == null,
       );
+    }
+  }
+
+  /// Consume the one-shot `needsRegister` flag after the login screen
+  /// has navigated to /register. Without this, a back-navigation that
+  /// landed on /login again would immediately re-route to /register.
+  void clearRegisterRedirect() {
+    if (state.needsRegister) {
+      state = state.copyWith(needsRegister: false);
     }
   }
 

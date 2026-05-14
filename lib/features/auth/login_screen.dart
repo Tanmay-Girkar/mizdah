@@ -41,10 +41,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // Listen for authentication success
+    // Listen for authentication success.
     ref.listen<AuthState>(authProvider, (previous, next) {
       if (next.status == AuthStatus.authenticated) {
         context.go('/');
+        return;
+      }
+      // Auto-route on "no such account" (404 USER_NOT_FOUND). The
+      // provider raised the one-shot flag; consume it here and push
+      // /register with the email + password the user already typed
+      // so they don't have to re-enter what they just tried.
+      if (next.needsRegister) {
+        final email = _emailController.text.trim();
+        final password = _passwordController.text;
+        ref.read(authProvider.notifier).clearRegisterRedirect();
+        context.go(
+          '/register',
+          extra: {'email': email, 'password': password},
+        );
       }
     });
 
@@ -110,48 +124,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 ? 'Min 6 characters' : null,
                           ),
                           if (authState.errorMessage != null) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              authState.errorMessage!,
-                              style: const TextStyle(
-                                  color: Colors.red, fontSize: 13),
-                            ),
-                            // On failure, offer a direct path to
-                            // register with the email pre-filled.
-                            // We deliberately don't auto-route on
-                            // every error because the backend's
-                            // current `Invalid credentials` response
-                            // doesn't distinguish "wrong password"
-                            // from "no such user" — see plan in
-                            // docs/AUTH_FLOW_FOLLOWUP.md for the
-                            // backend change that would enable true
-                            // auto-routing.
-                            const SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: TextButton(
-                                onPressed: () {
-                                  final email =
-                                      _emailController.text.trim();
-                                  context.go(email.isEmpty
-                                      ? '/register'
-                                      : '/register?email='
-                                          '${Uri.encodeComponent(email)}');
-                                },
-                                style: TextButton.styleFrom(
-                                  padding: EdgeInsets.zero,
-                                  minimumSize: const Size(0, 0),
-                                  tapTargetSize: MaterialTapTargetSize
-                                      .shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Create new account →',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
+                            const SizedBox(height: 14),
+                            // Single short, human error line. The
+                            // raw DioException message used to leak
+                            // through here ("This exception was
+                            // thrown because the response has a
+                            // status code of 404…") — auth_provider
+                            // now maps every known HTTP status to a
+                            // friendly string. The "no such account"
+                            // case auto-routes via `needsRegister`
+                            // and never reaches this branch.
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.error_outline_rounded,
+                                    color: Colors.redAccent, size: 14),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    authState.errorMessage!,
+                                    style: const TextStyle(
+                                      color: Colors.redAccent,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
-                              ),
+                              ],
                             ),
                           ],
                           const SizedBox(height: 32),

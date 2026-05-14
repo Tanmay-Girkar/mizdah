@@ -31,22 +31,36 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   String _phoneCountryIso = 'IN';
   bool _phoneIsValid = false;
 
-  bool _emailPrefilled = false;
+  bool _prefilled = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Pre-fill the email if the user arrived here from the login
-    // screen's "Create new account →" CTA (which passes the failed
-    // email as a query param). Done in didChangeDependencies rather
-    // than initState because GoRouterState requires a BuildContext.
-    if (_emailPrefilled) return;
-    final emailParam =
-        GoRouterState.of(context).uri.queryParameters['email'];
-    if (emailParam != null && emailParam.isNotEmpty) {
-      _emailController.text = emailParam;
+    // Pre-fill email + password if the user arrived here from the
+    // login screen's auto-route (404 USER_NOT_FOUND). The login
+    // screen pushes via `context.go('/register', extra: {'email':
+    // ..., 'password': ...})`. `extra` keeps the password in memory
+    // — never in the URL.
+    //
+    // Falls back to `?email=` query param so older entry-points
+    // (and direct navigation) still work for the email side.
+    if (_prefilled) return;
+    final state = GoRouterState.of(context);
+    final extra = state.extra;
+    String? emailPrefill;
+    String? passwordPrefill;
+    if (extra is Map) {
+      emailPrefill = extra['email']?.toString();
+      passwordPrefill = extra['password']?.toString();
     }
-    _emailPrefilled = true;
+    emailPrefill ??= state.uri.queryParameters['email'];
+    if (emailPrefill != null && emailPrefill.isNotEmpty) {
+      _emailController.text = emailPrefill;
+    }
+    if (passwordPrefill != null && passwordPrefill.isNotEmpty) {
+      _passwordController.text = passwordPrefill;
+    }
+    _prefilled = true;
   }
 
   @override
