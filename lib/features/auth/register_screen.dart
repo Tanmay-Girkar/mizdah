@@ -97,24 +97,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // Listen for registration success.
+    // Listen for registration success — the backend issues a JWT
+    // immediately on signup (per docs/SIGNUP_NO_VERIFICATION_BACKEND.md),
+    // so successful registration flips `status` to `authenticated`
+    // and we go straight to the main app. No intermediate
+    // verify-email screen.
     ref.listen<AuthState>(authProvider, (previous, next) {
-      // Token in hand → straight to the main app.
       if (next.status == AuthStatus.authenticated) {
         context.go('/');
-        return;
-      }
-      // Account created but email verification required — push the
-      // dedicated success screen so the "Check your inbox" copy
-      // doesn't render as a red error in this form.
-      if (next.signupCompleted) {
-        final emailForScreen =
-            (next.signupEmail ?? _emailController.text.trim());
-        ref.read(authProvider.notifier).clearSignupCompleted();
-        context.go(
-          '/verify-email',
-          extra: {'email': emailForScreen},
-        );
       }
     });
 

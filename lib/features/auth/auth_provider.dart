@@ -30,16 +30,6 @@ class AuthState {
   /// calls `clearRegisterRedirect()` to drop it back to false.
   /// Avoids the previous "Create new account →" intermediate tap.
   final bool needsRegister;
-  /// One-shot signal raised when signup succeeds AND the backend
-  /// requires email verification before login. The register screen
-  /// listens, navigates to /verify-email with the email in `extra`,
-  /// then calls `clearSignupCompleted()` to drop it back to false.
-  /// Avoids rendering the "Check your inbox" message as a red error.
-  final bool signupCompleted;
-  /// The email used on the last successful signup. Mirrors
-  /// `signupCompleted` — read by the /verify-email screen so the
-  /// user sees which inbox to check.
-  final String? signupEmail;
 
   AuthState({
     this.status = AuthStatus.initial,
@@ -47,8 +37,6 @@ class AuthState {
     this.user,
     this.errorMessage,
     this.needsRegister = false,
-    this.signupCompleted = false,
-    this.signupEmail,
   });
 
   AuthState copyWith({
@@ -57,10 +45,7 @@ class AuthState {
     User? user,
     String? errorMessage,
     bool? needsRegister,
-    bool? signupCompleted,
-    String? signupEmail,
     bool clearError = false,
-    bool clearSignupEmail = false,
   }) {
     return AuthState(
       status: status ?? this.status,
@@ -68,9 +53,6 @@ class AuthState {
       user: user ?? this.user,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       needsRegister: needsRegister ?? this.needsRegister,
-      signupCompleted: signupCompleted ?? this.signupCompleted,
-      signupEmail:
-          clearSignupEmail ? null : (signupEmail ?? this.signupEmail),
     );
   }
 }
@@ -246,17 +228,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  /// Consume the one-shot `signupCompleted` flag after the register
-  /// screen has navigated to /verify-email. Same back-navigation
-  /// concern as `clearRegisterRedirect()`.
-  void clearSignupCompleted() {
-    if (state.signupCompleted) {
-      state = state.copyWith(
-        signupCompleted: false,
-        clearSignupEmail: true,
-      );
-    }
-  }
 
   Future<void> signup(
     String email,
@@ -276,29 +247,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
         phoneCountry: phoneCountry,
       );
 
-      // When the backend has email verification enabled, signup
-      // intentionally returns NO token + `requiresVerification: true`.
-      // This is the SUCCESS path — the register screen listens for
-      // `signupCompleted` and routes to the dedicated /verify-email
-      // screen. Don't set `errorMessage`; that would render the
-      // success copy in red.
+      // Per docs/SIGNUP_NO_VERIFICATION_BACKEND.md, the backend now
+      // always issues a JWT on successful signup — email verification
+      // is a soft nudge rather than a hard gate. If the token is
+      // somehow missing (bad backend deploy, network truncation),
+      // surface a clear error instead of half-creating the session.
       final token = data['token'];
       if (token == null) {
-        final needsVerification = data['requiresVerification'] == true ||
-            (data['emailSent'] == true);
-        if (needsVerification) {
-          state = state.copyWith(
-            status: AuthStatus.unauthenticated,
-            signupCompleted: true,
-            signupEmail: email,
-            clearError: true,
-          );
-        } else {
-          state = state.copyWith(
-            status: AuthStatus.unauthenticated,
-            errorMessage: "Signup succeeded but server returned no token.",
-          );
-        }
+        state = state.copyWith(
+          status: AuthStatus.unauthenticated,
+          errorMessage: 'Signup succeeded but no token returned. Try signing in.',
+        );
         return;
       }
 

@@ -26,7 +26,6 @@ import '../../features/meeting/presentation/screen_share_designs_preview.dart';
 import '../../features/meeting/presentation/recordings_list_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
-import '../../features/auth/verify_email_screen.dart';
 import '../../features/auth/two_factor_screen.dart';
 
 /// "No transition" page builder used by the five tab branches.
@@ -52,10 +51,6 @@ final appRouter = GoRouter(
     GoRoute(path: '/splash', builder: (context, state) => const SplashScreen()),
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(path: '/register', builder: (context, state) => const RegisterScreen()),
-    GoRoute(
-      path: '/verify-email',
-      builder: (context, state) => const VerifyEmailScreen(),
-    ),
     GoRoute(path: '/2fa', builder: (context, state) => const TwoFactorScreen()),
 
     // ── Five tab branches inside a shared StatefulShell ──────
