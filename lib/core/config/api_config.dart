@@ -9,7 +9,7 @@ class ApiConfig {
   // _DevHttpOverrides accepts certs from this host in debug builds
   // so the mkcert / local CA cert doesn't trip CERTIFICATE_VERIFY_FAILED.
   // Release builds enforce full TLS validation.
-  static const String _devHost = 'https://192.168.1.18:3001';
+  static const String _devHost = 'https://192.168.1.20:3001';
 
   static const String baseUrl = _devHost;
   static const String signalingUrl = _devHost;

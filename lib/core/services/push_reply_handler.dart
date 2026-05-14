@@ -231,6 +231,7 @@ class _BgDevHttpOverrides extends HttpOverrides {
   // refactor could share this list; not worth the indirection today.
   static const _trustedDevHosts = <String>{
     '192.168.1.18',
+    '192.168.1.20',
     '192.168.1.100',
     '192.168.1.48',
     '192.168.1.117',
