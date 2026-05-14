@@ -23,8 +23,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'dart:async';
+
 import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
+import '../../core/services/ringtone_service.dart';
 import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
 import '../auth/auth_provider.dart';
@@ -188,6 +191,29 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   final P2PCallService _service = P2PCallService();
   P2PCallService get service => _service;
 
+  // ── Ringtone + timers (docs/CALL_RINGTONE_FLUTTER.md §4–§5) ──────
+  //
+  // _autoDeclineTimer    — 30 s timer started when `incoming-call`
+  //                        arrives. If the user doesn't accept or
+  //                        decline before it fires, we decline on
+  //                        their behalf so the caller sees the
+  //                        "Declined" state instead of ringing
+  //                        forever.
+  // _callerBailoutTimer  — 45 s timer started when `startCall` fires.
+  //                        Matches the web client's behaviour: if no
+  //                        server event has arrived in that window we
+  //                        give up gracefully and surface
+  //                        "User unavailable".
+  // _seenCallIds         — dedup for the dual transport. Same callId
+  //                        usually arrives over BOTH socket and FCM;
+  //                        the second arrival is a no-op. 60 s
+  //                        eviction so a re-attempt with the same id
+  //                        (rare but possible after a backend bounce)
+  //                        still works.
+  Timer? _autoDeclineTimer;
+  Timer? _callerBailoutTimer;
+  final Set<String> _seenIncomingCallIds = {};
+
   // ── Per-call tracking — used to assemble a CallLogEntry on every
   //    terminal event. Reset after each append. peerEmail is null on
   //    incoming (the signaling payload doesn't carry it yet).
@@ -299,6 +325,20 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         _service.declineCall(call);
         return;
       }
+      // Dedup: the same `incoming-call` can arrive over BOTH the
+      // signaling socket AND the FCM background handler. First
+      // arrival wins; the second is a no-op. 60 s eviction so a
+      // re-attempt with the same callId after a backend bounce
+      // still works. Spec §4.3.
+      if (_seenIncomingCallIds.contains(call.callId)) {
+        debugPrint('[P2P] dedup: callId=${call.callId} already seen — '
+            'ignoring duplicate incoming-call event');
+        return;
+      }
+      _seenIncomingCallIds.add(call.callId);
+      Future.delayed(const Duration(seconds: 60),
+          () => _seenIncomingCallIds.remove(call.callId));
+
       _trackIncoming(call);
       state = state.copyWith(
         phase: P2PCallPhase.incoming,
@@ -341,6 +381,18 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       debugPrint('State callId: ${state.callId}');
       debugPrint('State remoteName: ${state.remoteName}');
       debugPrint('==============================');
+      // ── Start incoming ringtone + 30 s auto-decline timer
+      // per docs/CALL_RINGTONE_FLUTTER.md §4.1 + §4 entry in
+      // the foreground table.
+      // ignore: discarded_futures
+      RingtoneService.instance.startIncoming();
+      _autoDeclineTimer?.cancel();
+      _autoDeclineTimer = Timer(const Duration(seconds: 30), () {
+        if (state.phase != P2PCallPhase.incoming) return;
+        debugPrint('[P2P] auto-decline after 30s of no user action');
+        // ignore: discarded_futures
+        declineIncoming();
+      });
     };
 
     _service.onCallAccepted = (callId, calleeSid) {
@@ -349,6 +401,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       // copy for "Connecting…" — visual progress while the offer/
       // answer + ICE negotiation runs. `onMediaConnected` flips us
       // to `active` once media flows.
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
       if (state.phase == P2PCallPhase.outgoing) {
         state = state.copyWith(phase: P2PCallPhase.connecting);
         // Connecting = mic/camera about to be in heavy use; start the
@@ -361,6 +415,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
     _service.onCallDeclined = (callId) {
       // Caller side: my outgoing call was rejected by the peer.
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
       _appendLog(CallOutcome.declined, overrideCallId: callId);
       // ignore: discarded_futures
       _stopFgService();
@@ -374,6 +430,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
     _service.onCallCancelled = (callId) async {
       // Callee side: caller hung up before I answered → I missed it.
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
       _appendLog(CallOutcome.missed, overrideCallId: callId);
       // Kill any warm-up preview we kicked off when the ring landed.
       await stopIncomingPreview();
@@ -387,6 +445,11 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onCallEnded = (callId, reason) async {
+      // Belt-and-braces: any path that gets us here means the call
+      // is over for both sides; ringtones must stop and timers must
+      // be cleared. Safe to call even if neither is active.
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
       // If media ever connected, this is an "answered" call with a
       // real duration; otherwise it's a connection failure.
       final answered = _callConnectedAt != null;
@@ -435,6 +498,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
     _service.onCalleeOffline = (callId) {
       // Caller side: peer was offline / unreachable.
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
       _appendLog(CallOutcome.missed, overrideCallId: callId);
       // ignore: discarded_futures
       _stopFgService();
@@ -586,6 +651,44 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     );
     debugPrint('[P2P] outgoingCallType=${withVideo ? "video" : "audio"} '
         'speakerphoneState=${withVideo ? "ON (default for video)" : "OFF (default for audio)"}');
+    // ── Ringback + bail-out timer per docs/CALL_RINGTONE_FLUTTER.md §5
+    // ignore: discarded_futures
+    RingtoneService.instance.startRingback();
+    _armCallerBailoutTimer();
+  }
+
+  /// 45 s safety net for outgoing calls. If no server event lands
+  /// in that window — typical when the callee's device is offline
+  /// AND the backend's `call-user-offline` event doesn't fire
+  /// (network drop on the signaling server, race condition) — we
+  /// give up gracefully and surface "User unavailable". Cleared
+  /// every time a terminal event arrives.
+  void _armCallerBailoutTimer() {
+    _callerBailoutTimer?.cancel();
+    _callerBailoutTimer = Timer(const Duration(seconds: 45), () {
+      if (state.phase != P2PCallPhase.outgoing) return;
+      debugPrint('[P2P] caller bail-out (45s, no response)');
+      _service.cancelCall();
+      _stopRingtoneSilently();
+      _appendLog(CallOutcome.missed, overrideCallId: state.callId);
+      state = state.copyWith(
+        phase: P2PCallPhase.failed,
+        failureMessage: 'User unavailable',
+      );
+      _scheduleResetToIdle();
+    });
+  }
+
+  void _stopRingtoneSilently() {
+    // ignore: discarded_futures
+    RingtoneService.instance.stop();
+  }
+
+  void _cancelLifecycleTimers() {
+    _autoDeclineTimer?.cancel();
+    _autoDeclineTimer = null;
+    _callerBailoutTimer?.cancel();
+    _callerBailoutTimer = null;
   }
 
   /// Callee side — accept the ringing call.
@@ -612,6 +715,10 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     debugPrint('Mismatch?: '
         '${incoming.withVideo != withVideo ? "YES — accept button wired wrong" : "no"}');
     debugPrint('==============================');
+    // Stop the incoming ringtone + cancel the 30 s auto-decline
+    // timer the moment the user picks up.
+    _stopRingtoneSilently();
+    _cancelLifecycleTimers();
     _service.acceptCall(call: incoming, withVideo: withVideo);
     // Now we know the real media kind for the call log entry that
     // will be appended on `onCallEnded`.
@@ -637,6 +744,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   /// Callee side — reject the ringing call.
   Future<void> declineIncoming() async {
+    _stopRingtoneSilently();
+    _cancelLifecycleTimers();
     final incoming = state.incoming;
     if (incoming != null) _service.declineCall(incoming);
     _appendLog(CallOutcome.declined, overrideCallId: state.callId);
@@ -656,6 +765,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   /// Caller side — cancel before the callee answers.
   Future<void> cancelOutgoing() async {
+    _stopRingtoneSilently();
+    _cancelLifecycleTimers();
     _service.cancelCall();
     await _stopFgService();
     _appendLog(CallOutcome.cancelled, overrideCallId: state.callId);
@@ -670,6 +781,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   /// Either side — hang up an active call.
   Future<void> endCall() async {
+    _stopRingtoneSilently();
+    _cancelLifecycleTimers();
     // Capture rating context before we tear state down — `_log*`
     // fields get cleared by `_appendLog` and `_callConnectedAt`
     // gets reset by `_resetCallState`.
@@ -1017,6 +1130,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   @override
   void dispose() {
+    _cancelLifecycleTimers();
+    _stopRingtoneSilently();
     _disposeRenderers();
     _service.dispose();
     super.dispose();

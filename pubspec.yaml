@@ -102,6 +102,12 @@ dependencies:
   # E.164 conversion offline (no network round-trip).
   flutter_contacts: ^1.1.9+2
   phone_numbers_parser: ^8.3.0
+  # Low-latency looped playback for P2P call ringback (caller side)
+  # and incoming ring (receiver side). Cf.
+  # docs/CALL_RINGTONE_FLUTTER.md §2. `audioplayers` chosen over
+  # `just_audio` for simpler asset-source playback and the
+  # ReleaseMode.loop API which matches the 3–6s loop pattern.
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
@@ -155,6 +161,12 @@ flutter:
   # picked up without having to edit pubspec each time.
   assets:
     - assets/images/
+    # P2P call ringback (caller side) + incoming ring (receiver
+    # side) MP3 files. See docs/CALL_RINGTONE_FLUTTER.md §1 for the
+    # exact files we expect and assets/sounds/README.md for where
+    # to drop replacements. RingtoneService gracefully no-ops if a
+    # file is missing, so the build stays green during dev.
+    - assets/sounds/
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
