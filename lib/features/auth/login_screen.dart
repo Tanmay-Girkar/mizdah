@@ -113,22 +113,55 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             const SizedBox(height: 12),
                             Text(
                               authState.errorMessage!,
-                              style: const TextStyle(color: Colors.red, fontSize: 13),
+                              style: const TextStyle(
+                                  color: Colors.red, fontSize: 13),
+                            ),
+                            // On failure, offer a direct path to
+                            // register with the email pre-filled.
+                            // We deliberately don't auto-route on
+                            // every error because the backend's
+                            // current `Invalid credentials` response
+                            // doesn't distinguish "wrong password"
+                            // from "no such user" — see plan in
+                            // docs/AUTH_FLOW_FOLLOWUP.md for the
+                            // backend change that would enable true
+                            // auto-routing.
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton(
+                                onPressed: () {
+                                  final email =
+                                      _emailController.text.trim();
+                                  context.go(email.isEmpty
+                                      ? '/register'
+                                      : '/register?email='
+                                          '${Uri.encodeComponent(email)}');
+                                },
+                                style: TextButton.styleFrom(
+                                  padding: EdgeInsets.zero,
+                                  minimumSize: const Size(0, 0),
+                                  tapTargetSize: MaterialTapTargetSize
+                                      .shrinkWrap,
+                                ),
+                                child: const Text(
+                                  'Create new account →',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                           const SizedBox(height: 32),
                           MizdahButton(
                             label: 'Log In',
-                            onTap: authState.status == AuthStatus.authenticating 
-                                ? null : _onLogin,
-                            isLoading: authState.status == AuthStatus.authenticating,
-                          ),
-                          const SizedBox(height: 16),
-                          Center(
-                            child: TextButton(
-                              onPressed: () => context.go('/register'),
-                              child: const Text("Don't have an account? Register"),
-                            ),
+                            onTap: authState.status == AuthStatus.authenticating
+                                ? null
+                                : _onLogin,
+                            isLoading:
+                                authState.status == AuthStatus.authenticating,
                           ),
                         ],
                       ),

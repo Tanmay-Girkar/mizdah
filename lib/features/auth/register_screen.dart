@@ -31,6 +31,24 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   String _phoneCountryIso = 'IN';
   bool _phoneIsValid = false;
 
+  bool _emailPrefilled = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pre-fill the email if the user arrived here from the login
+    // screen's "Create new account →" CTA (which passes the failed
+    // email as a query param). Done in didChangeDependencies rather
+    // than initState because GoRouterState requires a BuildContext.
+    if (_emailPrefilled) return;
+    final emailParam =
+        GoRouterState.of(context).uri.queryParameters['email'];
+    if (emailParam != null && emailParam.isNotEmpty) {
+      _emailController.text = emailParam;
+    }
+    _emailPrefilled = true;
+  }
+
   @override
   void dispose() {
     _nameController.dispose();
