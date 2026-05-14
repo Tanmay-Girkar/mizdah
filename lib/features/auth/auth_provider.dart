@@ -228,6 +228,33 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// Adopt a fresh session minted by the password-reset flow. The
+  /// /api/auth/reset-password endpoint returns both a new JWT and
+  /// the user object — same shape as login — so we save them
+  /// to secure storage and flip the state to authenticated. The
+  /// caller (reset screen) handles navigation to / afterwards.
+  Future<void> adoptResetPasswordSession({
+    required String token,
+    required User user,
+  }) async {
+    await StorageService.saveToken(token);
+    await StorageService.saveUserData(
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+    );
+    state = state.copyWith(
+      status: AuthStatus.authenticated,
+      token: token,
+      user: user,
+      clearError: true,
+    );
+    // Best-effort FCM token registration on the new session.
+    // ignore: discarded_futures
+    PushNotificationService.instance.registerCurrentToken();
+  }
+
 
   Future<void> signup(
     String email,
@@ -312,6 +339,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> updateProfile({
     String? name,
     String? password,
+    String? currentPassword,
     String? avatarUrl,
     String? phone,
     String? phoneCountry,
@@ -320,6 +348,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final updatedUser = await _authRepository.updateProfile(
         name: name,
         password: password,
+        currentPassword: currentPassword,
         avatarUrl: avatarUrl,
         phone: phone,
         phoneCountry: phoneCountry,

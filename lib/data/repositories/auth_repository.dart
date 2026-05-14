@@ -96,6 +96,7 @@ class AuthRepository {
   Future<User> updateProfile({
     String? name,
     String? password,
+    String? currentPassword,
     String? avatarUrl,
     String? phone,
     String? phoneCountry,
@@ -104,6 +105,13 @@ class AuthRepository {
       final response = await _apiClient.post(ApiConfig.authUpdate, data: {
         if (name != null) 'name': name,
         if (password != null) 'password': password,
+        // Per docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md §3, every
+        // password change MUST carry the user's current password.
+        // Backend rejects with INVALID_CURRENT_PASSWORD (403) when
+        // it's wrong or MISSING_CURRENT_PASSWORD (400) when absent
+        // alongside `password`. Other update kinds (name, avatar,
+        // phone) don't need it.
+        if (currentPassword != null) 'current_password': currentPassword,
         // Backend exposes `avatar_url` on the user object (verified
         // live in /signup response 2026-05-09). Whether
         // /api/auth/update accepts an `avatar_url` field is documented
@@ -178,5 +186,59 @@ class AuthRepository {
       debugPrint('searchUsers failed: $e');
       return const [];
     }
+  }
+
+  // ── Forgot / reset password ───────────────────────────────────────
+  // See docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md §4 + §5. Both are
+  // PUBLIC endpoints (no JWT). The first one always returns 200 with
+  // the same body whether the email exists or not — kills email
+  // enumeration. The second consumes the single-use token from the
+  // email link.
+
+  /// Request a password-reset email. Backend always returns 200
+  /// regardless of whether the email exists; UI shows the same
+  /// "If an account exists for that email, we sent a reset link"
+  /// copy either way. Rethrows on transport errors so the caller
+  /// can show "Couldn't send. Try again."
+  Future<void> forgotPassword(String email) async {
+    await _apiClient.post(
+      ApiConfig.authForgotPassword,
+      data: {'email': email.trim()},
+    );
+  }
+
+  /// Consume a reset token from the email link + set a new password.
+  /// On success returns the refreshed `User` and the fresh JWT —
+  /// caller saves both and the user lands on Home logged-in.
+  ///
+  /// Error codes the caller should surface:
+  ///   TOKEN_INVALID        → "Reset link isn't valid."
+  ///   TOKEN_ALREADY_USED   → "This reset link has already been used."
+  ///   TOKEN_EXPIRED        → "Reset link has expired. Request a new one."
+  ///   WEAK_PASSWORD        → "Password must be at least 8 characters."
+  Future<({User user, String token})> resetPassword({
+    required String token,
+    required String newPassword,
+  }) async {
+    final response = await _apiClient.post(
+      ApiConfig.authResetPassword,
+      data: {
+        'token': token,
+        'password': newPassword,
+      },
+    );
+    final data = response.data;
+    if (data is! Map) {
+      throw Exception('reset-password: invalid server response');
+    }
+    final jwt = data['token']?.toString() ??
+        _extractTokenFromHeaders(response.headers);
+    if (jwt == null || jwt.isEmpty) {
+      throw Exception('reset-password: no token in response');
+    }
+    final user = User.fromJson(
+      Map<String, dynamic>.from(data['user'] as Map),
+    );
+    return (user: user, token: jwt);
   }
 }

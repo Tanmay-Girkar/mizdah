@@ -136,8 +136,38 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             controller: _passwordController,
                             isPassword: true,
                             prefixIcon: Icons.lock_outline,
-                            validator: (val) => (val == null || val.length < 6) 
+                            validator: (val) => (val == null || val.length < 6)
                                 ? 'Min 6 characters' : null,
+                          ),
+                          // Forgot password — routes to the email-
+                          // reset flow per docs/PASSWORD_CHANGE_AND_
+                          // RESET_BACKEND.md §4. The current email
+                          // text (if any) is passed through so the
+                          // user doesn't have to retype it.
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () {
+                                final email = _emailController.text.trim();
+                                context.push(
+                                  '/forgot-password',
+                                  extra: {'email': email},
+                                );
+                              },
+                              style: TextButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 0),
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                'Forgot password?',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
                           ),
                           if (authState.errorMessage != null) ...[
                             const SizedBox(height: 14),

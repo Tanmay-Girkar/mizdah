@@ -33,6 +33,14 @@ class ApiConfig {
   static const String authMe = '$baseUrl/api/auth/me';
   static const String authUpdate = '$baseUrl/api/auth/update';
 
+  // Password reset flow — see docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md.
+  // `forgotPassword` is public (no JWT) and triggers the reset email;
+  // `resetPassword` consumes the single-use token from that email.
+  static const String authForgotPassword =
+      '$baseUrl/api/auth/forgot-password';
+  static const String authResetPassword =
+      '$baseUrl/api/auth/reset-password';
+
   // Post-call / post-meeting rating — see docs/CALL_FEEDBACK_BACKEND.md.
   static const String feedbackCallRating =
       '$baseUrl/api/feedback/call-rating';

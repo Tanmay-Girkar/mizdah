@@ -15,6 +15,7 @@
 //  flagged in docs/PROFILE_API.md.
 // ════════════════════════════════════════════════════════════════════
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -434,11 +435,15 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
     }
   }
 
-  /// Modal sheet: enter a new password (twice). On submit, calls
-  /// /api/auth/update with the password field.
+  /// Modal sheet: prompt for current + new + confirm password,
+  /// call /api/auth/update, surface backend error codes inline.
+  ///
+  /// The sheet owns its own busy state and inline-error handling;
+  /// this method just orchestrates the API call and the success
+  /// snackbar. The sheet's `onSubmit` callback returns `null` on
+  /// success (sheet pops with `true`) or a string to render
+  /// inline (sheet stays open, clears new+confirm).
   Future<void> _changePassword() async {
-    final newCtrl = TextEditingController();
-    final confirmCtrl = TextEditingController();
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showModalBottomSheet<bool>(
       context: context,
@@ -446,56 +451,67 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _PasswordSheet(
-        newCtrl: newCtrl,
-        confirmCtrl: confirmCtrl,
+        onSubmit: (current, newPw) async {
+          try {
+            await ref.read(authProvider.notifier).updateProfile(
+                  password: newPw,
+                  currentPassword: current,
+                );
+            return null; // success
+          } catch (e) {
+            return _mapPasswordError(e);
+          }
+        },
       ),
     );
-    if (ok != true) {
-      newCtrl.dispose();
-      confirmCtrl.dispose();
-      return;
-    }
-    final pw = newCtrl.text;
-    newCtrl.dispose();
-    confirmCtrl.dispose();
-    try {
-      await ref
-          .read(authProvider.notifier)
-          .updateProfile(password: pw);
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: MizdahTokens.surface(context),
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle_rounded,
-                  color: Color(0xFF10B981), size: 18),
-              const SizedBox(width: 8),
-              Text(
-                'Password updated',
-                style: TextStyle(
-                  color: MizdahTokens.inkOf(context),
-                  fontWeight: FontWeight.w600,
-                ),
+    if (ok != true) return;
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: MizdahTokens.surface(context),
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded,
+                color: Color(0xFF10B981), size: 18),
+            const SizedBox(width: 8),
+            Text(
+              'Password updated',
+              style: TextStyle(
+                color: MizdahTokens.inkOf(context),
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFB42318),
-          content: Text(
-            'Could not update password',
-            style: const TextStyle(color: Colors.white),
-          ),
-        ),
-      );
+      ),
+    );
+  }
+
+  /// Map DioException → friendly inline message for the sheet.
+  /// Backend codes per docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md §3.5.
+  String _mapPasswordError(Object e) {
+    if (e is DioException) {
+      final body = e.response?.data;
+      final code = body is Map ? body['code']?.toString() : null;
+      switch (code) {
+        case 'INVALID_CURRENT_PASSWORD':
+          return 'Current password is incorrect.';
+        case 'MISSING_CURRENT_PASSWORD':
+          return 'Enter your current password.';
+        case 'SAME_AS_CURRENT_PASSWORD':
+          return 'New password must be different from current.';
+        case 'WEAK_PASSWORD':
+          return 'Password must be at least 8 characters.';
+        case 'RATE_LIMITED':
+          return 'Too many attempts. Try again later.';
+      }
+      final human = body is Map
+          ? (body['error']?.toString() ?? body['message']?.toString())
+          : null;
+      if (human != null && human.isNotEmpty) return human;
     }
+    return 'Could not update password. Try again.';
   }
 
   String _shortId(String id) {
@@ -633,37 +649,96 @@ class _AvatarEditor extends StatelessWidget {
 //  Password change sheet — used by `_changePassword`.
 // ────────────────────────────────────────────────────────────────────
 
+/// Bottom sheet that owns the change-password flow end-to-end:
+///   • Three password fields (current / new / confirm)
+///   • Client-side validation
+///   • Calls the provided `onSubmit` callback when the user taps
+///     Update. The callback runs the API request and returns:
+///       null   → success; sheet pops with `true`
+///       String → inline error to show; sheet clears new+confirm,
+///                leaves `current` intact so the user doesn't retype
+///                what they got right, and stays open.
+///
+/// Spec: docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md §3 + the visual
+/// mock in the previous design plan.
+typedef PasswordSheetSubmit = Future<String?> Function(
+  String currentPassword,
+  String newPassword,
+);
+
 class _PasswordSheet extends StatefulWidget {
-  final TextEditingController newCtrl;
-  final TextEditingController confirmCtrl;
-  const _PasswordSheet({required this.newCtrl, required this.confirmCtrl});
+  final PasswordSheetSubmit onSubmit;
+  const _PasswordSheet({required this.onSubmit});
 
   @override
   State<_PasswordSheet> createState() => _PasswordSheetState();
 }
 
 class _PasswordSheetState extends State<_PasswordSheet> {
+  final _currentCtrl = TextEditingController();
+  final _newCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
   String? _error;
   bool _obscure = true;
+  bool _busy = false;
 
-  bool get _valid {
-    final n = widget.newCtrl.text;
-    final c = widget.confirmCtrl.text;
-    return n.length >= 5 && n == c;
+  @override
+  void dispose() {
+    _currentCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
   }
 
-  void _submit() {
-    final n = widget.newCtrl.text;
-    final c = widget.confirmCtrl.text;
+  bool get _valid {
+    final cur = _currentCtrl.text;
+    final n = _newCtrl.text;
+    final c = _confirmCtrl.text;
+    return cur.isNotEmpty && n.length >= 5 && n == c && !_busy;
+  }
+
+  Future<void> _submit() async {
+    final cur = _currentCtrl.text;
+    final n = _newCtrl.text;
+    final c = _confirmCtrl.text;
+    if (cur.isEmpty) {
+      setState(() => _error = 'Enter your current password');
+      return;
+    }
     if (n.length < 5) {
-      setState(() => _error = 'Password must be at least 5 characters');
+      setState(() => _error = 'New password must be at least 5 characters');
       return;
     }
     if (n != c) {
-      setState(() => _error = 'Passwords do not match');
+      setState(() => _error = 'New passwords do not match');
       return;
     }
-    Navigator.of(context).pop(true);
+    if (n == cur) {
+      setState(() => _error = 'New password must be different from current');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final err = await widget.onSubmit(cur, n);
+    if (!mounted) return;
+    if (err == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    // Inline error path. Clear the two NEW fields so the user can
+    // re-type them, but leave `current` intact — if the error was
+    // "incorrect current password", the chance that exactly that
+    // field is wrong is high, but if the error was something else
+    // (weak password, etc.) the current value is already correct
+    // and re-typing it is friction.
+    _newCtrl.clear();
+    _confirmCtrl.clear();
+    setState(() {
+      _busy = false;
+      _error = err;
+    });
   }
 
   @override
@@ -716,9 +791,11 @@ class _PasswordSheetState extends State<_PasswordSheet> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                // Current password — verified server-side per
+                // docs/PASSWORD_CHANGE_AND_RESET_BACKEND.md §3.
                 _PwField(
-                  controller: widget.newCtrl,
-                  hint: 'New password',
+                  controller: _currentCtrl,
+                  hint: 'Current password',
                   obscure: _obscure,
                   onChanged: (_) {
                     if (_error != null) setState(() => _error = null);
@@ -737,12 +814,55 @@ class _PasswordSheetState extends State<_PasswordSheet> {
                 ),
                 const SizedBox(height: 10),
                 _PwField(
-                  controller: widget.confirmCtrl,
+                  controller: _newCtrl,
+                  hint: 'New password',
+                  obscure: _obscure,
+                  onChanged: (_) {
+                    if (_error != null) setState(() => _error = null);
+                  },
+                ),
+                const SizedBox(height: 10),
+                _PwField(
+                  controller: _confirmCtrl,
                   hint: 'Confirm new password',
                   obscure: _obscure,
                   onChanged: (_) {
                     if (_error != null) setState(() => _error = null);
                   },
+                ),
+                // Forgot password — jumps to the email-reset flow.
+                // The reset endpoint doesn't require the current
+                // password (the email link IS the proof of identity).
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            Navigator.of(context).pop(false);
+                            // Defer to next frame so the bottom sheet
+                            // finishes its dismiss animation before
+                            // we push the new route — avoids the
+                            // GoRouter "no navigator" race.
+                            WidgetsBinding.instance
+                                .addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              context.push('/forgot-password');
+                            });
+                          },
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      'Forgot your password?',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 8),
@@ -800,14 +920,24 @@ class _PasswordSheetState extends State<_PasswordSheet> {
                               gradient: MizdahTokens.heroGradient,
                               borderRadius: BorderRadius.circular(14),
                             ),
-                            child: const Text(
-                              'Update password',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
+                            child: _busy
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      valueColor: AlwaysStoppedAnimation(
+                                          Colors.white),
+                                    ),
+                                  )
+                                : const Text(
+                                    'Update password',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
                           ),
                         ),
                       ),
