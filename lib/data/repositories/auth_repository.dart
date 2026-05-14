@@ -97,6 +97,8 @@ class AuthRepository {
     String? name,
     String? password,
     String? avatarUrl,
+    String? phone,
+    String? phoneCountry,
   }) async {
     try {
       final response = await _apiClient.post(ApiConfig.authUpdate, data: {
@@ -109,6 +111,12 @@ class AuthRepository {
         // docs/PROFILE_API.md — if the server ignores this key the
         // name/password parts of the patch still go through.
         if (avatarUrl != null) 'avatar_url': avatarUrl,
+        // Per docs/PHONE_LINK_BACKEND.md §2.2 — phone + phone_country
+        // travel as a pair. The Settings → Link phone screen sends
+        // both together; backend rejects with INVALID_PHONE_COUNTRY
+        // if one is present without the other.
+        if (phone != null) 'phone': phone,
+        if (phoneCountry != null) 'phone_country': phoneCountry,
       });
       return User.fromJson(response.data['user']);
     } catch (e) {

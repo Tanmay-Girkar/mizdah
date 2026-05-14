@@ -259,15 +259,24 @@ class AuthNotifier extends StateNotifier<AuthState> {
     String? name,
     String? password,
     String? avatarUrl,
+    String? phone,
+    String? phoneCountry,
   }) async {
     try {
       final updatedUser = await _authRepository.updateProfile(
         name: name,
         password: password,
         avatarUrl: avatarUrl,
+        phone: phone,
+        phoneCountry: phoneCountry,
       );
       // Persist the fresh user data so a later restart doesn't fall
-      // back to a stale name / email / avatar.
+      // back to a stale name / email / avatar. Phone is propagated
+      // via the in-memory `state.user` update below — StorageService
+      // doesn't currently persist phone, but the next getMe() round-
+      // trip rehydrates it from the server, and the in-memory User
+      // is enough for the Settings screen and the Mizdah-contacts
+      // matchability check.
       await StorageService.saveUserData(
         id: updatedUser.id,
         name: updatedUser.name,

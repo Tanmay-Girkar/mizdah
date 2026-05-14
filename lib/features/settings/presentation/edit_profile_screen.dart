@@ -230,6 +230,22 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                                       value: user?.email ?? '—',
                                       trailing: _VerifiedBadge(),
                                     ),
+                                    _RowDivider(),
+                                    // Phone row — tap to link / change the
+                                    // number. The value column shows the
+                                    // saved E.164 phone or "Not added"; the
+                                    // chevron makes it discoverable as a
+                                    // tap target. Backed by
+                                    // docs/PHONE_LINK_BACKEND.md.
+                                    _ActionRow(
+                                      icon: Icons.phone_rounded,
+                                      label: 'Phone number',
+                                      sublabel: (user?.phone ?? '').isEmpty
+                                          ? 'Not added — tap to link your number'
+                                          : user!.phone!,
+                                      onTap: () =>
+                                          context.push('/link-phone'),
+                                    ),
                                   ],
                                 ),
                               ),

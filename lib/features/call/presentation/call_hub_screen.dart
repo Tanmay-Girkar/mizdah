@@ -190,6 +190,15 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
                   padding: const EdgeInsets.only(bottom: 8),
                   children: [
                     if (_query.isEmpty) ...[
+                      // Soft nudge for users who haven't linked a phone
+                      // yet — so their friends with this number in
+                      // their address book can find them on Mizdah.
+                      // Auto-hides once a phone is on file.
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.13,
+                        child: const _LinkPhoneBanner(),
+                      ),
                       MizdahFadeUp(
                         controller: _entryCtrl,
                         delay: 0.16,
@@ -1230,6 +1239,84 @@ class _CallActionButton extends StatelessWidget {
             ],
           ),
           child: Icon(icon, color: Colors.white, size: 19),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dismissible / auto-hiding banner shown at the top of the Call tab
+/// when the signed-in user hasn't linked a phone number yet. Tap →
+/// /link-phone. Auto-disappears the moment the user links a number.
+///
+/// Kept lightweight on purpose: no per-session dismissal cache, just
+/// reads `authProvider.user.phone`. Once the linked phone lands in
+/// state the banner is gone forever for that user; if they later
+/// unlink the phone (changing it back to null is unsupported but
+/// theoretically possible via direct API) it would reappear.
+class _LinkPhoneBanner extends ConsumerWidget {
+  const _LinkPhoneBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final phone = ref.watch(authProvider).user?.phone;
+    if (phone != null && phone.isNotEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      child: MizdahCard(
+        padding: const EdgeInsets.all(14),
+        onTap: () => context.push('/link-phone'),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                gradient: MizdahTokens.heroGradient,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.phone_iphone_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Add your phone number',
+                    style: TextStyle(
+                      color: MizdahTokens.inkOf(context),
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'So friends with your number find you on Mizdah',
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: MizdahTokens.mutedOf(context),
+              size: 20,
+            ),
+          ],
         ),
       ),
     );

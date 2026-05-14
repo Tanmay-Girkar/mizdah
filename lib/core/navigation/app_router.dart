@@ -17,6 +17,7 @@ import '../../features/settings/presentation/report_screen.dart';
 import '../../features/settings/presentation/meeting_settings_screen.dart';
 import '../../features/settings/presentation/meeting_preferences_screen.dart';
 import '../../features/settings/presentation/edit_profile_screen.dart';
+import '../../features/settings/presentation/link_phone_screen.dart';
 import '../../features/settings/presentation/about_screen.dart';
 import '../../features/meeting/presentation/meeting_room_screen.dart';
 import '../../features/meeting/presentation/pre_join_screen.dart';
@@ -153,6 +154,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/edit-profile',
       builder: (context, state) => const EditProfileScreen(),
+    ),
+    GoRoute(
+      path: '/link-phone',
+      builder: (context, state) => const LinkPhoneScreen(),
     ),
     GoRoute(
       path: '/about',
