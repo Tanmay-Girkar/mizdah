@@ -37,6 +37,27 @@ class DeviceContact {
   /// Primary email for display — first entry if any.
   String? get primaryEmail => emails.isEmpty ? null : emails.first;
 
+  /// Persist to SharedPreferences so the Call tab's "Invite to Mizdah"
+  /// section paints instantly on cold boot, before the next sync
+  /// round-trip completes. Contains only what's already on the
+  /// device address book — nothing the user hasn't already opted in
+  /// to letting the app see.
+  Map<String, dynamic> toJson() => {
+        'displayName': displayName,
+        'phones': phones,
+        'emails': emails,
+      };
+
+  factory DeviceContact.fromJson(Map<String, dynamic> json) {
+    return DeviceContact(
+      displayName: (json['displayName'] as String?) ?? '',
+      phones: (json['phones'] as List?)?.whereType<String>().toList() ??
+          const [],
+      emails: (json['emails'] as List?)?.whereType<String>().toList() ??
+          const [],
+    );
+  }
+
   /// Initials used for the avatar placeholder. Falls back to "?" if
   /// the contact has no name.
   String get initials {

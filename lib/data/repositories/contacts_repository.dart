@@ -29,6 +29,7 @@ class ContactsRepository {
   // Versioned so a future schema change can invalidate without
   // touching unrelated SharedPreferences entries.
   static const _kCacheContacts = 'mizdah.contacts.matched.v1';
+  static const _kCacheInvitable = 'mizdah.contacts.invitable.v1';
   static const _kCacheSyncedAt = 'mizdah.contacts.syncedAt.v1';
 
   /// Hit the backend's match endpoint with the given phones + emails.
@@ -180,8 +181,10 @@ class ContactsRepository {
     invitable.sort((a, b) =>
         a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
 
-    // Persist matched list so the next cold-boot renders instantly.
-    await _persistCache(stitched);
+    // Persist matched + invitable so the next cold-boot renders
+    // instantly — without this, the user sees an empty Call tab
+    // for the duration of the next sync round-trip.
+    await _persistCache(stitched, invitable);
 
     stopwatch.stop();
     debugPrint('[contacts-sync] done in ${stopwatch.elapsedMilliseconds}ms '
@@ -215,6 +218,26 @@ class ContactsRepository {
     }
   }
 
+  /// Read the cached "invitable" (not-on-Mizdah) device-contact list.
+  /// Pairs with `loadCached` for the matched list — both are needed
+  /// to paint the Call tab fully on cold boot.
+  Future<List<DeviceContact>> loadCachedInvitable() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kCacheInvitable);
+      if (raw == null || raw.isEmpty) return const [];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map((m) => DeviceContact.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+    } catch (e) {
+      debugPrint('[contacts-cache] load invitable failed: $e');
+      return const [];
+    }
+  }
+
   /// When was the last successful sync? Used by the provider to
   /// decide if we should auto-sync on tab open (>6h old).
   Future<DateTime?> lastSyncedAt() async {
@@ -228,12 +251,19 @@ class ContactsRepository {
     }
   }
 
-  Future<void> _persistCache(List<MizdahContact> contacts) async {
+  Future<void> _persistCache(
+    List<MizdahContact> contacts,
+    List<DeviceContact> invitable,
+  ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         _kCacheContacts,
         jsonEncode(contacts.map((c) => c.toJson()).toList()),
+      );
+      await prefs.setString(
+        _kCacheInvitable,
+        jsonEncode(invitable.map((c) => c.toJson()).toList()),
       );
       await prefs.setInt(
         _kCacheSyncedAt,
@@ -251,6 +281,7 @@ class ContactsRepository {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kCacheContacts);
+      await prefs.remove(_kCacheInvitable);
       await prefs.remove(_kCacheSyncedAt);
     } catch (_) {}
   }

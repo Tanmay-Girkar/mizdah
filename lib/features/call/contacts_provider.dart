@@ -85,34 +85,42 @@ class ContactsNotifier extends StateNotifier<ContactsState> {
   final ContactsRepository _repo = ContactsRepository();
 
   /// On startup: paint the cached list immediately, check permission
-  /// status, and trigger a background sync if appropriate.
+  /// status, and ALWAYS kick a sync in the background when permission
+  /// is granted.
+  ///
+  /// We deliberately don't gate on cache staleness any more. The
+  /// `invitable` list (device contacts NOT on Mizdah) isn't persisted
+  /// across cold boots — only the matched-user cache is — so without
+  /// a sync on bootstrap, a returning user sees an empty Call tab
+  /// until they pull-to-refresh. With this change the bootstrap fires
+  /// the sync immediately and the list paints within a second.
+  ///
+  /// Rate-limiting concern: the spec allows 100 sync requests / hour
+  /// per token. Even a chatty user opening the app 20x a day stays
+  /// well under the cap.
   Future<void> _bootstrap() async {
     final cached = await _repo.loadCached();
+    final cachedInvitable = await _repo.loadCachedInvitable();
     final lastAt = await _repo.lastSyncedAt();
     final granted = await ContactsService.instance.hasPermission();
     state = state.copyWith(
       matched: cached,
+      invitable: cachedInvitable,
       lastSyncedAt: lastAt,
       permission: granted
           ? ContactsPermissionState.granted
           : ContactsPermissionState.unknown,
     );
     debugPrint('[contacts-provider] bootstrap '
-        'cached=${cached.length} '
+        'cachedMatched=${cached.length} '
+        'cachedInvitable=${cachedInvitable.length} '
         'lastSyncedAt=$lastAt '
         'permissionGranted=$granted');
 
-    // Auto-refresh if granted and stale (>6h old OR never synced).
-    if (granted && _shouldRefresh(lastAt)) {
+    if (granted) {
       // ignore: discarded_futures
       sync();
     }
-  }
-
-  bool _shouldRefresh(DateTime? lastAt) {
-    if (lastAt == null) return true;
-    final age = DateTime.now().difference(lastAt);
-    return age > const Duration(hours: 6);
   }
 
   /// Resolve the user's home country code for phone normalisation.
