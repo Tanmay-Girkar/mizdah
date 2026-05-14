@@ -652,21 +652,18 @@ class _MizdahContactsSection extends ConsumerWidget {
   }
 }
 
-/// Collapsible "Invite to Mizdah" section shown under the call log.
-/// Hidden by default — long contact lists otherwise drown the call
-/// log; users opt in with a tap on the chevron.
-class _InviteSection extends ConsumerStatefulWidget {
+/// "Invite to Mizdah" section shown under the call log. Always
+/// expanded — the user explicitly asked for the contacts list to
+/// render inline rather than hidden behind a chevron. For very large
+/// address books (hundreds of entries) this means the outer ListView
+/// builds them all eagerly; if that becomes a perf issue we can
+/// switch to a SliverList.builder, but at typical contact counts
+/// (a few hundred) it stays smooth on mid-range Android.
+class _InviteSection extends ConsumerWidget {
   const _InviteSection();
 
   @override
-  ConsumerState<_InviteSection> createState() => _InviteSectionState();
-}
-
-class _InviteSectionState extends ConsumerState<_InviteSection> {
-  bool _open = false;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final contacts = ref.watch(contactsProvider);
     if (contacts.permission != ContactsPermissionState.granted ||
         contacts.invitable.isEmpty) {
@@ -677,58 +674,45 @@ class _InviteSectionState extends ConsumerState<_InviteSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _open = !_open),
-            child: Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 8),
-              child: Row(
-                children: [
-                  Text(
-                    'Invite to Mizdah',
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Row(
+              children: [
+                Text(
+                  'Invite to Mizdah',
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: MizdahTokens.mutedOf(context)
+                        .withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${contacts.invitable.length}',
                     style: TextStyle(
-                      color: MizdahTokens.inkOf(context),
-                      fontSize: 16,
+                      color: MizdahTokens.mutedOf(context),
+                      fontSize: 10,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: -0.3,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: MizdahTokens.mutedOf(context)
-                          .withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '${contacts.invitable.length}',
-                      style: TextStyle(
-                        color: MizdahTokens.mutedOf(context),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    _open
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    color: MizdahTokens.mutedOf(context),
-                    size: 20,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-          if (_open)
-            for (final c in contacts.invitable.take(50))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _InviteRow(contact: c),
-              ),
+          for (final c in contacts.invitable)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _InviteRow(contact: c),
+            ),
         ],
       ),
     );
