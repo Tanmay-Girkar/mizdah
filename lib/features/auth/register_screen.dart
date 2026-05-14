@@ -100,11 +100,19 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     // Listen for registration success — the backend issues a JWT
     // immediately on signup (per docs/SIGNUP_NO_VERIFICATION_BACKEND.md),
     // so successful registration flips `status` to `authenticated`
-    // and we go straight to the main app. No intermediate
-    // verify-email screen.
+    // and we go straight to the main app.
+    //
+    // Defer the navigation to the next frame so the current build
+    // finishes before the screen unmounts — synchronous `context.go`
+    // here races the form's controller disposal and produces the
+    // "TextEditingController used after being disposed" assertion
+    // failures.
     ref.listen<AuthState>(authProvider, (previous, next) {
       if (next.status == AuthStatus.authenticated) {
-        context.go('/');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          context.go('/');
+        });
       }
     });
 

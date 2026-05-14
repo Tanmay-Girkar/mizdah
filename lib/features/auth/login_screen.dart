@@ -42,9 +42,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final isDark = theme.brightness == Brightness.dark;
 
     // Listen for authentication success.
+    //
+    // Navigation is deferred to a post-frame callback so the current
+    // build completes before the screen unmounts. Doing it inline
+    // races the unmount against the next build cycle — the
+    // TextEditingControllers get disposed, but the framework still
+    // tries to rebuild the form one more frame, causing the
+    // "TextEditingController used after being disposed" + the
+    // cascade of `_dependents.isEmpty` / `attached: is not true`
+    // assertion failures that show up in logcat when sign-in
+    // succeeds with the keyboard up.
     ref.listen<AuthState>(authProvider, (previous, next) {
       if (next.status == AuthStatus.authenticated) {
-        context.go('/');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          context.go('/');
+        });
         return;
       }
       // Auto-route on "no such account" (404 USER_NOT_FOUND). The
@@ -55,10 +68,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         final email = _emailController.text.trim();
         final password = _passwordController.text;
         ref.read(authProvider.notifier).clearRegisterRedirect();
-        context.go(
-          '/register',
-          extra: {'email': email, 'password': password},
-        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          context.go(
+            '/register',
+            extra: {'email': email, 'password': password},
+          );
+        });
       }
     });
 

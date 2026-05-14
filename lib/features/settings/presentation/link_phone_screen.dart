@@ -79,7 +79,16 @@ class _LinkPhoneScreenState extends ConsumerState<LinkPhoneScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Phone number saved')),
       );
-      context.pop();
+      // Dismiss the IME and defer the pop to the next frame so the
+      // text field's controllers finish their build cycle before the
+      // route unmounts. Synchronous `context.pop()` here races the
+      // dispose and surfaces "TextEditingController used after being
+      // disposed" assertions.
+      FocusScope.of(context).unfocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        context.pop();
+      });
     } catch (e) {
       // Surface the backend's machine-readable code when possible. The
       // codes are documented in docs/PHONE_LINK_BACKEND.md §2.5:
@@ -120,8 +129,14 @@ class _LinkPhoneScreenState extends ConsumerState<LinkPhoneScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
+      // resizeToAvoidBottomInset: true is the Scaffold default; combined
+      // with the SingleChildScrollView below it lets the form scroll
+      // up over the keyboard instead of overflowing the Column. The
+      // previous Column-with-Spacer layout overflowed by ~200k pixels
+      // when the keyboard popped up because Spacer tried to fill
+      // whatever space was left after a shrunken viewport.
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -222,7 +237,7 @@ class _LinkPhoneScreenState extends ConsumerState<LinkPhoneScreen> {
                 ),
               ],
 
-              const Spacer(),
+              const SizedBox(height: 32),
 
               // ── Save button ─────────────────────────────────────
               _SaveBtn(
