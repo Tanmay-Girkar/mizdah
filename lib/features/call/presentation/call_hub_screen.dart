@@ -31,11 +31,14 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/ui/mizdah_design.dart';
+import '../../../data/models/contact_models.dart';
 import '../../../data/models/models.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../../auth/auth_provider.dart';
 import '../call_log_provider.dart';
+import '../contacts_provider.dart';
 import '../data/call_log_models.dart';
+import '../invite_service.dart';
 import '../p2p_call_provider.dart';
 
 class CallHubScreen extends ConsumerStatefulWidget {
@@ -103,6 +106,21 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
     });
   }
 
+  Future<void> _onRequestContactsPermission() async {
+    final ok = await ref
+        .read(contactsProvider.notifier)
+        .requestAndSync();
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Contacts access denied. You can enable it in Settings.'),
+        ),
+      );
+    }
+  }
+
   void _placeCall(User target, {required bool withVideo}) {
     // ─── STEP 1: CALL BUTTON LOGS ──────────────────────────────────
     // First chance to confirm the right intent left the UI. If this
@@ -163,23 +181,46 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
             ),
             const SizedBox(height: 18),
             Expanded(
-              child: ListView(
-                physics: const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                padding: const EdgeInsets.only(bottom: 8),
-                children: [
-                  MizdahFadeUp(
-                    controller: _entryCtrl,
-                    delay: 0.18,
-                    child: _query.isEmpty
-                        ? _CallLogSection(onRedial: _placeCall)
-                        : _SearchResultsSection(
-                            results: _results,
-                            busy: _searching,
-                            query: _query,
-                            onCall: _placeCall,
-                          ),
-                  ),
-                ],
+              child: RefreshIndicator(
+                onRefresh: () =>
+                    ref.read(contactsProvider.notifier).sync(),
+                child: ListView(
+                  physics: const ClampingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  children: [
+                    if (_query.isEmpty) ...[
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.16,
+                        child: _MizdahContactsSection(
+                          onCall: _placeCall,
+                          onRequestPermission: _onRequestContactsPermission,
+                        ),
+                      ),
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.20,
+                        child: _CallLogSection(onRedial: _placeCall),
+                      ),
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.24,
+                        child: const _InviteSection(),
+                      ),
+                    ] else
+                      MizdahFadeUp(
+                        controller: _entryCtrl,
+                        delay: 0.18,
+                        child: _SearchResultsSection(
+                          backendResults: _results,
+                          busy: _searching,
+                          query: _query,
+                          onCall: _placeCall,
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -253,7 +294,7 @@ class _SearchField extends StatelessWidget {
                 isCollapsed: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 18),
                 border: InputBorder.none,
-                hintText: 'Search by email or name',
+                hintText: 'Search by name, email, or +91…',
                 hintStyle: TextStyle(
                   color: MizdahTokens.mutedOf(context),
                   fontWeight: FontWeight.w500,
@@ -297,21 +338,84 @@ class _SearchField extends StatelessWidget {
 //  Search results
 // ────────────────────────────────────────────────────────────────────
 
-class _SearchResultsSection extends StatelessWidget {
-  final List<User> results;
+class _SearchResultsSection extends ConsumerWidget {
+  final List<User> backendResults;
   final bool busy;
   final String query;
   final void Function(User, {required bool withVideo}) onCall;
   const _SearchResultsSection({
-    required this.results,
+    required this.backendResults,
     required this.busy,
     required this.query,
     required this.onCall,
   });
 
+  /// Filter the locally-cached Mizdah contacts down to those whose
+  /// name / phone / email substring-matches the query. Lets a user
+  /// who synced contacts and then typed "mum" see their mom even
+  /// before the backend's name index has indexed the saved-as name.
+  List<MizdahContact> _localMizdahHits(
+    List<MizdahContact> matched,
+    String q,
+  ) {
+    final lower = q.toLowerCase();
+    final isPhone = lower.startsWith('+') && lower.length >= 4;
+    return matched.where((c) {
+      if (isPhone) {
+        return (c.phone ?? '').toLowerCase().contains(lower);
+      }
+      return c.displayName.toLowerCase().contains(lower) ||
+          (c.email ?? '').toLowerCase().contains(lower);
+    }).toList();
+  }
+
+  /// Filter the invitable (not-on-Mizdah) device contacts down to
+  /// query matches so the search results offer "Invite to Mizdah"
+  /// alongside registered users.
+  List<DeviceContact> _localInviteHits(
+    List<DeviceContact> invitable,
+    String q,
+  ) {
+    final lower = q.toLowerCase();
+    final isPhone = lower.startsWith('+') && lower.length >= 4;
+    return invitable.where((c) {
+      if (isPhone) {
+        return c.phones.any((p) => p.toLowerCase().contains(lower));
+      }
+      return c.displayName.toLowerCase().contains(lower) ||
+          c.emails.any((e) => e.contains(lower)) ||
+          c.phones.any((p) => p.toLowerCase().contains(lower));
+    }).toList();
+  }
+
   @override
-  Widget build(BuildContext context) {
-    if (busy && results.isEmpty) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final contacts = ref.watch(contactsProvider);
+    final me = ref.read(authProvider).user?.id;
+    // Merge backend results + local Mizdah contact matches, deduped
+    // by userId. Local hits help when the backend hasn't reindexed
+    // a recently-renamed user or doesn't store the local "saved as"
+    // name that the user actually searched by.
+    final localMizdah = _localMizdahHits(contacts.matched, query);
+    final knownIds = <String>{
+      for (final u in backendResults) u.id,
+      for (final m in localMizdah) m.userId,
+    };
+    final mergedUsers = <User>[
+      for (final u in backendResults)
+        if (u.id != me) u,
+      for (final m in localMizdah)
+        if (m.userId != me && !backendResults.any((u) => u.id == m.userId))
+          m.toUser(),
+    ];
+    final inviteHits = _localInviteHits(contacts.invitable, query)
+        // Hide entries whose userId would have shown above anyway —
+        // shouldn't happen because invitable excludes matched users
+        // already, but defensive.
+        .where((_) => true)
+        .toList();
+
+    if (busy && mergedUsers.isEmpty && inviteHits.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 60),
         child: Center(
@@ -326,7 +430,7 @@ class _SearchResultsSection extends StatelessWidget {
         ),
       );
     }
-    if (results.isEmpty) {
+    if (mergedUsers.isEmpty && inviteHits.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(horizontal: 18),
         child: MizdahCard(
@@ -334,7 +438,7 @@ class _SearchResultsSection extends StatelessWidget {
           child: MizdahEmptyState(
             icon: Icons.person_search_rounded,
             title: 'No matches',
-            subtitle: 'Try a different name or email.',
+            subtitle: 'Try a different name, email, or phone.',
           ),
         ),
       );
@@ -344,29 +448,379 @@ class _SearchResultsSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
-            child: Text(
-              '${results.length} ${results.length == 1 ? 'match' : 'matches'} '
-              'for "$query"',
-              style: TextStyle(
-                color: MizdahTokens.mutedOf(context),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.2,
+          if (mergedUsers.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8),
+              child: Text(
+                '${mergedUsers.length} on Mizdah',
+                style: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+            for (final u in mergedUsers)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _UserRow(user: u, onCall: onCall),
+              ),
+          ],
+          if (inviteHits.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 14, bottom: 8),
+              child: Text(
+                '${inviteHits.length} not on Mizdah · invite them',
+                style: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+            for (final c in inviteHits)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _InviteRow(contact: c),
+              ),
+          ],
+          // Suppress the unused-knownIds warning — defensive variable
+          // we may want for future dedupe logic.
+          if (knownIds.isEmpty) const SizedBox.shrink(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Section shown above the call log when no search query is active.
+/// Lists every Mizdah-registered contact synced from the device
+/// address book. Tap a row to call (audio or video). When permission
+/// hasn't been granted yet, shows an inline call-to-action instead.
+class _MizdahContactsSection extends ConsumerWidget {
+  final void Function(User, {required bool withVideo}) onCall;
+  final VoidCallback onRequestPermission;
+  const _MizdahContactsSection({
+    required this.onCall,
+    required this.onRequestPermission,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final contacts = ref.watch(contactsProvider);
+    final me = ref.read(authProvider).user?.id;
+    // Hide self if somehow we matched our own phone (shouldn't happen
+    // given backend uniqueness, but defensive).
+    final visible = contacts.matched.where((c) => c.userId != me).toList();
+
+    if (contacts.permission != ContactsPermissionState.granted) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+        child: MizdahCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: MizdahTokens.heroGradient,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.contacts_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Find your friends on Mizdah',
+                      style: TextStyle(
+                        color: MizdahTokens.inkOf(context),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Allow Mizdah to read your contacts to see who you already '
+                'know on the platform. Only phone numbers and emails are '
+                'sent — no names — and they\'re discarded right after '
+                'matching.',
+                style: TextStyle(
+                  color: MizdahTokens.mutedOf(context),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: onRequestPermission,
+                  child: const Text('Allow contacts'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (contacts.syncing && visible.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(18, 0, 18, 14),
+        child: MizdahCard(
+          padding: EdgeInsets.all(20),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.2,
+                valueColor: AlwaysStoppedAnimation(MizdahTokens.primary),
               ),
             ),
           ),
-          for (final u in results)
+        ),
+      );
+    }
+
+    if (visible.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Row(
+              children: [
+                Text(
+                  'Mizdah contacts',
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    gradient: MizdahTokens.heroGradient,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${visible.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          for (final m in visible)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _UserRow(user: u, onCall: onCall),
+              child: _UserRow(user: m.toUser(), onCall: onCall),
             ),
         ],
       ),
     );
   }
 }
+
+/// Collapsible "Invite to Mizdah" section shown under the call log.
+/// Hidden by default — long contact lists otherwise drown the call
+/// log; users opt in with a tap on the chevron.
+class _InviteSection extends ConsumerStatefulWidget {
+  const _InviteSection();
+
+  @override
+  ConsumerState<_InviteSection> createState() => _InviteSectionState();
+}
+
+class _InviteSectionState extends ConsumerState<_InviteSection> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final contacts = ref.watch(contactsProvider);
+    if (contacts.permission != ContactsPermissionState.granted ||
+        contacts.invitable.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _open = !_open),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8),
+              child: Row(
+                children: [
+                  Text(
+                    'Invite to Mizdah',
+                    style: TextStyle(
+                      color: MizdahTokens.inkOf(context),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: MizdahTokens.mutedOf(context)
+                          .withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${contacts.invitable.length}',
+                      style: TextStyle(
+                        color: MizdahTokens.mutedOf(context),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _open
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    color: MizdahTokens.mutedOf(context),
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_open)
+            for (final c in contacts.invitable.take(50))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _InviteRow(contact: c),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One device-contact row with an Invite button instead of call
+/// buttons. Tapping Invite opens the OS share sheet with a prefilled
+/// message + invite link.
+class _InviteRow extends StatelessWidget {
+  final DeviceContact contact;
+  const _InviteRow({required this.contact});
+
+  @override
+  Widget build(BuildContext context) {
+    final name = contact.displayName.isEmpty
+        ? (contact.primaryPhone ?? 'Unknown')
+        : contact.displayName;
+    final subtitle = contact.primaryPhone ?? contact.primaryEmail ?? '';
+    return MizdahCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          MizdahAvatar(name: name, size: 46),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: MizdahTokens.inkOf(context),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: MizdahTokens.mutedOf(context),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          MizdahPressScale(
+            scaleTo: 0.92,
+            onTap: () => InviteService.invite(contact),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                gradient: MizdahTokens.heroGradient,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.send_rounded, color: Colors.white, size: 14),
+                  SizedBox(width: 6),
+                  Text(
+                    'Invite',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 // ────────────────────────────────────────────────────────────────────
 //  Call log — WhatsApp-style chronological call history

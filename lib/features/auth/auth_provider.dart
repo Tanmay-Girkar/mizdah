@@ -170,17 +170,43 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> signup(String email, String password, String name) async {
+  Future<void> signup(
+    String email,
+    String password,
+    String name, {
+    required String phone,
+    required String phoneCountry,
+  }) async {
     state = state.copyWith(status: AuthStatus.authenticating, errorMessage: null);
-    
+
     try {
-      final data = await _authRepository.signup(email, password, name);
-      
-      if (data['token'] == null) {
-        throw Exception("Signup failed: Missing token in response");
+      final data = await _authRepository.signup(
+        email,
+        password,
+        name,
+        phone: phone,
+        phoneCountry: phoneCountry,
+      );
+
+      // When the backend has email verification enabled, signup
+      // intentionally returns NO token + `requiresVerification: true`.
+      // Drop back to the unauthenticated state with a banner the
+      // register screen can show ("Check your inbox to verify"),
+      // not an error — this is the happy path, not a failure.
+      final token = data['token'];
+      if (token == null) {
+        final needsVerification = data['requiresVerification'] == true ||
+            (data['emailSent'] == true);
+        state = state.copyWith(
+          status: AuthStatus.unauthenticated,
+          errorMessage: needsVerification
+              ? "Account created. Check your inbox to verify your email, "
+                  "then sign in."
+              : "Signup succeeded but server returned no token.",
+        );
+        return;
       }
 
-      final token = data['token'];
       final user = User.fromJson(data['user'] ?? {});
 
       await StorageService.saveToken(token);
@@ -197,9 +223,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
       PushNotificationService.instance.registerCurrentToken();
     } catch (e) {
       debugPrint("Signup error: $e");
-      String message = "Signup failed. Email might already exist.";
+      // Surface the backend's structured error code where possible so
+      // the user sees "Phone already in use" instead of a generic
+      // "Signup failed". Backend error shape:
+      //   { "error": "human readable", "code": "MACHINE_READABLE" }
+      String message = "Signup failed. Email or phone might already exist.";
       if (e is DioException) {
-        message = e.response?.data['message'] ?? e.message ?? message;
+        final body = e.response?.data;
+        if (body is Map) {
+          final humanReadable = body['error']?.toString() ??
+              body['message']?.toString();
+          if (humanReadable != null && humanReadable.isNotEmpty) {
+            message = humanReadable;
+          }
+        } else {
+          message = e.message ?? message;
+        }
       }
       state = state.copyWith(
         status: AuthStatus.unauthenticated,

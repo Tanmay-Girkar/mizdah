@@ -49,6 +49,14 @@
          Upcoming Meetings would have to display a guess. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- Read the device address book so we can show "Mizdah contacts"
+         in the Call tab (WhatsApp-style). We never upload contact
+         names — only phone numbers and emails are sent to the
+         backend's /api/users/contacts/match endpoint, and even those
+         are forgotten by the server the moment the match response
+         comes back. See docs/PHONE_AND_CONTACTS_BACKEND.md §11 and
+         lib/core/services/contacts_service.dart. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
     

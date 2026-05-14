@@ -9,6 +9,16 @@ class User {
   /// Backend field is `avatar_url`; verified live in the signup
   /// response on the dev server (2026-05-09).
   final String? avatarUrl;
+  /// E.164 phone number, e.g. `+919876543210`. Optional because
+  /// legacy accounts created before docs/PHONE_AND_CONTACTS_BACKEND.md
+  /// shipped don't have one. New signups via the post-2026-05-14
+  /// register screen always do.
+  final String? phone;
+  /// ISO-3166-1 alpha-2 country code (`IN`, `US`, ...) the user
+  /// selected when entering the phone number. Stored alongside
+  /// `phone` so we can re-validate without re-deriving from the
+  /// dialing prefix. Optional, same reasoning as `phone`.
+  final String? phoneCountry;
 
   User({
     required this.id,
@@ -16,6 +26,8 @@ class User {
     required this.name,
     this.role = 'USER',
     this.avatarUrl,
+    this.phone,
+    this.phoneCountry,
   });
 
   User copyWith({
@@ -24,7 +36,10 @@ class User {
     String? name,
     String? role,
     String? avatarUrl,
+    String? phone,
+    String? phoneCountry,
     bool clearAvatar = false,
+    bool clearPhone = false,
   }) {
     return User(
       id: id ?? this.id,
@@ -32,11 +47,16 @@ class User {
       name: name ?? this.name,
       role: role ?? this.role,
       avatarUrl: clearAvatar ? null : (avatarUrl ?? this.avatarUrl),
+      phone: clearPhone ? null : (phone ?? this.phone),
+      phoneCountry: clearPhone ? null : (phoneCountry ?? this.phoneCountry),
     );
   }
 
   factory User.fromJson(Map<String, dynamic> json) {
     final rawAvatar = (json['avatar_url'] ?? json['avatarUrl']) as String?;
+    final rawPhone = (json['phone'] ?? json['phoneNumber']) as String?;
+    final rawPhoneCountry =
+        (json['phone_country'] ?? json['phoneCountry']) as String?;
     return User(
       id: json['id'] ?? '',
       email: json['email'] ?? '',
@@ -45,6 +65,13 @@ class User {
       avatarUrl: (rawAvatar != null && rawAvatar.trim().isNotEmpty)
           ? rawAvatar
           : null,
+      phone: (rawPhone != null && rawPhone.trim().isNotEmpty)
+          ? rawPhone
+          : null,
+      phoneCountry:
+          (rawPhoneCountry != null && rawPhoneCountry.trim().isNotEmpty)
+              ? rawPhoneCountry.toUpperCase()
+              : null,
     );
   }
 

@@ -7,22 +7,37 @@ import '../../core/config/api_config.dart';
 class AuthRepository {
   final ApiClient _apiClient = ApiClient();
 
-  Future<Map<String, dynamic>> signup(String email, String password, String name) async {
+  Future<Map<String, dynamic>> signup(
+    String email,
+    String password,
+    String name, {
+    required String phone,
+    required String phoneCountry,
+  }) async {
     try {
       final response = await _apiClient.post(ApiConfig.authSignup, data: {
         'email': email,
         'password': password,
         'name': name,
+        // Per docs/PHONE_AND_CONTACTS_BACKEND.md §2.1 — required on
+        // every new signup. E.164 + ISO-3166-1 alpha-2.
+        'phone': phone,
+        'phone_country': phoneCountry,
       });
-      
+
       if (response.data is! Map) throw Exception('Invalid server response format');
       Map<String, dynamic> data = Map<String, dynamic>.from(response.data);
-      
-      // Extract token from header if not in body
+
+      // Extract token from header if not in body.
+      //
+      // NOTE: when the backend has email verification enabled, signup
+      // intentionally returns NO token (only `requiresVerification:
+      // true`). The caller (AuthNotifier.signup) detects that case
+      // and surfaces a "check your email" UX instead of failing.
       if (data['token'] == null) {
         data['token'] = _extractTokenFromHeaders(response.headers);
       }
-      
+
       return data;
     } catch (e) {
       rethrow;

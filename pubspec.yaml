@@ -91,6 +91,17 @@ dependencies:
   # know the user's real choice without OAuth + Calendar API.
   # See lib/features/scheduling/calendar_event_sync.dart.
   device_calendar: ^4.3.3
+  # Phone-number input on the register screen — bundles a country
+  # picker, formats while typing, and emits a full E.164 string
+  # (the format the backend expects per
+  # docs/PHONE_AND_CONTACTS_BACKEND.md §6).
+  intl_phone_field: ^3.2.0
+  # Read device address book + normalise raw phone strings to E.164
+  # for the contacts-sync feature. flutter_contacts handles the
+  # platform permission + paging, phone_numbers_parser does the
+  # E.164 conversion offline (no network round-trip).
+  flutter_contacts: ^1.1.9+2
+  phone_numbers_parser: ^8.3.0
 
 dev_dependencies:
   flutter_test:

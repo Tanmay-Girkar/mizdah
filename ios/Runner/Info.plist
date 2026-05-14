@@ -36,6 +36,8 @@
 	<string>Mizdah reads the meeting you just saved in Calendar so it can show up in your Upcoming Meetings list with the correct time.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Mizdah reads the meeting you just saved in Calendar so it can show up in your Upcoming Meetings list with the correct time.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Mizdah uses your contacts to show which of your friends are already on Mizdah so you can call them with one tap. Only phone numbers and emails are sent to our servers, never names, and they are not stored after matching.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
