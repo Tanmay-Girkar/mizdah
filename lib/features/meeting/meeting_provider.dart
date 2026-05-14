@@ -12,6 +12,8 @@ import '../../core/services/sfu_service.dart';
 import '../../core/services/network_resilience_service.dart';
 import '../../core/services/local_media_service.dart';
 import '../../data/repositories/meeting_repository.dart';
+import '../../data/models/call_rating_models.dart';
+import '../feedback/call_rating_provider.dart';
 
 // Tag for filtering WebRTC/signaling logs in production builds.
 const String _kLogTag = '[MEET]';
@@ -333,8 +335,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   // across every MeetingNotifier ever created, so the texture is
   // never re-initialised when navigating between pre-join and the
   // meeting room.
-  MeetingNotifier()
+  MeetingNotifier(this._ref)
       : super(MeetingState(localRenderer: LocalMediaService.instance.renderer));
+
+  /// Riverpod ref — used to fire the post-meeting rating prompt
+  /// after `leaveMeeting()`. Held as a field because the trigger
+  /// fires from arbitrary callback paths (socket end-meeting,
+  /// network drop, user-tap-leave) rather than a single build.
+  final Ref _ref;
+
+  /// When the user actually entered the meeting room (phase
+  /// transitioned to `inMeeting`). Used to compute duration for the
+  /// post-meeting rating eligibility gate. Null if never reached.
+  DateTime? _meetingJoinedAt;
 
   io.Socket? get socket => _socket;
 
@@ -661,6 +674,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
           isInWaitingRoom: false,
           phase: MeetingPhase.inMeeting,
         );
+        _meetingJoinedAt ??= DateTime.now();
         // Re-run anything that normally fires on a successful host
         // join — including SFU bootstrap. The early return below
         // used to skip _bootstrapSfu() (it lives in the standard
@@ -728,6 +742,7 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         hostId: data['hostId']?.toString() ?? state.hostId,
         phase: MeetingPhase.inMeeting,
       );
+      _meetingJoinedAt ??= DateTime.now();
 
       if (isHostConfirmed) {
         _startWaitingListPolling(realMeetingId);
@@ -2508,6 +2523,32 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     if (mounted && !_disposed) {
       state = state.copyWith(phase: MeetingPhase.ended);
     }
+
+    // Post-meeting rating eligibility check. Only fires for meetings
+    // the user actually entered (we set `_meetingJoinedAt` on the
+    // `inMeeting` transition). Provider's own gates handle duration,
+    // sample rate, and the 24h cooldown.
+    final joinedAt = _meetingJoinedAt;
+    if (joinedAt != null) {
+      final duration = DateTime.now().difference(joinedAt);
+      final callId = state.meetingId ?? state.meetingCode ?? '';
+      // No `meetingTitle` field on the state yet — fall back to the
+      // meeting code as the display name in the sheet header.
+      final name = state.meetingCode ?? 'Mizdah meeting';
+      _meetingJoinedAt = null;
+      if (callId.isNotEmpty) {
+        // ignore: discarded_futures
+        _ref.read(callRatingProvider.notifier).maybePromptFor(
+              RatingPromptRequest(
+                callId: callId,
+                kind: RatingKind.meeting,
+                peerOrMeetingName: name,
+                duration: duration,
+                wasAnswered: true, // joined → answered
+              ),
+            );
+      }
+    }
   }
 
   void _startWaitingListPolling(String meetingId) {
@@ -3248,5 +3289,5 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
 final meetingProvider =
     StateNotifierProvider.autoDispose.family<MeetingNotifier, MeetingState, String>(
-  (ref, id) => MeetingNotifier(),
+  (ref, id) => MeetingNotifier(ref),
 );

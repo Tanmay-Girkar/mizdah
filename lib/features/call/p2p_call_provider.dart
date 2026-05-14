@@ -25,8 +25,10 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
+import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
 import '../auth/auth_provider.dart';
+import '../feedback/call_rating_provider.dart';
 import 'call_log_provider.dart';
 import 'data/call_log_models.dart';
 
@@ -387,9 +389,19 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     _service.onCallEnded = (callId, reason) async {
       // If media ever connected, this is an "answered" call with a
       // real duration; otherwise it's a connection failure.
-      final outcome = _callConnectedAt != null
-          ? CallOutcome.answered
-          : CallOutcome.failed;
+      final answered = _callConnectedAt != null;
+      final outcome =
+          answered ? CallOutcome.answered : CallOutcome.failed;
+      // Compute the actual duration BEFORE we null `_callConnectedAt`
+      // later in this method — rating eligibility needs it.
+      final ratedDuration = answered
+          ? DateTime.now().difference(_callConnectedAt!)
+          : Duration.zero;
+      final ratedPeerName = _logPeerName ?? state.remoteName ?? 'Mizdah user';
+      final ratedKind = _logWithVideo
+          ? RatingKind.p2pVideo
+          : RatingKind.p2pAudio;
+
       _appendLog(outcome, overrideCallId: callId);
       await _stopFgService();
       await _disposeRenderers();
@@ -405,6 +417,20 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         minimized: false,
       );
       _scheduleResetToIdle();
+
+      // Fire-and-forget post-call rating eligibility check. All the
+      // gates (duration, sample rate, cooldown) live in the rating
+      // provider; we hand it the context and walk away.
+      // ignore: discarded_futures
+      _ref.read(callRatingProvider.notifier).maybePromptFor(
+            RatingPromptRequest(
+              callId: callId,
+              kind: ratedKind,
+              peerOrMeetingName: ratedPeerName,
+              duration: ratedDuration,
+              wasAnswered: answered,
+            ),
+          );
     };
 
     _service.onCalleeOffline = (callId) {
@@ -644,6 +670,20 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   /// Either side — hang up an active call.
   Future<void> endCall() async {
+    // Capture rating context before we tear state down — `_log*`
+    // fields get cleared by `_appendLog` and `_callConnectedAt`
+    // gets reset by `_resetCallState`.
+    final answered = _callConnectedAt != null;
+    final ratedDuration = answered
+        ? DateTime.now().difference(_callConnectedAt!)
+        : Duration.zero;
+    final ratedCallId = state.callId ?? _logCallId ?? '';
+    final ratedPeerName =
+        _logPeerName ?? state.remoteName ?? 'Mizdah user';
+    final ratedKind = (_logWithVideo || state.withVideo)
+        ? RatingKind.p2pVideo
+        : RatingKind.p2pAudio;
+
     await _service.endCall();
     await _stopFgService();
     await _disposeRenderers();
@@ -661,6 +701,24 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       minimized: false,
     );
     _scheduleResetToIdle();
+
+    // Locally-initiated hang-up: the service doesn't fire
+    // `onCallEnded` back to us (it's strictly a remote-end signal),
+    // so we prompt here. The remote side will get its own onCallEnded
+    // and may also prompt for them — both gates run independently
+    // through the rating provider's per-device cooldown.
+    if (ratedCallId.isNotEmpty) {
+      // ignore: discarded_futures
+      _ref.read(callRatingProvider.notifier).maybePromptFor(
+            RatingPromptRequest(
+              callId: ratedCallId,
+              kind: ratedKind,
+              peerOrMeetingName: ratedPeerName,
+              duration: ratedDuration,
+              wasAnswered: answered,
+            ),
+          );
+    }
   }
 
   // ── Minimize / restore ───────────────────────────────────────────

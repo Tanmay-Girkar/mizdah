@@ -33,6 +33,10 @@ class ApiConfig {
   static const String authMe = '$baseUrl/api/auth/me';
   static const String authUpdate = '$baseUrl/api/auth/update';
 
+  // Post-call / post-meeting rating — see docs/CALL_FEEDBACK_BACKEND.md.
+  static const String feedbackCallRating =
+      '$baseUrl/api/feedback/call-rating';
+
   static const String createMeeting = '$baseUrl/api/meetings/create';
   static const String getMeeting = '$baseUrl/api/meeting'; 
   static const String userMeetings = '$baseUrl/api/meetings/user'; // + /{userId}
