@@ -8,23 +8,22 @@
 // ════════════════════════════════════════════════════════════════════
 
 /// Minimum call/meeting duration in seconds before the rating
-/// prompt is even considered. Anything shorter is treated as a
-/// butt-dial / wrong-number / instant decline and gets no prompt.
-const int kRatingMinDurationSeconds = 30;
+/// prompt is even considered. **Currently 0** — every answered
+/// call/meeting prompts, regardless of how short. Bump back up to
+/// e.g. 30 if the team wants to filter out butt-dials and instant-
+/// disconnects later.
+const int kRatingMinDurationSeconds = 0;
 
 /// Fraction of eligible calls/meetings that actually surface the
-/// prompt. Rolling a uniform `Random().nextDouble()` against this
-/// threshold prevents the user from being asked after every long
-/// call (which is the #1 reason apps get uninstalled). Value in
-/// `[0.0, 1.0]`. 1.0 = always ask, 0.0 = never ask.
-const double kRatingSampleRate = 0.40;
+/// prompt. **Currently 1.0** — every answered call/meeting prompts.
+/// Drop to e.g. 0.4 to sample only a fraction if user feedback ever
+/// reports the prompt as too noisy.
+const double kRatingSampleRate = 1.0;
 
-/// Minimum hours between two prompts on the same device. A second
-/// long call within this window is silently skipped regardless of
-/// the sample roll. 24h is the "comfortable for the user" middle
-/// ground — long enough to avoid pestering, short enough to still
-/// capture issues the day after they happen.
-const int kRatingCooldownHours = 24;
+/// Minimum hours between two prompts on the same device. **Currently
+/// 0** — back-to-back calls each prompt independently. Bump back to
+/// 24 if the team decides one rating per day is enough.
+const int kRatingCooldownHours = 0;
 
 /// Star value at or below which the sheet reveals the issue tags
 /// + free-form text field. 4-5 = happy (no extras), 3 = neutral
