@@ -6,7 +6,8 @@
 //  SMS, WhatsApp, Telegram, email, whatever's installed.
 //
 //  Invite link is a placeholder for now (the app's marketing site)
-//  because there's no deep-link / referral wiring yet — see TODO.
+//  because there's no deep-link / referral wiring yet — see the
+//  helper comment on `_inviteLink` below for the rollout note.
 // ════════════════════════════════════════════════════════════════════
 
 import 'package:share_plus/share_plus.dart';

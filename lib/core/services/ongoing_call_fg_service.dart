@@ -12,7 +12,7 @@ import 'package:flutter/services.dart';
 ///
 /// No-op on iOS (background audio is handled by `UIBackgroundModes`
 /// in Info.plist; CallKit would be the equivalent native primitive
-/// but is out of scope here — see Info.plist for the TODO).
+/// but is out of scope here — see Info.plist for the rollout note).
 class OngoingCallForegroundService {
   OngoingCallForegroundService._();
   static final OngoingCallForegroundService instance =

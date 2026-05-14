@@ -9,6 +9,27 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # Skip lint reports for vendored / generated trees we don't own.
+  #
+  #   local_packages/mediasoup_client_flutter/  — in-tree fork of an
+  #     upstream mediasoup-client port. Carries dozens of style nits
+  #     (UPPER_SNAKE constants for protocol enums, empty catches, TODO
+  #     comments left by the original maintainer, etc.) that we have
+  #     no business modifying. If the fork ever upstreams its changes
+  #     the vendored copy can be removed and this exclusion goes away.
+  exclude:
+    - 'local_packages/**'
+    - 'build/**'
+    - '**/*.g.dart'
+    - '**/*.freezed.dart'
+    # Top-level scratch scripts used for ad-hoc local testing — not
+    # part of the shipped app (real tests live under `test/`).
+    - 'test_socket.dart'
+    - 'test_type.dart'
+    - 'test_url.dart'
+    - 'scratch/**'
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

@@ -201,8 +201,9 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
   /// installed (rare on real devices, common on emulators).
   static Future<void> _rateApp(BuildContext context) async {
     const androidId = 'com.mizdah.mizdah';
-    // TODO: replace with the real iOS App Store ID once the app is
-    // submitted. Until then iOS taps fall back to the website.
+    // PLACEHOLDER iOS App Store ID — replace once the app has been
+    // submitted to the App Store. Until then iOS taps fall back to
+    // the website via the `fallback` URI a few lines down.
     const iosAppId = '0000000000';
     Uri primary;
     Uri fallback;
