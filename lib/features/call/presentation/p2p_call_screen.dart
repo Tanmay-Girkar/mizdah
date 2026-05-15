@@ -1351,7 +1351,19 @@ class _ControlsDock extends ConsumerWidget {
                   if (isRinging) {
                     notifier.cancelOutgoing();
                   } else {
+                    // ignore: discarded_futures
                     notifier.endCall();
+                  }
+                  // Immediately drop the user back to wherever they
+                  // were. The 2.4s "Call ended" goodbye banner only
+                  // makes sense when the PEER hangs up — for a user-
+                  // initiated end the screen lingering looks broken
+                  // (the state-reset spinner that briefly reappears
+                  // between T+2 s and T+2.4 s makes it feel like the
+                  // call came back, prompting a second red-button
+                  // tap before things actually cleaned up).
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
                   }
                 },
                 tooltip: isRinging ? 'Cancel call' : 'End call',

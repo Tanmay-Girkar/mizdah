@@ -18,7 +18,6 @@
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -304,45 +303,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(height: 22),
-                      // ── Account info card ──────────────────────
-                      MizdahFadeUp(
-                        controller: _entryCtrl,
-                        delay: 0.28,
-                        child: Padding(
-                          padding:
-                              const EdgeInsets.symmetric(horizontal: 18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _SectionLabel('Account'),
-                              const SizedBox(height: 8),
-                              MizdahCard(
-                                padding: EdgeInsets.zero,
-                                child: Column(
-                                  children: [
-                                    _ReadOnlyRow(
-                                      icon: Icons.badge_rounded,
-                                      label: 'Role',
-                                      value: (user?.role ?? 'USER')
-                                          .toUpperCase(),
-                                    ),
-                                    _RowDivider(),
-                                    _ReadOnlyRow(
-                                      icon: Icons.fingerprint_rounded,
-                                      label: 'Account ID',
-                                      value: _shortId(user?.id ?? ''),
-                                      trailing: _CopyChip(
-                                        text: user?.id ?? '',
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
                       const SizedBox(height: 28),
                       // ── Save button ────────────────────────────
                       MizdahFadeUp(
@@ -562,11 +522,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
       if (human != null && human.isNotEmpty) return human;
     }
     return 'Could not update password. Try again.';
-  }
-
-  String _shortId(String id) {
-    if (id.length <= 12) return id;
-    return '${id.substring(0, 6)}…${id.substring(id.length - 4)}';
   }
 }
 
@@ -1067,57 +1022,139 @@ class _PwField extends StatelessWidget {
   }
 }
 
-class _NameField extends StatelessWidget {
+/// Display-name row. Read-only by default (just the value + a small
+/// pencil icon on the right). Tapping the row OR the icon swaps to
+/// an editable TextField that auto-focuses. The pencil is replaced
+/// by a close-edit icon while editing; tapping it collapses back to
+/// read-only without resetting the controller (the main "Save
+/// changes" button at the bottom of the screen still owns persisting
+/// the value to the server).
+class _NameField extends StatefulWidget {
   final TextEditingController controller;
   final ValueChanged<String> onChanged;
   const _NameField({required this.controller, required this.onChanged});
 
   @override
+  State<_NameField> createState() => _NameFieldState();
+}
+
+class _NameFieldState extends State<_NameField> {
+  bool _editing = false;
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _enterEdit() {
+    if (_editing) return;
+    setState(() => _editing = true);
+    // Defer focus to next frame so the TextField is mounted by the
+    // time we ask for focus, otherwise the request silently no-ops.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
+  void _exitEdit() {
+    if (!_editing) return;
+    _focus.unfocus();
+    setState(() => _editing = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          _RowIcon(icon: Icons.person_rounded),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Display name',
-                  style: TextStyle(
-                    color: MizdahTokens.mutedOf(context),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.3,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                TextField(
-                  controller: controller,
-                  onChanged: onChanged,
-                  textCapitalization: TextCapitalization.words,
-                  style: TextStyle(
-                    color: MizdahTokens.inkOf(context),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.1,
-                  ),
-                  decoration: InputDecoration(
-                    isCollapsed: true,
-                    border: InputBorder.none,
-                    hintText: 'Your name',
-                    hintStyle: TextStyle(
-                      color: MizdahTokens.mutedOf(context),
-                      fontWeight: FontWeight.w500,
+    final ink = MizdahTokens.inkOf(context);
+    final muted = MizdahTokens.mutedOf(context);
+    final valueDisplay = widget.controller.text.trim().isEmpty
+        ? 'Tap to set your name'
+        : widget.controller.text;
+    return InkWell(
+      onTap: _editing ? null : _enterEdit,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            _RowIcon(icon: Icons.person_rounded),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Display name',
+                    style: TextStyle(
+                      color: muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  if (_editing)
+                    TextField(
+                      controller: widget.controller,
+                      focusNode: _focus,
+                      onChanged: widget.onChanged,
+                      onSubmitted: (_) => _exitEdit(),
+                      textCapitalization: TextCapitalization.words,
+                      textInputAction: TextInputAction.done,
+                      style: TextStyle(
+                        color: ink,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.1,
+                      ),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        border: InputBorder.none,
+                        hintText: 'Your name',
+                        hintStyle: TextStyle(
+                          color: muted,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    )
+                  else
+                    Text(
+                      valueDisplay,
+                      style: TextStyle(
+                        color: widget.controller.text.trim().isEmpty
+                            ? muted
+                            : ink,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.1,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            // Pencil / close-edit affordance. Tappable target is
+            // 36×36 so it stays accessible without crowding the row.
+            InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: _editing ? _exitEdit : _enterEdit,
+              child: Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                child: Icon(
+                  _editing
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.edit_outlined,
+                  size: 20,
+                  color: MizdahTokens.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1312,42 +1349,6 @@ class _VerifiedBadge extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _CopyChip extends StatelessWidget {
-  final String text;
-  const _CopyChip({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return MizdahPressScale(
-      scaleTo: 0.92,
-      onTap: () async {
-        if (text.isEmpty) return;
-        await Clipboard.setData(ClipboardData(text: text));
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 2),
-            content: Text('Account ID copied'),
-          ),
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: MizdahTokens.iconTileBg(context),
-          borderRadius: BorderRadius.circular(7),
-        ),
-        child: Icon(
-          Icons.content_copy_rounded,
-          color: MizdahTokens.primary,
-          size: 13,
-        ),
       ),
     );
   }
