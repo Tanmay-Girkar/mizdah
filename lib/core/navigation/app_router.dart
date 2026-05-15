@@ -30,6 +30,7 @@ import '../../features/auth/register_screen.dart';
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/auth/two_factor_screen.dart';
+import '../../features/notifications/presentation/notifications_screen.dart';
 
 /// "No transition" page builder used by the five tab branches.
 ///
@@ -162,6 +163,10 @@ final appRouter = GoRouter(
     ),
     GoRoute(path: '/report', builder: (context, state) => const ReportScreen()),
     GoRoute(path: '/privacy', builder: (context, state) => const PrivacyScreen()),
+    GoRoute(
+      path: '/notifications',
+      builder: (context, state) => const NotificationsScreen(),
+    ),
     GoRoute(
       path: '/meeting-preferences',
       builder: (context, state) => const MeetingPreferencesScreen(),

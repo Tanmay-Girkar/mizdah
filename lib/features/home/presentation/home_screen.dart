@@ -136,8 +136,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Widget build(BuildContext context) {
     final navInset = md.MizdahTokens.navBarBottomInset(context);
     return Scaffold(
-      drawer: const MizdahDrawer(),
-      endDrawer: const NotificationsDrawer(),
       backgroundColor: md.MizdahTokens.bg(context),
       // Don't let the keyboard push the whole layout up — only the
       // active scroll region inside `Expanded` should compress.
@@ -254,93 +252,303 @@ class _Header extends ConsumerWidget {
       delay: 0,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 16, 4),
-        child: Row(
-          children: [
-            // (Hamburger removed — drawer remains accessible via the
-            // avatar tap on the right side of the header.)
-            const Spacer(),
-            // Logo + wordmark
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    gradient: _Tokens.heroGradient,
-                    borderRadius: BorderRadius.circular(6),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: Colors.white,
-                    size: 13,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'MIZDAH',
-                  style: TextStyle(
-                    color: md.MizdahTokens.inkOf(context),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 3.5,
-                  ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            // Bell with notification dot
-            _IconTap(
-              onTap: () => Scaffold.of(context).openEndDrawer(),
-              tooltip: 'Notifications',
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Icon(
-                      Icons.notifications_none_rounded,
-                      color: md.MizdahTokens.inkOf(context),
-                      size: 22,
+        // Stack lays the wordmark exactly on the screen-horizontal
+        // centre instead of "the middle of the leftover row space".
+        // Two Spacers can't do that here — the right side has the
+        // bell + avatar (~62 px) while the left has nothing, so the
+        // wordmark drifts a couple of points to the left under the
+        // old Row layout. With Stack + Align.center the icons can
+        // still grow on the right without nudging the logo.
+        child: SizedBox(
+          height: 36,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Logo + wordmark — anchored to the visual centre.
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      gradient: _Tokens.heroGradient,
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              const Color(0xFF6C63FF).withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
-                    if (hasNotifications)
-                      Positioned(
-                        top: 2,
-                        right: 4,
-                        child: Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            gradient: _Tokens.heroGradient,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                                color: md.MizdahTokens.bg(context), width: 1.2),
-                          ),
+                    child: const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: Colors.white,
+                      size: 13,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'MIZDAH',
+                    style: TextStyle(
+                      color: md.MizdahTokens.inkOf(context),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 3.5,
+                    ),
+                  ),
+                ],
+              ),
+              // Action icons — flush right, never pushes the logo.
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Bell with notification dot. Tapping pushes the
+                    // dedicated /notifications screen — the right-side
+                    // drawer was removed, since a full page is what
+                    // most apps use here.
+                    _IconTap(
+                      onTap: () => context.push('/notifications'),
+                      tooltip: 'Notifications',
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Icon(
+                              Icons.notifications_none_rounded,
+                              color: md.MizdahTokens.inkOf(context),
+                              size: 22,
+                            ),
+                            if (hasNotifications)
+                              Positioned(
+                                top: 2,
+                                right: 4,
+                                child: Container(
+                                  width: 7,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    gradient: _Tokens.heroGradient,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: md.MizdahTokens.bg(context),
+                                      width: 1.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
+                    ),
+                    const SizedBox(width: 6),
+                    // Avatar — tap opens the small profile card with
+                    // DP + name + Logout. Wrapped in a `Builder` so the
+                    // `BuildContext` we pass to `_showProfileCard` is
+                    // anchored to the avatar's position (used to draw
+                    // the popover under it).
+                    Builder(
+                      builder: (avatarContext) => GestureDetector(
+                        onTap: () => _showProfileCard(
+                          avatarContext,
+                          ref,
+                          user: user,
+                          initial: initial,
+                        ),
+                        child: _HeaderAvatar(
+                          avatarUrl: user?.avatarUrl,
+                          initial: initial,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(width: 6),
-            // Avatar — user photo if set, else gradient initial.
-            GestureDetector(
-              onTap: () => Scaffold.of(context).openDrawer(),
-              child: _HeaderAvatar(
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Small floating card anchored under the header avatar. Replaces
+  /// the previous full-height left drawer — most apps reserve the
+  /// avatar tap for a compact identity card with a Logout shortcut,
+  /// and the menu items the old drawer carried (Settings, Privacy,
+  /// Meeting layout designs) are reachable from the Settings tab.
+  ///
+  /// Uses `showGeneralDialog` rather than `showMenu` because
+  /// `PopupMenuItem` enforces ListTile-ish sizing that fights the
+  /// avatar-row layout we want.
+  Future<void> _showProfileCard(
+    BuildContext context,
+    WidgetRef ref, {
+    required User? user,
+    required String initial,
+  }) async {
+    // Snapshot the router context BEFORE the dialog opens. The
+    // dialog's own `BuildContext` is detached the instant we pop it,
+    // so using it to `context.go('/login')` after pop would crash.
+    final router = GoRouter.of(context);
+    final mq = MediaQuery.of(context);
+    // Top inset (status bar) + header padding (16) + avatar height
+    // (32) puts the card cleanly under the avatar.
+    final topOffset = mq.padding.top + 16 + 32 + 8;
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'profile-card',
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      transitionDuration: const Duration(milliseconds: 140),
+      pageBuilder: (dialogCtx, anim, secAnim) {
+        return SafeArea(
+          child: Stack(
+            children: [
+              Positioned(
+                top: topOffset,
+                right: 16,
+                child: FadeTransition(
+                  opacity: anim,
+                  child: ScaleTransition(
+                    scale: Tween<double>(begin: 0.96, end: 1).animate(
+                      CurvedAnimation(
+                        parent: anim,
+                        curve: Curves.easeOutCubic,
+                      ),
+                    ),
+                    alignment: Alignment.topRight,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: _ProfileCard(
+                        user: user,
+                        initial: initial,
+                        onLogout: () {
+                          Navigator.of(dialogCtx).pop();
+                          ref.read(authProvider.notifier).logout();
+                          router.go('/login');
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Small dropdown card body: DP + name + email + Logout. Sits inside
+/// the `showGeneralDialog` page builder.
+class _ProfileCard extends StatelessWidget {
+  final User? user;
+  final String initial;
+  final VoidCallback onLogout;
+
+  const _ProfileCard({
+    required this.user,
+    required this.initial,
+    required this.onLogout,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = md.MizdahTokens.inkOf(context);
+    return Container(
+      width: 260,
+      decoration: BoxDecoration(
+        color: md.MizdahTokens.surface(context),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _HeaderAvatar(
                 avatarUrl: user?.avatarUrl,
                 initial: initial,
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user?.name.isNotEmpty == true
+                          ? user!.name
+                          : 'Guest user',
+                      style: TextStyle(
+                        color: ink,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (user?.email.isNotEmpty == true) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        user!.email,
+                        style: TextStyle(
+                          color: ink.withValues(alpha: 0.6),
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Divider(
+            height: 1,
+            color: ink.withValues(alpha: 0.08),
+          ),
+          const SizedBox(height: 4),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: onLogout,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+              child: Row(
+                children: const [
+                  Icon(Icons.logout_rounded,
+                      color: Color(0xFFB42318), size: 18),
+                  SizedBox(width: 10),
+                  Text(
+                    'Logout',
+                    style: TextStyle(
+                      color: Color(0xFFB42318),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -395,55 +603,6 @@ class _HeaderAvatar extends StatelessWidget {
                 errorBuilder: (_, __, ___) => _fallback(context),
               )
             : _fallback(context),
-      ),
-    );
-  }
-}
-
-/// Drawer avatar — same idea as `_HeaderAvatar` but sized for the
-/// drawer header (56×56). The fallback uses a translucent white
-/// circle so it sits on top of the gradient drawer banner.
-class _DrawerAvatar extends StatelessWidget {
-  final String? avatarUrl;
-  final String initial;
-  const _DrawerAvatar({required this.avatarUrl, required this.initial});
-
-  bool get _hasUrl => avatarUrl != null && avatarUrl!.trim().isNotEmpty;
-
-  Widget _fallback() => Container(
-        width: 56,
-        height: 56,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.2),
-          shape: BoxShape.circle,
-        ),
-        child: Text(
-          initial,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 56,
-      height: 56,
-      child: ClipOval(
-        child: _hasUrl
-            ? Image.network(
-                avatarUrl!,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                loadingBuilder: (ctx, child, progress) =>
-                    progress == null ? child : _fallback(),
-                errorBuilder: (_, __, ___) => _fallback(),
-              )
-            : _fallback(),
       ),
     );
   }
@@ -2337,146 +2496,6 @@ class _JoinCodeDialogState extends ConsumerState<JoinCodeDialog> {
                 child: const Text('Join'),
               ),
       ],
-    );
-  }
-}
-
-class NotificationsDrawer extends ConsumerWidget {
-  const NotificationsDrawer({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final notificationsAsync = ref.watch(notificationsProvider);
-
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Notifications',
-                      style: TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.bold)),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  )
-                ],
-              ),
-            ),
-            const Divider(),
-            Expanded(
-              child: notificationsAsync.when(
-                data: (notifications) {
-                  if (notifications.isEmpty) {
-                    return const Center(
-                        child: Text('No new notifications',
-                            style: TextStyle(color: Colors.grey)));
-                  }
-                  return ListView.builder(
-                    itemCount: notifications.length,
-                    itemBuilder: (ctx, i) {
-                      final n = notifications[i];
-                      return ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Color(0xFFEEF2FF),
-                          child: Icon(Icons.notifications,
-                              color: _Tokens.primary, size: 18),
-                        ),
-                        title: Text(n.title,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w600)),
-                        subtitle: Text(n.body,
-                            style: const TextStyle(fontSize: 12)),
-                        trailing: Text(
-                          DateFormat('h:mm a').format(n.createdAt),
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.grey),
-                        ),
-                      );
-                    },
-                  );
-                },
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
-                error: (_, __) =>
-                    const Center(child: Text('Failed to load')),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class MizdahDrawer extends ConsumerWidget {
-  const MizdahDrawer({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(authProvider).user;
-
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(
-              gradient: _Tokens.heroGradient,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                _DrawerAvatar(
-                  avatarUrl: user?.avatarUrl,
-                  initial: (user?.name.isNotEmpty == true)
-                      ? user!.name[0].toUpperCase()
-                      : 'A',
-                ),
-                const SizedBox(height: 12),
-                Text(user?.name ?? 'Guest User',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold)),
-                Text(user?.email ?? '',
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 12)),
-              ],
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.dashboard_customize_outlined),
-            title: const Text('Meeting layout designs'),
-            onTap: () => context.push('/meeting-designs'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings_outlined),
-            title: const Text('Settings'),
-            onTap: () => context.push('/settings'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.privacy_tip_outlined),
-            title: const Text('Privacy'),
-            onTap: () => context.push('/privacy'),
-          ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Logout',
-                style: TextStyle(color: Colors.red)),
-            onTap: () {
-              ref.read(authProvider.notifier).logout();
-              context.go('/login');
-            },
-          ),
-        ],
-      ),
     );
   }
 }
