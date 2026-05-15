@@ -112,6 +112,13 @@ class SFUService {
   final Set<String> _videoConsumerIds = {};
   Timer? _keyframePumpTimer;
 
+  // Active AUDIO consumers, keyed by remoteSocketId. Used by the
+  // meeting notifier's 250ms audio-level poll to feed the voice-
+  // wave indicator per participant. Video consumers don't carry
+  // audio-level stats so they're tracked separately above.
+  // Cleared on consumer close + service dispose.
+  final Map<String, Consumer> _audioConsumersBySocketId = {};
+
   // Track our own active producers so we can replace tracks on
   // mute/unmute and screen-share. Mediasoup-client delivers each
   // producer via `producerCallback` on the send transport — we
@@ -320,6 +327,7 @@ class SFUService {
     _keyframePumpTimer?.cancel();
     _keyframePumpTimer = null;
     _videoConsumerIds.clear();
+    _audioConsumersBySocketId.clear();
     _socket.off('existingProducers', _handleExistingProducers);
     _socket.off('newProducer', _handleNewProducer);
     _socket.off('consumerClosed', _handleConsumerClosed);
@@ -530,6 +538,67 @@ class SFUService {
     await _applyQualityToVideoProducer();
   }
 
+  /// Snapshot every active audio source's normalised level (0..1)
+  /// — once per call, no internal polling. The meeting notifier
+  /// drives the 250ms cadence itself.
+  ///
+  /// Returns `{'<remoteSocketId>': level, …, 'local': level}` with
+  /// every key whose stats were readable. The local mic level is
+  /// pulled from the audio producer's underlying RTCRtpSender;
+  /// each remote peer's level is pulled from the matching audio
+  /// consumer's RTCRtpReceiver.
+  ///
+  /// WebRTC exposes audio-level on the `audioLevel` field of the
+  /// inbound-rtp / media-source reports. Missing reports are
+  /// silently skipped — the caller will decay the previous value
+  /// instead of dropping it to zero.
+  Future<Map<String, double>> pollAudioLevels() async {
+    final out = <String, double>{};
+
+    // Local mic — read from the audio producer's RTCRtpSender.
+    final localSender = _audioProducer?.rtpSender;
+    if (localSender != null) {
+      try {
+        final reports = await localSender.getStats();
+        double best = 0;
+        for (final r in reports) {
+          if (r.type != 'media-source' && r.type != 'outbound-rtp') continue;
+          final v = r.values;
+          final lvl = v['audioLevel'];
+          if (lvl is num && lvl.toDouble() > best) best = lvl.toDouble();
+        }
+        if (best > 0) out['local'] = best.clamp(0.0, 1.0).toDouble();
+      } catch (_) {
+        // getStats can throw on producer teardown — drop the read.
+      }
+    }
+
+    // Each remote peer — read from their audio consumer's
+    // RTCRtpReceiver. The map is keyed by remoteSocketId, which
+    // matches the meeting notifier's audioLevels map key already.
+    for (final entry in _audioConsumersBySocketId.entries) {
+      final receiver = entry.value.rtpReceiver;
+      if (receiver == null) continue;
+      try {
+        final reports = await receiver.getStats();
+        double best = 0;
+        for (final r in reports) {
+          if (r.type != 'inbound-rtp') continue;
+          final v = r.values;
+          final lvl = v['audioLevel'];
+          if (lvl is num && lvl.toDouble() > best) best = lvl.toDouble();
+        }
+        if (best > 0) {
+          out[entry.key] = best.clamp(0.0, 1.0).toDouble();
+        }
+      } catch (_) {
+        // Consumer just closed, getStats threw — skip this tick.
+      }
+    }
+
+    return out;
+  }
+
   void _handleExistingProducers(dynamic data) {
     if (_disposed) return;
     if (data is! Map) return;
@@ -555,6 +624,8 @@ class SFUService {
     if (id == null) return;
     _log('[SFU] consumerClosed: $id');
     _videoConsumerIds.remove(id);
+    // Drop the corresponding audio consumer if this id matched one.
+    _audioConsumersBySocketId.removeWhere((_, c) => c.id == id);
     onRemoteTrackClosed(id);
   }
 
@@ -622,6 +693,14 @@ class SFUService {
 
     final consumer = await completer.future;
     onRemoteTrack(remoteSocketId, consumer.track, appData);
+
+    // Stash audio consumers so the audio-level poll can read their
+    // RTCRtpReceiver stats without walking every peer connection.
+    // Last-write-wins per socketId (a peer reconnecting replaces
+    // their stale consumer). Cleaned up in [removeConsumer].
+    if (consumer.kind == 'audio') {
+      _audioConsumersBySocketId[remoteSocketId] = consumer;
+    }
 
     // The mediasoup convention is to create consumers paused so the
     // first frame isn't dropped while the receiving end attaches. The

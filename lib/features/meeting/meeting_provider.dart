@@ -1837,13 +1837,52 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   Future<void> _pollAudioLevels() async {
     if (_disposed || !mounted) return;
-    if (_peerConnections.isEmpty) return;
 
-    final next = <String, double>{};
     // Track the last good values so a tile that briefly returns no
     // stats doesn't flicker to silent — we decay slowly instead.
     final prev = state.audioLevels;
+    final next = <String, double>{};
 
+    // Two parallel sources: the SFU service (current default —
+    // exposes one snapshot map keyed by remoteSocketId + 'local')
+    // and the legacy mesh peer-connection path (fallback for
+    // meetings that haven't promoted to SFU yet). Either / both
+    // can be active for the same meeting during the bootstrap
+    // window; read whichever is producing stats.
+    Map<String, double> sfuLevels = const {};
+    if (state.isSfuMode && _sfuService != null) {
+      try {
+        sfuLevels = await _sfuService!.pollAudioLevels();
+      } catch (_) {
+        // sfu poll threw — drop this tick.
+      }
+    }
+
+    final hasLegacyConnections = _peerConnections.isNotEmpty;
+    if (!hasLegacyConnections && sfuLevels.isEmpty) {
+      // Nothing to read this tick. Decay any prior levels toward
+      // zero so the wave fades instead of latching at the last
+      // value when everyone falls silent / leaves.
+      if (prev.isEmpty) return;
+      for (final entry in prev.entries) {
+        final decayed = (entry.value * 0.6).clamp(0.0, 1.0);
+        if (decayed > 0.01) next[entry.key] = decayed;
+      }
+      if (mounted && !_disposed) {
+        state = state.copyWith(audioLevels: next);
+      }
+      return;
+    }
+
+    // Apply SFU readings first. Each key is either 'local' or a
+    // remoteSocketId — both map directly to the audioLevels keys
+    // every UI consumer already reads.
+    next.addAll(sfuLevels);
+
+    // Walk the legacy mesh PCs. We do NOT overwrite SFU values
+    // when both paths see the same key — SFU readings are more
+    // accurate because they come from the actual producer/consumer
+    // pipeline, not the generic PC stats.
     for (final entry in _peerConnections.entries) {
       final socketId = entry.key;
       final pc = entry.value;
@@ -1865,21 +1904,25 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
             if (lvl.toDouble() > localLevel) localLevel = lvl.toDouble();
           }
         }
-        if (remoteLevel != null) {
+        if (remoteLevel != null && !next.containsKey(socketId)) {
           next[socketId] = remoteLevel;
-        } else if (prev.containsKey(socketId)) {
-          // Decay toward zero so the wave fades out instead of
-          // popping off when stats momentarily skip a frame.
-          next[socketId] = (prev[socketId]! * 0.6).clamp(0.0, 1.0);
         }
-        if (localLevel != null) {
-          // The local level is the same regardless of which PC we
-          // read it from, so the last write wins — fine.
+        if (localLevel != null && !next.containsKey('local')) {
           next['local'] = localLevel;
         }
       } catch (_) {
-        // getStats can throw on PC teardown — drop the tick.
+        // getStats can throw on PC teardown — drop the read.
       }
+    }
+
+    // Decay any key that didn't get a fresh reading this tick.
+    // Without this, a tile briefly missing stats would pop to
+    // silent (no key in `next` → 0.0 in the UI), creating a
+    // flicker. 0.6 decay over 250ms is a smooth ~400ms fade.
+    for (final entry in prev.entries) {
+      if (next.containsKey(entry.key)) continue;
+      final decayed = (entry.value * 0.6).clamp(0.0, 1.0);
+      if (decayed > 0.01) next[entry.key] = decayed;
     }
 
     if (!mounted || _disposed) return;
