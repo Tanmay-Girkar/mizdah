@@ -2497,6 +2497,19 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     // reason for the disconnect.
     final caller = StackTrace.current.toString().split('\n').skip(1).take(2).join(' | ');
     _log('leaveMeeting ← $caller');
+    // Re-entrancy guard. leaveMeeting() lands on TWO paths during a
+    // normal exit: the End-button → endMeetingForAll, AND
+    // _MeetingRoomScreenState.dispose() teardown a frame later.
+    // The second call is the one that throws
+    // "Tried to modify a provider while the widget tree was
+    // building", because dispose runs inside Flutter's unmount
+    // phase where StateNotifier.state = ... is illegal. Bail before
+    // doing anything that mutates state when we've already torn
+    // down once.
+    if (state.phase == MeetingPhase.ended) {
+      _log('leaveMeeting: already ended, skipping re-entrant teardown');
+      return;
+    }
     _waitingListTimer?.cancel();
     _audioLevelTimer?.cancel();
     _diagTimer?.cancel();

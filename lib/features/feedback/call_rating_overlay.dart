@@ -41,7 +41,15 @@ class _CallRatingOverlayState extends ConsumerState<CallRatingOverlay> {
       final justRequested = (prev?.phase != CallRatingPhase.promptRequested) &&
           next.phase == CallRatingPhase.promptRequested;
       if (justRequested && !_sheetOpen) {
-        _openSheet(next);
+        // Defer to post-frame. ref.listen callbacks fire during
+        // build, and showModalBottomSheet mutates the widget tree
+        // (inserts a route). Calling it synchronously trips
+        // Flutter's "modify provider during build" guard or
+        // similar tree-mutation races — see the dev-log trace
+        // where leaveMeeting() also fires inside the same frame.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _openSheet(next);
+        });
       }
     });
     return widget.child;
