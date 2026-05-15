@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/navigation/app_router.dart';
 import 'call_rating_provider.dart';
 import 'call_rating_sheet.dart';
 
@@ -40,23 +41,38 @@ class _CallRatingOverlayState extends ConsumerState<CallRatingOverlay> {
       final justRequested = (prev?.phase != CallRatingPhase.promptRequested) &&
           next.phase == CallRatingPhase.promptRequested;
       if (justRequested && !_sheetOpen) {
-        _openSheet(context, next);
+        _openSheet(next);
       }
     });
     return widget.child;
   }
 
-  Future<void> _openSheet(BuildContext context, CallRatingState s) async {
+  Future<void> _openSheet(CallRatingState s) async {
     final req = s.request;
     if (req == null) return;
+    // Grab a context that lives BELOW the Navigator. The overlay's
+    // own `context` sits inside MaterialApp.builder which is above
+    // the Navigator GoRouter creates — passing that to
+    // showModalBottomSheet would walk the ancestor chain, find no
+    // Navigator, and silently throw. Using the root navigator's
+    // overlay context gets us a guaranteed-rooted modal target.
+    final navState = rootNavigatorKey.currentState;
+    final sheetCtx = navState?.overlay?.context;
+    if (navState == null || sheetCtx == null) {
+      debugPrint('[rating] overlay → no root navigator yet, skipping');
+      // ignore: discarded_futures
+      ref.read(callRatingProvider.notifier).skip();
+      return;
+    }
     _sheetOpen = true;
     debugPrint('[rating] overlay → opening sheet '
         'callId=${req.callId} kind=${req.kind.wire}');
     try {
       await showModalBottomSheet<void>(
-        context: context,
+        context: sheetCtx,
         isScrollControlled: true,
         useSafeArea: true,
+        useRootNavigator: true,
         // Match the rest of the app — surface-tinted, rounded top.
         backgroundColor: Colors.transparent,
         builder: (_) => CallRatingSheet(request: req),

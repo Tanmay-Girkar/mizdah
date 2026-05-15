@@ -43,7 +43,18 @@ NoTransitionPage<void> _branchPage(GoRouterState state, Widget child) {
   return NoTransitionPage<void>(key: state.pageKey, child: child);
 }
 
+/// Global root-Navigator key. Lives on `GoRouter(navigatorKey: ...)`
+/// so widgets that sit ABOVE the Navigator in the tree — e.g. the
+/// CallRatingOverlay mounted inside `MaterialApp.builder` — can
+/// still grab a context with a Navigator ancestor and call
+/// `showModalBottomSheet` / `showDialog` reliably. Without this,
+/// the modal call silently no-ops because the overlay's own
+/// BuildContext has no Navigator above it.
+final GlobalKey<NavigatorState> rootNavigatorKey =
+    GlobalKey<NavigatorState>();
+
 final appRouter = GoRouter(
+  navigatorKey: rootNavigatorKey,
   initialLocation: '/splash',
   redirect: (context, state) {
     // Basic redirect logic if needed, but usually handled by

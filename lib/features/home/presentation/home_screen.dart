@@ -322,72 +322,65 @@ class _Header extends ConsumerWidget {
                   ),
                 ],
               ),
-              // Action icons — flush right, never pushes the logo.
+              // Avatar — pinned to the LEFT edge. Tap opens the
+              // compact profile card with DP + name + Logout. The
+              // Builder anchors the BuildContext to the avatar's
+              // position so the popover draws right underneath it.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Builder(
+                  builder: (avatarContext) => GestureDetector(
+                    onTap: () => _showProfileCard(
+                      avatarContext,
+                      ref,
+                      user: user,
+                      initial: initial,
+                    ),
+                    child: _HeaderAvatar(
+                      avatarUrl: user?.avatarUrl,
+                      initial: initial,
+                    ),
+                  ),
+                ),
+              ),
+              // Bell with notification dot — flush right. Tapping
+              // pushes the dedicated /notifications screen.
               Align(
                 alignment: Alignment.centerRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Bell with notification dot. Tapping pushes the
-                    // dedicated /notifications screen — the right-side
-                    // drawer was removed, since a full page is what
-                    // most apps use here.
-                    _IconTap(
-                      onTap: () => context.push('/notifications'),
-                      tooltip: 'Notifications',
-                      child: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            Icon(
-                              Icons.notifications_none_rounded,
-                              color: md.MizdahTokens.inkOf(context),
-                              size: 22,
-                            ),
-                            if (hasNotifications)
-                              Positioned(
-                                top: 2,
-                                right: 4,
-                                child: Container(
-                                  width: 7,
-                                  height: 7,
-                                  decoration: BoxDecoration(
-                                    gradient: _Tokens.heroGradient,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: md.MizdahTokens.bg(context),
-                                      width: 1.2,
-                                    ),
-                                  ),
+                child: _IconTap(
+                  onTap: () => context.push('/notifications'),
+                  tooltip: 'Notifications',
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Icon(
+                          Icons.notifications_none_rounded,
+                          color: md.MizdahTokens.inkOf(context),
+                          size: 22,
+                        ),
+                        if (hasNotifications)
+                          Positioned(
+                            top: 2,
+                            right: 4,
+                            child: Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                gradient: _Tokens.heroGradient,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: md.MizdahTokens.bg(context),
+                                  width: 1.2,
                                 ),
                               ),
-                          ],
-                        ),
-                      ),
+                            ),
+                          ),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    // Avatar — tap opens the small profile card with
-                    // DP + name + Logout. Wrapped in a `Builder` so the
-                    // `BuildContext` we pass to `_showProfileCard` is
-                    // anchored to the avatar's position (used to draw
-                    // the popover under it).
-                    Builder(
-                      builder: (avatarContext) => GestureDetector(
-                        onTap: () => _showProfileCard(
-                          avatarContext,
-                          ref,
-                          user: user,
-                          initial: initial,
-                        ),
-                        child: _HeaderAvatar(
-                          avatarUrl: user?.avatarUrl,
-                          initial: initial,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ],
@@ -433,7 +426,10 @@ class _Header extends ConsumerWidget {
             children: [
               Positioned(
                 top: topOffset,
-                right: 16,
+                // Avatar now sits on the LEFT of the header, so the
+                // popover drops down from the left corner. Padding
+                // matches the header's outer 20-px gutter.
+                left: 20,
                 child: FadeTransition(
                   opacity: anim,
                   child: ScaleTransition(
@@ -443,7 +439,7 @@ class _Header extends ConsumerWidget {
                         curve: Curves.easeOutCubic,
                       ),
                     ),
-                    alignment: Alignment.topRight,
+                    alignment: Alignment.topLeft,
                     child: Material(
                       color: Colors.transparent,
                       child: _ProfileCard(
