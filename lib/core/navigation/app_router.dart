@@ -4,6 +4,7 @@ import '../ui/mizdah_design.dart';
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/home/presentation/splash_screen.dart';
 import '../../features/call/presentation/start_call_screen.dart';
+import '../../features/call/presentation/call_history_screen.dart';
 import '../../features/call/presentation/schedule_screen.dart';
 import '../../features/call/presentation/call_hub_screen.dart';
 import '../../features/call/presentation/p2p_call_screen.dart';
@@ -139,6 +140,10 @@ final appRouter = GoRouter(
     // ── Non-tab routes — open above the shell with the default
     //    Material slide so push/pop still feels native. ────────
     GoRoute(path: '/start-call', builder: (context, state) => const StartCallScreen()),
+    GoRoute(
+      path: '/call-history',
+      builder: (context, state) => const CallHistoryScreen(),
+    ),
     GoRoute(path: '/schedule', builder: (context, state) => const ScheduleScreen()),
     GoRoute(path: '/p2p-call', builder: (context, state) => const P2PCallScreen()),
     GoRoute(
