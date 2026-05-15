@@ -256,16 +256,8 @@ class _Header extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(20, 16, 16, 4),
         child: Row(
           children: [
-            // Hamburger
-            _IconTap(
-              onTap: () => Scaffold.of(context).openDrawer(),
-              tooltip: 'Menu',
-              child: Icon(
-                Icons.menu_rounded,
-                color: md.MizdahTokens.inkOf(context),
-                size: 22,
-              ),
-            ),
+            // (Hamburger removed — drawer remains accessible via the
+            // avatar tap on the right side of the header.)
             const Spacer(),
             // Logo + wordmark
             Row(
