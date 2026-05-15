@@ -389,9 +389,16 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
     setState(() => _uploadingAvatar = true);
     try {
       final repo = AuthRepository();
+      // uploaderId workaround: file-service controller does not pull
+      // the uploader from the JWT, so the multipart form has to carry
+      // it explicitly or the POST 500s with a Prisma
+      // "Argument `uploaderId` is missing." error. See
+      // docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md.
+      final me = ref.read(authProvider).user;
       final url = await repo.uploadFile(
         filePath: file.path!,
         fileName: file.name,
+        uploaderId: me?.id,
       );
       await ref
           .read(authProvider.notifier)
@@ -424,7 +431,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
           behavior: SnackBarBehavior.floating,
           backgroundColor: const Color(0xFFB42318),
           content: Text(
-            'Could not upload photo: $e',
+            _mapUploadError(e),
             style: const TextStyle(color: Colors.white),
           ),
           duration: const Duration(seconds: 4),
@@ -433,6 +440,30 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
     }
+  }
+
+  /// Compress DioException + arbitrary errors into one short line the
+  /// user can act on, instead of dumping the entire stack into a
+  /// snackbar. Keeps the original `toString()` available in logcat
+  /// for debugging via the underlying `debugPrint` from Dio's
+  /// LogInterceptor.
+  String _mapUploadError(Object e) {
+    final s = e.toString();
+    if (s.contains('uploaderId')) {
+      return 'Server rejected the upload. Update the app or try again.';
+    }
+    if (s.contains('413') || s.contains('PayloadTooLarge')) {
+      return 'Photo is too large. Pick a smaller image.';
+    }
+    if (s.contains('timeout') ||
+        s.contains('SocketException') ||
+        s.contains('Connection') ||
+        s.contains('XMLHttpRequest')) {
+      return 'Network problem. Check your connection and retry.';
+    }
+    if (s.contains('401')) return 'Session expired. Sign in again.';
+    if (s.contains('500')) return 'Server error. Please try again.';
+    return 'Could not upload photo. Please try again.';
   }
 
   /// Modal sheet: prompt for current + new + confirm password,

@@ -138,12 +138,23 @@ class AuthRepository {
   ///
   /// Documented at `MOBILE_API_DOCS.md` §8.1 (`POST /api/files/upload`,
   /// multipart/form-data, field name `file`).
+  ///
+  /// Backend workaround: file-service `fileController.js` calls
+  /// `prisma.fileMetadata.create({ data: { uploaderId, ... } })` but
+  /// does NOT extract `uploaderId` from the JWT — so the request
+  /// 500s with `Argument \`uploaderId\` is missing.` unless we send
+  /// it explicitly as a form field. See
+  /// `docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md` for the fix the
+  /// backend should land so this param can go away.
   Future<String> uploadFile({
     required String filePath,
     String? fileName,
+    String? uploaderId,
   }) async {
     final form = FormData.fromMap({
       'file': await MultipartFile.fromFile(filePath, filename: fileName),
+      if (uploaderId != null && uploaderId.isNotEmpty)
+        'uploaderId': uploaderId,
     });
     final response = await _apiClient.postMultipart(
       ApiConfig.fileUpload,
