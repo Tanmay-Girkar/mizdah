@@ -39,24 +39,29 @@ Same as the other backend docs in this folder:
 | `POST /api/meeting/:id/invite-in-call` | new REST route | NEW |
 | `POST /api/p2p-call/:callId/promote-to-meeting` | new REST route | NEW |
 | `PATCH /api/meeting/:id/permissions` | new REST route | NEW |
+| `PATCH /api/meeting/:id/participants/:userId/permissions` | new REST route | NEW |
 | `meetings.permissions` JSONB column (DDL migration) | schema | NEW |
+| `meeting_participants.can_invite` BOOLEAN column (DDL migration) | schema | NEW |
 | Socket event `meeting:in-call-invite` on `/signaling-fresh` | signaling-service | NEW |
 | Socket event `p2p:promoted` on `/signaling-fresh` | signaling-service | NEW |
 | Socket event `meeting:permissions-changed` on `/signaling-fresh` | signaling-service | NEW |
+| Socket event `meeting:participant-permissions-changed` on `/signaling-fresh` | signaling-service | NEW |
 | FCM data-message `kind: "in_call_invite"` | shared push util | NEW |
 | Notifications row `type: "in_call_invite"` | uses existing inbox table | NEW |
 | Authorization helper `isParticipantOf(userId, meetingId)` | shared util | NEW |
 | Authorization helper `isHostOf(userId, meetingId)` | shared util | NEW |
+| Authorization helper `hasInvitePermission(userId, meetingId)` | shared util | NEW |
+| Reset `can_invite=false` whenever participant row goes inactive | trigger / app-level | NEW |
+| Include `canInvite` in `participants-list` / `user-joined` payloads | signaling-service | NEW |
 | Rate limit: max 5 invites/minute per inviter per meeting | middleware | NEW |
 
 No changes to any existing endpoint. Additive only.
 
-Estimated effort: **10–14 hours** for the three endpoints, three
-socket events, FCM pairing, the new permissions column + migration,
-and authorization checks. Most of the cost is the P2P promotion
-plumbing — meeting invite-in-call is a thin wrapper over what the
-scheduler invite-fan-out already does, and the permissions
-endpoint is mostly a DB column + auth check.
+Estimated effort: **12–16 hours** for four endpoints, four socket
+events, FCM pairing, two new schema columns + migrations, the
+auth helper consolidation, and the rejoin-resets-grant rule.
+Most of the cost is still the P2P promotion plumbing — the
+permission endpoints are mostly column updates + emit fan-out.
 
 ---
 
@@ -297,6 +302,191 @@ async function isHostOf(userId, meetingId) {
 
 Used by `PATCH /permissions` and also by the host-only branch of
 the `invite-in-call` authorization check (§2.Authorization).
+
+---
+
+## 2c. Per-participant invite grants (additive on top of §2a)
+
+The global `allowParticipantsToInvite` toggle is binary — everyone
+or no one. Real meetings sometimes need a third state: **everyone
+denied EXCEPT this one person**. The host might be the only one
+sending invites in a 10-person all-hands, but they want their
+co-facilitator to be able to add a late-joiner too.
+
+This section adds a per-participant grant that **stacks on top** of
+the global toggle. The auth gate for `invite-in-call` becomes:
+
+```
+caller is allowed to invite if ANY of:
+  • caller is the host
+  • meetings.permissions.allowParticipantsToInvite == true
+  • meeting_participants[caller].can_invite == true
+```
+
+The mobile UI only surfaces the per-participant grant when the
+global toggle is **OFF** (no reason to clutter rows with switches
+when everyone can already invite anyway).
+
+### Schema migration
+
+```sql
+ALTER TABLE meeting_participants
+  ADD COLUMN can_invite BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Index helps the invite-in-call hot path: "is THIS user allowed
+-- to invite RIGHT NOW?" looks up one row.
+CREATE INDEX idx_meeting_participants_can_invite
+  ON meeting_participants (meeting_id, user_id, can_invite)
+  WHERE is_active = TRUE;
+```
+
+Prisma:
+
+```prisma
+model MeetingParticipant {
+  // ... existing fields ...
+  canInvite Boolean @default(false) @map("can_invite")
+
+  @@index([meetingId, userId, canInvite])
+}
+```
+
+### Reset-on-rejoin rule (REQUIRED)
+
+When a participant row goes inactive (the user leaves, host kicked,
+network drop after timeout, …) the server **MUST** clear
+`can_invite` back to FALSE. Two equivalent implementations:
+
+- **App-level** (recommended): wherever you set `is_active = false`,
+  also `can_invite = false` in the same UPDATE.
+- **Trigger-level**: Postgres trigger on `meeting_participants`
+  update that mirrors the flip.
+
+This matches the Zoom/Meet "co-host" lifecycle and avoids stale
+grants on someone who joined for 10 seconds two weeks ago.
+
+Mobile side does NOT remember the grant locally — every time a
+participant rejoins, the participants-list payload from the server
+is the source of truth.
+
+---
+
+## 2d. `PATCH /api/meeting/:id/participants/:userId/permissions`
+
+Host-only — flip a single non-host participant's invite grant.
+
+### Authorization
+
+- Caller must be the host (`isHostOf`).
+- Admin role bypass: yes.
+- Returns `403 FORBIDDEN_NOT_HOST` otherwise.
+- Returns `404 PARTICIPANT_NOT_FOUND` if `:userId` isn't a current
+  active participant of `:id`.
+- Returns `400 CANNOT_GRANT_HOST_SELF` if `:userId == meetings.host_id`
+  (host already has infinite invite power; setting can_invite on the
+  host row would be a no-op that confuses the audit log).
+
+### Request body
+
+```json
+{
+  "canInvite": true
+}
+```
+
+### Response (200)
+
+```json
+{
+  "ok": true,
+  "userId": "uuid",
+  "canInvite": true
+}
+```
+
+### What the backend does on success
+
+1. Update `meeting_participants.can_invite` for the (meeting,
+   userId) row.
+2. Emit `meeting:participant-permissions-changed` on the meeting
+   room socket so every other client updates the granted-user's
+   row in their participants panel and recomputes their own
+   `+ Add` button visibility:
+
+   ```json
+   {
+     "kind": "meeting:participant-permissions-changed",
+     "meetingId": "uuid",
+     "userId": "uuid",
+     "canInvite": true,
+     "changedByUserId": "uuid"
+   }
+   ```
+
+3. Also include `canInvite` in the live participants-list payload
+   that `user-joined` / `participants-update` events carry. Mobile
+   clients keep their local list in sync, so a late-joiner with
+   a grant already in place sees their `+ Add` button on first
+   render.
+
+### Race-condition note
+
+Same model as the global toggle (§2b): the server reads
+`can_invite` at request-processing time, so if the host revokes
+a grant 50 ms after a participant tapped `+ Add`, the invite
+endpoint sees the revoked state and returns
+`403 INVITE_NOT_ALLOWED_BY_HOST`. Last-write-wins.
+
+---
+
+## 2e. Updated `invite-in-call` auth gate
+
+Replace §2.Authorization with the three-way OR:
+
+```
+1. Participation gate (unchanged):
+   - caller MUST be active in meeting_participants for :id.
+   - 403 FORBIDDEN_NOT_PARTICIPANT otherwise.
+
+2. Invite-permission gate (updated):
+   - allowed if ANY of:
+     a) caller is the host (host_id == caller.id), OR
+     b) meetings.permissions.allowParticipantsToInvite == true, OR
+     c) meeting_participants[caller].can_invite == true
+   - 403 INVITE_NOT_ALLOWED_BY_HOST otherwise.
+```
+
+The error code stays `INVITE_NOT_ALLOWED_BY_HOST` whether the
+caller lacks the global flag OR the per-user grant — from the
+caller's perspective both are "host hasn't given me permission".
+
+### Authorization helper additions
+
+```js
+// services/auth-checks.js
+async function hasInvitePermission(userId, meetingId) {
+  // Single round-trip — pull the meeting + participant rows together.
+  const result = await prisma.meeting.findUnique({
+    where: { id: meetingId },
+    select: {
+      host_id: true,
+      permissions: true,
+      participants: {
+        where: { user_id: userId, is_active: true },
+        select: { can_invite: true },
+        take: 1,
+      },
+    },
+  });
+  if (!result) return false;
+  if (result.host_id === userId) return true;
+  if (result.permissions?.allowParticipantsToInvite === true) return true;
+  return result.participants[0]?.can_invite === true;
+}
+```
+
+Use this from the `invite-in-call` handler instead of the two
+existing checks — cleaner and one DB hit instead of two.
 
 ---
 
@@ -656,42 +846,117 @@ curl -k -s -X PATCH \
   -H 'Content-Type: application/json' \
   -d '{"allowParticipantsToInvite": true}' | jq
 # then re-run step 2 — expected: 200
+
+# ── Per-participant invite grant (§2c / §2d) ──────────────────
+# Test the additive grant — global toggle stays OFF, host grants
+# just one participant.
+
+# 6. Host turns global OFF.
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d '{"allowParticipantsToInvite": false}' | jq
+
+# 7. Guest tries to invite — blocked (control case).
+curl -k -s -X POST \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/invite-in-call" \
+  -H "Authorization: Bearer $TOKEN_GUEST" \
+  -H 'Content-Type: application/json' \
+  -d "{\"inviteeUserId\":\"$INVITEE_ID\"}" | jq
+# Expected: 403 INVITE_NOT_ALLOWED_BY_HOST
+
+# 8. Host grants invite permission to the guest.
+GUEST_USER_ID="<test2-user-id>"
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/participants/$GUEST_USER_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d '{"canInvite": true}' | jq
+# Expected: 200 { "ok": true, "userId": "...", "canInvite": true }
+# Also expected: meeting:participant-permissions-changed fans to
+#                every other participant in the room.
+
+# 9. Guest retries — now succeeds.
+curl -k -s -X POST \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/invite-in-call" \
+  -H "Authorization: Bearer $TOKEN_GUEST" \
+  -H 'Content-Type: application/json' \
+  -d "{\"inviteeUserId\":\"$INVITEE_ID\"}" | jq
+# Expected: 200
+
+# 10. Non-host tries to grant someone — must be denied.
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/participants/$INVITEE_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_GUEST" \
+  -H 'Content-Type: application/json' \
+  -d '{"canInvite": true}' | jq
+# Expected: 403 FORBIDDEN_NOT_HOST
+
+# 11. Host can't grant themselves.
+HOST_USER_ID="<test1-user-id>"
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/participants/$HOST_USER_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d '{"canInvite": true}' | jq
+# Expected: 400 CANNOT_GRANT_HOST_SELF
+
+# 12. Reset-on-rejoin — guest leaves the meeting, then rejoins.
+#     After rejoin, the guest's row MUST come back with
+#     can_invite=false. Easiest check: scope from the
+#     participants-list payload after rejoin, OR call invite-in-call
+#     from the rejoined guest and expect 403 again.
 ```
 
 ---
 
 ## 11. Migration order (one PR, in this order)
 
-1. **Schema migration:** add `meetings.permissions` JSONB column
-   with the documented default + backfill (see §2a).
-2. Update every read path (`GET /api/meeting/:code`,
+1. **Schema migration A:** add `meetings.permissions` JSONB
+   column with the documented default + backfill (see §2a).
+2. **Schema migration B:** add `meeting_participants.can_invite`
+   BOOLEAN column with default false + index (see §2c).
+3. Wire the reset-on-rejoin rule — whenever
+   `meeting_participants.is_active` flips to false, the same
+   UPDATE clears `can_invite` to false (see §2c).
+4. Update every meeting read path (`GET /api/meeting/:code`,
    `GET /api/meetings/user/:userId`, etc.) to include the
-   `permissions` blob in the response.
-3. Add `in_call_invite` to the notification type dictionary
+   `permissions` blob.
+5. Update every participants-list path (`participants-update`
+   socket fan-out, `user-joined` event, `GET /participants`
+   if exposed) to include `canInvite` per row.
+6. Add `in_call_invite` to the notification type dictionary
    (both server + client docs).
-4. Land `isParticipantOf` / `isHostOf` / `isPeerOnP2PCall`
-   helpers + unit tests.
-5. Land `PATCH /api/meeting/:id/permissions` + host-only auth +
-   tests.
-6. Wire `meeting:permissions-changed` socket event emission.
-7. Land `POST /api/meeting/:id/invite-in-call` + dual auth gate
-   (participation + host-permission) + rate limit + tests.
-8. Wire FCM `kind: "in_call_invite"` push pairing on
-   invite-in-call (reuse the helper from
-   `docs/NOTIFICATIONS_BACKEND.md` §6).
-9. Wire `meeting:in-call-invite` socket event emission.
-10. Land `POST /api/p2p-call/:callId/promote-to-meeting`.
-11. Wire `p2p:promoted` socket event emission to both peers.
-12. Add the 30-second auto-expire timer for unanswered invites.
-13. Update `docs/NOTIFICATIONS_BACKEND.md` §3 with the new
+7. Land `isParticipantOf` / `isHostOf` / `isPeerOnP2PCall` /
+   `hasInvitePermission` helpers + unit tests.
+8. Land `PATCH /api/meeting/:id/permissions` (global toggle) +
+   host-only auth + tests.
+9. Wire `meeting:permissions-changed` socket event emission.
+10. Land `PATCH /api/meeting/:id/participants/:userId/permissions`
+    (per-user grant) + host-only auth + `CANNOT_GRANT_HOST_SELF`
+    + tests.
+11. Wire `meeting:participant-permissions-changed` socket emission.
+12. Land `POST /api/meeting/:id/invite-in-call` with the three-way
+    auth gate (host OR global OR per-user) + rate limit + tests.
+13. Wire FCM `kind: "in_call_invite"` push pairing on
+    invite-in-call (reuse the helper from
+    `docs/NOTIFICATIONS_BACKEND.md` §6).
+14. Wire `meeting:in-call-invite` socket event emission.
+15. Land `POST /api/p2p-call/:callId/promote-to-meeting`.
+16. Wire `p2p:promoted` socket event emission to both peers.
+17. Add the 30-second auto-expire timer for unanswered invites.
+18. Update `docs/NOTIFICATIONS_BACKEND.md` §3 with the new
     `in_call_invite` type row (one-line edit).
 
 **Independent slices:**
-- Stages 1–6 alone ship the host-controls toggle (no `+ Add`
-  button yet, but the permission flips are sync'd to every
-  client). Useful for early QA.
-- Stage 7 alone unblocks the meeting `+ Add` button on mobile.
-- Stages 10–11 unblock the P2P `+ Add` path.
+- Stages 1–9 alone ship the host-controls global toggle (no
+  `+ Add` button yet, but global permission flips are sync'd
+  to every client). Useful for early QA.
+- Stages 10–11 add the per-user grant on top of the global.
+- Stage 12 alone unblocks the meeting `+ Add` button on mobile
+  with the FULL three-way auth (global + per-user + host).
+- Stages 15–16 unblock the P2P `+ Add` path.
 
 Each slice can ship in its own deploy if you want to space them
 out — mobile gracefully degrades when an endpoint hasn't landed
