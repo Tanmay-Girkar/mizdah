@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../core/services/google_calendar_service.dart';
 import '../../../core/ui/mizdah_design.dart' as md;
+import '../../../core/utils/media_url.dart';
 import '../../../core/utils/meeting_utils.dart';
 import '../../../core/widgets/mizdah_button.dart';
 import '../../../data/models/models.dart';
@@ -615,7 +616,9 @@ class _HeaderAvatar extends StatelessWidget {
       child: ClipOval(
         child: _hasUrl
             ? Image.network(
-                avatarUrl!,
+                // Resolve `/api/file/uploads/...` (relative in dev)
+                // against the gateway base — see media_url.dart.
+                resolveMediaUrl(avatarUrl) ?? avatarUrl!,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 loadingBuilder: (ctx, child, progress) =>

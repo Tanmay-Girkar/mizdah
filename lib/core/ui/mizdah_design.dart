@@ -13,6 +13,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../utils/media_url.dart';
 
 class MizdahTokens {
   // ── Brand accents — identical in both modes ─────────────────────
@@ -1261,6 +1262,11 @@ class MizdahAvatar extends StatelessWidget {
     );
 
     if (!_hasUrl) return fallback;
+    // Resolve against the gateway base URL — the file-service in dev
+    // returns `/api/file/uploads/<filename>` which Image.network can't
+    // fetch as-is. See lib/core/utils/media_url.dart for the rules.
+    final resolved = resolveMediaUrl(avatarUrl);
+    if (resolved == null) return fallback;
     // Render the network avatar; `errorBuilder` ensures the initials
     // still appear if the image 404s or the network is offline.
     return ClipOval(
@@ -1268,7 +1274,7 @@ class MizdahAvatar extends StatelessWidget {
         width: size,
         height: size,
         child: Image.network(
-          avatarUrl!,
+          resolved,
           fit: BoxFit.cover,
           gaplessPlayback: true,
           loadingBuilder: (ctx, child, progress) {

@@ -24,6 +24,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/services/storage_service.dart';
 import '../../../core/ui/mizdah_design.dart';
+import '../../../core/utils/media_url.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../../auth/auth_provider.dart';
 
@@ -631,7 +632,10 @@ class _AvatarEditor extends StatelessWidget {
             child: ClipOval(
               child: _hasUrl
                   ? Image.network(
-                      avatarUrl!,
+                      // Backend returns a relative `/api/file/uploads/...`
+                      // path in dev — resolve it against the gateway
+                      // base URL so the image actually loads.
+                      resolveMediaUrl(avatarUrl) ?? avatarUrl!,
                       fit: BoxFit.cover,
                       gaplessPlayback: true,
                       loadingBuilder: (ctx, child, progress) {
