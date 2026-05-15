@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+import '../../../core/services/renderer_manager.dart';
 import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
 import '../../settings/privacy_preferences_provider.dart';
@@ -172,6 +174,13 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
     // off. Best-effort; falls back silently if PiP unsupported.
     if (state == AppLifecycleState.inactive) {
       PipController.instance.enter();
+    }
+    // On resume, nudge every live renderer's srcObject so any
+    // SurfaceView that was destroyed during screen-off rebinds and
+    // repaints. Cheap (same MediaStream reference, no allocation);
+    // covers the "frozen last frame after screen off/on" path.
+    if (state == AppLifecycleState.resumed) {
+      RendererManager.instance.rebindAll();
     }
   }
 
@@ -1414,13 +1423,43 @@ class _RemoteParticipantTile extends ConsumerWidget {
     // Wrap in the speaking glow only when we have a socketId+meetingId
     // to look up the level from. Local presenting placeholders and
     // mock tiles have neither, so they get the bare body unchanged.
-    if (data.socketId == null || data.meetingId == null) {
-      return tileBody;
-    }
-    return _SpeakingGlow(
-      meetingId: data.meetingId!,
-      socketId: data.socketId!,
-      child: tileBody,
+    final inGlow = (data.socketId == null || data.meetingId == null)
+        ? tileBody
+        : _SpeakingGlow(
+            meetingId: data.meetingId!,
+            socketId: data.socketId!,
+            child: tileBody,
+          );
+    // Visibility-based decode pausing: when the tile scrolls off
+    // the viewport in a paginated grid, flip the underlying video
+    // track's `enabled` flag to false. The native WebRTC decoder
+    // stops producing frames; the SurfaceView idles instead of
+    // continuing to pump unreleased buffers (which is what was
+    // spamming `BLASTBufferQueue`). Re-enables the moment the
+    // tile becomes visible again. Setting `track.enabled` is
+    // idempotent on flutter_webrtc, so the callback running on
+    // every visibility delta is fine without extra debouncing.
+    //
+    // Note: this only affects the LOCAL decoder; the SFU still
+    // sends frames over the wire. Pausing the consumer at the
+    // mediasoup layer for true bandwidth savings is a Tier 2
+    // change — out of scope here.
+    final visibilityKey = data.socketId ??
+        'remote-tile-${data.name}-${identityHashCode(this)}';
+    return VisibilityDetector(
+      key: Key('vis-$visibilityKey'),
+      onVisibilityChanged: (info) {
+        final tracks =
+            data.renderer?.srcObject?.getVideoTracks() ?? const [];
+        if (tracks.isEmpty) return;
+        final shouldEnable = info.visibleFraction > 0.05;
+        for (final t in tracks) {
+          if (t.enabled != shouldEnable) {
+            t.enabled = shouldEnable;
+          }
+        }
+      },
+      child: inGlow,
     );
   }
 }
@@ -4603,6 +4642,10 @@ class _PipLayout extends StatelessWidget {
             RepaintBoundary(
               child: RTCVideoView(
                 renderer,
+                // ValueKey(renderer) keeps the PlatformView identity
+                // stable across rebuilds so the SurfaceView isn't
+                // destroyed/recreated on every parent refresh.
+                key: ValueKey(renderer),
                 mirror: mirror,
                 objectFit:
                     RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,

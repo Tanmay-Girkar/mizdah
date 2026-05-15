@@ -108,6 +108,12 @@ dependencies:
   # `just_audio` for simpler asset-source playback and the
   # ReleaseMode.loop API which matches the 3–6s loop pattern.
   audioplayers: ^6.1.0
+  # Per-tile viewport-visibility detection so off-screen video tiles
+  # in the meeting grid can pause their decoder via `track.enabled
+  # = false`. Standard "render what you can see" optimisation that
+  # every video-conferencing app applies — frees both CPU (decode
+  # pipeline) and GPU (paint) for the visible tiles. ~6 KB.
+  visibility_detector: ^0.4.0+2
 
 dev_dependencies:
   flutter_test:

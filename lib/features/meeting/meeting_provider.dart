@@ -2509,9 +2509,21 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _peerConnections.clear();
     _pendingIce.clear();
     _remoteStreams.clear();
+    // Dispose every per-participant remote video renderer. Each
+    // gets srcObject cleared before dispose() to avoid the JNI race
+    // where a late frame callback fires after dispose with the
+    // stream still attached (Android crash path).
     for (final r in state.remoteRenderers.values) {
-      r.srcObject = null;
-      r.dispose();
+      try { r.srcObject = null; } catch (_) {}
+      try { r.dispose(); } catch (_) {}
+    }
+    // Same for screen-share renderers. These used to leak — they
+    // were stored in state.remoteScreenRenderers but never disposed,
+    // which is one of the renderer leaks that surfaces as
+    // BLASTBufferQueue spam after a meeting ends.
+    for (final r in state.remoteScreenRenderers.values) {
+      try { r.srcObject = null; } catch (_) {}
+      try { r.dispose(); } catch (_) {}
     }
     // Don't touch the local camera here — the LocalMediaService owns
     // it. Schedule a delayed shutdown so the next screen (re-create

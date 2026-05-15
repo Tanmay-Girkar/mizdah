@@ -27,6 +27,7 @@ import 'dart:async';
 
 import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
+import '../../core/services/renderer_manager.dart';
 import '../../core/services/ringtone_service.dart';
 import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
@@ -413,17 +414,24 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       }
     };
 
-    _service.onCallDeclined = (callId) {
+    _service.onCallDeclined = (callId) async {
       // Caller side: my outgoing call was rejected by the peer.
       _stopRingtoneSilently();
       _cancelLifecycleTimers();
       _appendLog(CallOutcome.declined, overrideCallId: callId);
       // ignore: discarded_futures
       _stopFgService();
+      // Renderer leak fix: if the WebRTC handshake had started and
+      // `onLocalStream` already fired, `state.localRenderer` exists.
+      // Without this disposal the renderer outlives the call and
+      // BLASTBufferQueue spams "Can't acquire next buffer" lines.
+      await _disposeRenderers();
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'Call declined',
         minimized: false,
+        clearRenderers: true,
+        mediaConnected: false,
       );
       _scheduleResetToIdle();
     };
@@ -496,17 +504,21 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
           );
     };
 
-    _service.onCalleeOffline = (callId) {
+    _service.onCalleeOffline = (callId) async {
       // Caller side: peer was offline / unreachable.
       _stopRingtoneSilently();
       _cancelLifecycleTimers();
       _appendLog(CallOutcome.missed, overrideCallId: callId);
       // ignore: discarded_futures
       _stopFgService();
+      // Same renderer-leak fix as `onCallDeclined`.
+      await _disposeRenderers();
       state = state.copyWith(
         phase: P2PCallPhase.failed,
         failureMessage: 'User unavailable',
         minimized: false,
+        clearRenderers: true,
+        mediaConnected: false,
       );
       _scheduleResetToIdle();
     };
@@ -524,8 +536,14 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       // level (see _LocalPip in p2p_call_screen.dart), not on the
       // renderer — flutter_webrtc doesn't expose a mirror property
       // on the renderer itself.
-      final r = state.localRenderer ?? RTCVideoRenderer();
-      if (state.localRenderer == null) await r.initialize();
+      //
+      // Route through RendererManager so disposal is keyed and the
+      // leak-dump diagnostic can spot a P2P renderer that outlived
+      // its call. `acquire` is idempotent — same key returns the
+      // same instance, so this is safe to call on every
+      // onLocalStream (which can fire twice during accept).
+      final r =
+          await RendererManager.instance.acquire(_kP2PLocalRendererKey);
       r.srcObject = stream;
       state = state.copyWith(localRenderer: r);
       debugPrint('[P2P] localStreamInitialized renderer=ready '
@@ -544,9 +562,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     };
 
     _service.onRemoteStream = (stream) async {
-      final r = state.remoteRenderer ?? RTCVideoRenderer();
-      final isNew = state.remoteRenderer == null;
-      if (isNew) await r.initialize();
+      final r =
+          await RendererManager.instance.acquire(_kP2PRemoteRendererKey);
       r.srcObject = stream;
       // We DELIBERATELY do NOT trust `RTCVideoRenderer.value.renderVideo`
       // for the camera-off swap. flutter_webrtc keeps that flag `true`
@@ -769,12 +786,20 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     _cancelLifecycleTimers();
     _service.cancelCall();
     await _stopFgService();
+    // Defensive: usually no renderers exist yet at cancel time
+    // (handshake hasn't reached onLocalStream / onRemoteStream),
+    // but if the user managed to tap Cancel after the first frame,
+    // the renderer is alive. The release calls are idempotent so
+    // this is safe in both cases.
+    await _disposeRenderers();
     _appendLog(CallOutcome.cancelled, overrideCallId: state.callId);
     state = state.copyWith(
       phase: P2PCallPhase.idle,
       clearCallId: true,
       clearRemote: true,
       clearFailure: true,
+      clearRenderers: true,
+      mediaConnected: false,
       minimized: false,
     );
   }
@@ -998,14 +1023,10 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   Future<void> stopIncomingPreview() async {
     debugPrint('[P2P] stopIncomingPreview previewState=${state.previewState}');
     await _service.stopLocalPreview();
-    // Dispose the renderer if we own it (no PC alive).
-    final r = state.localRenderer;
-    if (r != null) {
-      try {
-        r.srcObject = null;
-        await r.dispose();
-      } catch (_) {}
-    }
+    // Renderer routed through the manager so the same key can be
+    // re-acquired by the next call without churning a fresh
+    // native handle.
+    await RendererManager.instance.release(_kP2PLocalRendererKey);
     state = state.copyWith(
       previewState: P2PPreviewState.idle,
       clearLocalRenderer: true,
@@ -1101,21 +1122,19 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     await OngoingCallForegroundService.instance.stop();
   }
 
+  /// Centralised renderer-key constants for this provider. Keeping
+  /// them as private statics (not local literals at each call site)
+  /// means a future rename or a switch to a per-call-instance key
+  /// touches one line, not five.
+  static const String _kP2PLocalRendererKey = 'p2p-local';
+  static const String _kP2PRemoteRendererKey = 'p2p-remote';
+
+  /// Tear down both P2P renderers via the manager. Idempotent and
+  /// safe to call from any code path (decline, offline, cancel,
+  /// end, dispose, network drop).
   Future<void> _disposeRenderers() async {
-    final l = state.localRenderer;
-    final r = state.remoteRenderer;
-    if (l != null) {
-      try {
-        l.srcObject = null;
-        await l.dispose();
-      } catch (_) {}
-    }
-    if (r != null) {
-      try {
-        r.srcObject = null;
-        await r.dispose();
-      } catch (_) {}
-    }
+    await RendererManager.instance.release(_kP2PLocalRendererKey);
+    await RendererManager.instance.release(_kP2PRemoteRendererKey);
   }
 
   void _scheduleResetToIdle() {
@@ -1124,6 +1143,23 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       if (state.phase == P2PCallPhase.failed ||
           state.phase == P2PCallPhase.ended) {
         state = const P2PCallState();
+        // Leak detector: by the time we're back to idle, every
+        // renderer this provider created must have been released.
+        // Anything still present in the manager is a leak — log it
+        // loudly in debug so the field log makes the cause grepable.
+        // Production builds short-circuit dump() inside the manager.
+        if (kDebugMode) {
+          final stillAlive = RendererManager.instance.keys
+              .where((k) =>
+                  k == _kP2PLocalRendererKey ||
+                  k == _kP2PRemoteRendererKey)
+              .toList();
+          if (stillAlive.isNotEmpty) {
+            debugPrint('[P2P] LEAK after reset-to-idle: $stillAlive '
+                '(should be empty)');
+            RendererManager.instance.dump();
+          }
+        }
       }
     });
   }

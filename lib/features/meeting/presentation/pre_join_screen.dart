@@ -354,8 +354,12 @@ class _CameraPreview extends StatelessWidget {
                 )
               else
                 RepaintBoundary(
+                  // ValueKey(renderer) keeps the PlatformView's
+                  // identity stable across rebuilds — see the
+                  // shared explanation in p2p_mini_call_overlay.dart.
                   child: RTCVideoView(
                     renderer,
+                    key: ValueKey(renderer),
                     objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                     mirror: true,
                   ),

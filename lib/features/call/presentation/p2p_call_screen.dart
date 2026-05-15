@@ -320,9 +320,18 @@ class _RemoteVideoBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RTCVideoView(
-      renderer,
-      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    // Full-screen remote video as the call's background. The
+    // RepaintBoundary isolates it from the controls dock and the
+    // local PIP overlaid on top — any rebuild of those layers
+    // (mute toggles, drag of the PIP) no longer triggers a repaint
+    // of this huge full-screen layer. ValueKey(renderer) keeps the
+    // underlying SurfaceView's identity stable across rebuilds.
+    return RepaintBoundary(
+      child: RTCVideoView(
+        renderer,
+        key: ValueKey(renderer),
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      ),
     );
   }
 }
@@ -885,17 +894,23 @@ class _DraggableLocalPipState extends ConsumerState<_DraggableLocalPip>
             ),
             // AnimatedSwitcher = soft 220ms cross-fade between the
             // live RTCVideoView and the placeholder; no flicker.
+            // RepaintBoundary keeps this draggable PIP's paint
+            // isolated from the surrounding call chrome — drag
+            // gestures stop invalidating the full-screen remote
+            // video below.
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 220),
               switchInCurve: Curves.easeOut,
               switchOutCurve: Curves.easeIn,
               child: showVideo
-                  ? RTCVideoView(
-                      renderer,
-                      key: const ValueKey('local-video'),
-                      mirror: true,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ? RepaintBoundary(
+                      key: ValueKey(renderer),
+                      child: RTCVideoView(
+                        renderer,
+                        mirror: true,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
                     )
                   : const _LocalCameraOffTile(
                       key: ValueKey('local-camoff'),

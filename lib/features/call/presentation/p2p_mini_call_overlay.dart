@@ -27,6 +27,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../../core/navigation/app_router.dart';
+import '../../../core/services/renderer_manager.dart';
 import '../../../core/ui/mizdah_design.dart';
 import '../p2p_call_provider.dart';
 
@@ -40,7 +41,7 @@ class P2PMiniCallOverlay extends ConsumerStatefulWidget {
 }
 
 class _P2PMiniCallOverlayState extends ConsumerState<P2PMiniCallOverlay>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _fade;
 
   // Tile dimensions — matches the call screen's local PIP for
@@ -62,12 +63,30 @@ class _P2PMiniCallOverlayState extends ConsumerState<P2PMiniCallOverlay>
       vsync: this,
       duration: const Duration(milliseconds: 260),
     );
+    // Lifecycle hook: on resume, nudge srcObject on every live
+    // renderer so the platform SurfaceView re-paints. Without this
+    // the floating bubble can show a frozen last-frame after the
+    // user locked the screen and came back — same Android quirk
+    // the full-screen P2P call screen already handles.
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _fade.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // Cheap, idempotent — same MediaStream object on each
+      // renderer; on Android this nudges the SurfaceView's redraw
+      // queue. Costs nothing if the renderer was already drawing.
+      RendererManager.instance.rebindAll();
+    }
   }
 
   bool _shouldShow(P2PCallState call) =>
@@ -367,17 +386,36 @@ class _MiniBackdrop extends ConsumerWidget {
     //   2) Local video (so the user can see themselves while
     //      browsing other screens; mirrored like every selfie)
     //   3) Avatar placeholder (audio call, or video not yet flowing)
+    // RepaintBoundary + ValueKey(renderer) per Tier-1 optimization:
+    //   • RepaintBoundary isolates this tile's GPU paint layer from
+    //     the surrounding overlay tree — parent rebuilds (drag,
+    //     resize, snap-to-corner) stop invalidating the SurfaceView
+    //     paint behind the scenes.
+    //   • ValueKey(renderer) keeps the underlying Android
+    //     PlatformView stable across rebuilds (RTCVideoRenderer
+    //     doesn't override == so identity is the right stability).
+    //     Without it, alternating between remote/local mid-call can
+    //     destroy + recreate the SurfaceView, which is the main
+    //     source of BLAST buffer-pool exhaustion.
     if (hasRemoteVideo) {
-      return RTCVideoView(
-        call.remoteRenderer!,
-        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      final r = call.remoteRenderer!;
+      return RepaintBoundary(
+        child: RTCVideoView(
+          r,
+          key: ValueKey(r),
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        ),
       );
     }
     if (hasLocalVideo) {
-      return RTCVideoView(
-        call.localRenderer!,
-        mirror: true,
-        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      final r = call.localRenderer!;
+      return RepaintBoundary(
+        child: RTCVideoView(
+          r,
+          key: ValueKey(r),
+          mirror: true,
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        ),
       );
     }
     return _MiniAvatarBackdrop(name: call.remoteName ?? 'Mizdah');

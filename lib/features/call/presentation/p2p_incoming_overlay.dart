@@ -604,10 +604,16 @@ class _LivePreviewLayer extends StatelessWidget {
     final r = renderer;
     if (r == null) return const SizedBox.shrink();
     debugPrint('[P2P] OVERLAY painting live preview RTCVideoView');
-    return RTCVideoView(
-      r,
-      mirror: true,
-      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    // RepaintBoundary + ValueKey(renderer) — see comment in
+    // p2p_mini_call_overlay.dart for the full rationale (GPU layer
+    // isolation + PlatformView identity stability).
+    return RepaintBoundary(
+      child: RTCVideoView(
+        r,
+        key: ValueKey(r),
+        mirror: true,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      ),
     );
   }
 }
