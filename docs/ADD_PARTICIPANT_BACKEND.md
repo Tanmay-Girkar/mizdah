@@ -38,19 +38,25 @@ Same as the other backend docs in this folder:
 |---|---|---|
 | `POST /api/meeting/:id/invite-in-call` | new REST route | NEW |
 | `POST /api/p2p-call/:callId/promote-to-meeting` | new REST route | NEW |
+| `PATCH /api/meeting/:id/permissions` | new REST route | NEW |
+| `meetings.permissions` JSONB column (DDL migration) | schema | NEW |
 | Socket event `meeting:in-call-invite` on `/signaling-fresh` | signaling-service | NEW |
 | Socket event `p2p:promoted` on `/signaling-fresh` | signaling-service | NEW |
+| Socket event `meeting:permissions-changed` on `/signaling-fresh` | signaling-service | NEW |
 | FCM data-message `kind: "in_call_invite"` | shared push util | NEW |
 | Notifications row `type: "in_call_invite"` | uses existing inbox table | NEW |
 | Authorization helper `isParticipantOf(userId, meetingId)` | shared util | NEW |
+| Authorization helper `isHostOf(userId, meetingId)` | shared util | NEW |
 | Rate limit: max 5 invites/minute per inviter per meeting | middleware | NEW |
 
 No changes to any existing endpoint. Additive only.
 
-Estimated effort: **8–12 hours** for the two endpoints, two socket
-events, FCM pairing, and authorization checks. Most of the cost is
-the P2P promotion plumbing — meeting invite-in-call is a thin
-wrapper over what the scheduler invite-fan-out already does.
+Estimated effort: **10–14 hours** for the three endpoints, three
+socket events, FCM pairing, the new permissions column + migration,
+and authorization checks. Most of the cost is the P2P promotion
+plumbing — meeting invite-in-call is a thin wrapper over what the
+scheduler invite-fan-out already does, and the permissions
+endpoint is mostly a DB column + auth check.
 
 ---
 
@@ -68,11 +74,25 @@ because:
 
 ### Authorization
 
-- Caller must be the authenticated user (JWT) AND be currently
-  marked as `active` in `meeting_participants` for this meeting.
-- Admin role bypass: yes.
-- Returns `403 FORBIDDEN_NOT_PARTICIPANT` if caller isn't in the
-  meeting.
+Caller must clear BOTH checks:
+
+1. **Participation gate.** Caller must be the authenticated user
+   (JWT) AND be currently marked as `active` in
+   `meeting_participants` for this meeting.
+   - Returns `403 FORBIDDEN_NOT_PARTICIPANT` otherwise.
+
+2. **Host-permission gate.** Either:
+   - Caller is the host (`meetings.host_id == caller.id`), OR
+   - `meetings.permissions.allowParticipantsToInvite == true`.
+   - Returns `403 INVITE_NOT_ALLOWED_BY_HOST` when caller isn't
+     the host AND the host has locked invites down. **Use a
+     distinct error code from `FORBIDDEN_NOT_PARTICIPANT`** —
+     mobile renders "Host has disabled invites" vs "You're not in
+     this meeting" differently.
+
+Admin role bypass: yes for both gates.
+
+See §2a for the permission flag + how the host toggles it.
 
 ### Request body
 
@@ -106,6 +126,7 @@ If both present, prefer `inviteeUserId`.
 | 400 | `ALREADY_IN_MEETING` | invitee already has an active participant row |
 | 401 | `AUTH_REQUIRED` | No JWT |
 | 403 | `FORBIDDEN_NOT_PARTICIPANT` | Caller isn't in the meeting |
+| 403 | `INVITE_NOT_ALLOWED_BY_HOST` | Host has set `allowParticipantsToInvite = false` and caller isn't the host |
 | 404 | `MEETING_NOT_FOUND` | `:id` doesn't exist OR meeting has already ended |
 | 404 | `INVITEE_NOT_FOUND` | inviteeEmail/userId doesn't match a Mizdah user |
 | 409 | `MEETING_FULL` | Hit the per-meeting participant cap (proposed: 8 for v1, configurable) |
@@ -131,6 +152,151 @@ If both present, prefer `inviteeUserId`.
    joined or declined by then, mark the notification as expired so
    the ringing screen times out. (Match the P2P auto-decline
    behaviour in `p2p_call_provider.dart::_autoDeclineTimer`.)
+
+---
+
+## 2a. Per-meeting permissions — `meetings.permissions`
+
+The host controls whether **non-host participants** can invite
+others to the live meeting. The flag lives on the meeting row so
+late-joiners + reconnects all read the same source of truth.
+
+### Schema migration
+
+```sql
+ALTER TABLE meetings
+  ADD COLUMN permissions JSONB NOT NULL
+  DEFAULT '{"allowParticipantsToInvite": true}'::jsonb;
+```
+
+Prisma equivalent:
+
+```prisma
+model Meeting {
+  // ... existing fields ...
+  permissions Json @default("{\"allowParticipantsToInvite\": true}")
+}
+```
+
+**Backfill rule:** existing meeting rows get the same default
+(`allowParticipantsToInvite: true`) on migration. This matches
+pre-feature behaviour where anyone in a meeting could effectively
+share the meeting code — the new feature only adds the ability to
+restrict.
+
+**Shape rationale:** stored as a JSON blob (not a flat boolean
+column) so the next host-control toggle — `allowScreenShare`,
+`muteOnJoin`, `lockMeeting`, etc. — is a JSON key add instead of a
+schema migration. Client tolerates unknown keys.
+
+### Read path
+
+Every `GET /api/meeting/:code` response should now include the
+`permissions` blob:
+
+```json
+{
+  "id": "uuid",
+  "code": "abc-defg-hij",
+  "host_id": "uuid",
+  "permissions": { "allowParticipantsToInvite": true }
+  // ... rest ...
+}
+```
+
+Same for `GET /api/meetings/user/:userId` rows — the mobile client
+reads `permissions` off each row when it lands on the meeting
+screen.
+
+---
+
+## 2b. `PATCH /api/meeting/:id/permissions`
+
+Update the host-controlled permission flags for a live meeting.
+
+### Authorization
+
+- Caller MUST be the host (`meetings.host_id == caller.id`).
+- Admin role bypass: yes.
+- Returns `403 FORBIDDEN_NOT_HOST` for everyone else.
+
+### Request body
+
+```json
+{
+  "allowParticipantsToInvite": false
+}
+```
+
+Partial updates — only the keys present in the body are touched.
+Missing keys retain their existing values. (Easier for the mobile
+client to send `{ allowParticipantsToInvite: <new> }` without
+echoing the full blob.)
+
+### Response (200)
+
+```json
+{
+  "ok": true,
+  "permissions": {
+    "allowParticipantsToInvite": false
+  }
+}
+```
+
+### Errors
+
+| HTTP | code | When |
+|---|---|---|
+| 400 | `INVALID_PERMISSIONS_BODY` | Body isn't a JSON object, or contains keys outside the known set |
+| 401 | `AUTH_REQUIRED` | No JWT |
+| 403 | `FORBIDDEN_NOT_HOST` | Caller isn't the host |
+| 404 | `MEETING_NOT_FOUND` | `:id` doesn't exist OR meeting ended |
+
+### What the backend does on success
+
+1. Patch the JSONB column with the supplied keys.
+2. Emit `meeting:permissions-changed` over `/signaling-fresh` to
+   the meeting room (`meeting:<meetingId>`):
+
+   ```json
+   {
+     "kind": "meeting:permissions-changed",
+     "meetingId": "uuid",
+     "permissions": { "allowParticipantsToInvite": false },
+     "changedByUserId": "uuid"
+   }
+   ```
+
+3. Mobile clients listen and update `meetingProvider.state.permissions`
+   immediately — non-host clients hide the `+ Add` button as soon
+   as the host flips the toggle.
+
+### Race-condition note
+
+A participant might tap `+ Add` and have the request reach
+`/api/meeting/:id/invite-in-call` AFTER the host has already
+flipped `allowParticipantsToInvite` to `false`. The server reads
+the flag at request-processing time, so this races cleanly:
+**last write wins**, server returns `403 INVITE_NOT_ALLOWED_BY_HOST`,
+mobile shows a "Host has disabled invites" snackbar. The
+participant doesn't get to slip an invite through.
+
+### Authorization helper
+
+```js
+// services/auth-checks.js
+async function isHostOf(userId, meetingId) {
+  const m = await prisma.meeting.findUnique({
+    where: { id: meetingId },
+    select: { host_id: true },
+  });
+  return m && m.host_id === userId;
+}
+```
+
+Used by `PATCH /permissions` and also by the host-only branch of
+the `invite-in-call` authorization check (§2.Authorization).
 
 ---
 
@@ -440,29 +606,97 @@ for i in {1..6}; do
 done
 
 # Expected: 5×200 then 1×429 RATE_LIMITED
+
+# ── Host-permission toggle ────────────────────────────────────
+# Assume TOKEN_HOST is the meeting's host and TOKEN_GUEST is
+# another participant.
+
+# 1. Host disables invites for non-hosts.
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d '{"allowParticipantsToInvite": false}' | jq
+
+# Expected: 200 { "ok": true, "permissions": { "allowParticipantsToInvite": false } }
+# Also expected: every participant socket receives
+#                meeting:permissions-changed
+
+# 2. Guest tries to invite — should now be blocked.
+curl -k -s -X POST \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/invite-in-call" \
+  -H "Authorization: Bearer $TOKEN_GUEST" \
+  -H 'Content-Type: application/json' \
+  -d "{\"inviteeUserId\":\"$INVITEE_ID\"}" | jq
+
+# Expected: 403 { "error":"...","code":"INVITE_NOT_ALLOWED_BY_HOST" }
+
+# 3. Host can still invite even when the toggle is off (host bypass).
+curl -k -s -X POST \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/invite-in-call" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d "{\"inviteeUserId\":\"$INVITEE_ID\"}" | jq
+
+# Expected: 200 (host bypasses the permission gate)
+
+# 4. Guest tries to flip the permission — must be denied.
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_GUEST" \
+  -H 'Content-Type: application/json' \
+  -d '{"allowParticipantsToInvite": true}' | jq
+
+# Expected: 403 { "error":"...","code":"FORBIDDEN_NOT_HOST" }
+
+# 5. Host re-enables and guest can invite again.
+curl -k -s -X PATCH \
+  "https://192.168.1.20:3001/api/meeting/$MEETING_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN_HOST" \
+  -H 'Content-Type: application/json' \
+  -d '{"allowParticipantsToInvite": true}' | jq
+# then re-run step 2 — expected: 200
 ```
 
 ---
 
 ## 11. Migration order (one PR, in this order)
 
-1. Add `in_call_invite` to the notification type dictionary
+1. **Schema migration:** add `meetings.permissions` JSONB column
+   with the documented default + backfill (see §2a).
+2. Update every read path (`GET /api/meeting/:code`,
+   `GET /api/meetings/user/:userId`, etc.) to include the
+   `permissions` blob in the response.
+3. Add `in_call_invite` to the notification type dictionary
    (both server + client docs).
-2. Land `isParticipantOf` / `isPeerOnP2PCall` helpers + unit tests.
-3. Land `POST /api/meeting/:id/invite-in-call` + auth + rate
-   limit + tests.
-4. Wire FCM `kind: "in_call_invite"` push pairing on this endpoint
-   (reuse the helper from
+4. Land `isParticipantOf` / `isHostOf` / `isPeerOnP2PCall`
+   helpers + unit tests.
+5. Land `PATCH /api/meeting/:id/permissions` + host-only auth +
+   tests.
+6. Wire `meeting:permissions-changed` socket event emission.
+7. Land `POST /api/meeting/:id/invite-in-call` + dual auth gate
+   (participation + host-permission) + rate limit + tests.
+8. Wire FCM `kind: "in_call_invite"` push pairing on
+   invite-in-call (reuse the helper from
    `docs/NOTIFICATIONS_BACKEND.md` §6).
-5. Wire `meeting:in-call-invite` socket event emission.
-6. Land `POST /api/p2p-call/:callId/promote-to-meeting`.
-7. Wire `p2p:promoted` socket event emission to both peers.
-8. Add the 30-second auto-expire timer.
-9. Update `docs/NOTIFICATIONS_BACKEND.md` §3 with the new type
-   row (one-line edit).
+9. Wire `meeting:in-call-invite` socket event emission.
+10. Land `POST /api/p2p-call/:callId/promote-to-meeting`.
+11. Wire `p2p:promoted` socket event emission to both peers.
+12. Add the 30-second auto-expire timer for unanswered invites.
+13. Update `docs/NOTIFICATIONS_BACKEND.md` §3 with the new
+    `in_call_invite` type row (one-line edit).
 
-Stage 3 alone unblocks the meeting "Add" button on mobile. Stages
-6–7 unblock the P2P "Add" path. Each can ship independently.
+**Independent slices:**
+- Stages 1–6 alone ship the host-controls toggle (no `+ Add`
+  button yet, but the permission flips are sync'd to every
+  client). Useful for early QA.
+- Stage 7 alone unblocks the meeting `+ Add` button on mobile.
+- Stages 10–11 unblock the P2P `+ Add` path.
+
+Each slice can ship in its own deploy if you want to space them
+out — mobile gracefully degrades when an endpoint hasn't landed
+yet (button stays hidden / call returns 404 / picker shows a
+friendly error).
 
 ---
 
@@ -484,5 +718,19 @@ Stage 3 alone unblocks the meeting "Add" button on mobile. Stages
 4. **Admin dashboards** — should `in_call_invite` events show up
    in any existing admin view, or stay invisible (they're noisy
    and short-lived)?
+5. **Permissions blob versioning** — when we add `allowScreenShare`
+   / `muteOnJoin` / `lockMeeting` / etc. in future iterations,
+   how do you want to handle JSON validation? Whitelist of known
+   keys per server release, or lenient pass-through? Proposal:
+   **strict whitelist** on PATCH (`INVALID_PERMISSIONS_BODY` for
+   unknown keys) so a stale-client typo never lands; **lenient**
+   on read (unknown keys retained but ignored), so a rolling
+   downgrade doesn't drop data.
+6. **Initial permissions at meeting create** — should
+   `POST /api/meetings/create` accept a `permissions` body
+   argument so a host can pre-set the toggle before the meeting
+   starts? Or always default-true and require a PATCH after
+   creation? Proposal: **accept at create time** — saves the
+   host an extra round-trip.
 
 Send answers when you've had a look and we'll iterate.
