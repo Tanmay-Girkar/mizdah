@@ -91,6 +91,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with TickerProviderStateMixin {
   late final AnimationController _floatCtrl;
   late final AnimationController _entryCtrl;
+  StreamSubscription<PushPayload>? _inboxFcmSub;
 
   @override
   void initState() {
@@ -123,10 +124,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       duration: const Duration(milliseconds: 700),
       vsync: this,
     )..forward();
+
+    // FCM-driven inbox refresh per docs/NOTIFICATIONS_BACKEND.md §6.
+    // Every persisted-notification emit also fires an FCM data-only
+    // message; the spec tags it with `kind: "inbox"` so we can
+    // distinguish inbox refreshes from operational pushes (incoming
+    // call ring, chat:message, …). When one lands while the user is
+    // already on home, invalidate the provider so the bell badge
+    // flips instantly without waiting for the next tab-switch
+    // autoDispose cycle.
+    _inboxFcmSub =
+        PushNotificationService.instance.foregroundMessages.listen((p) {
+      final kind = (p.raw['kind'] ?? '').toString();
+      if (kind == 'inbox') {
+        if (!mounted) return;
+        ref.invalidate(notificationsProvider);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _inboxFcmSub?.cancel();
     _floatCtrl.dispose();
     _entryCtrl.dispose();
     super.dispose();
@@ -236,11 +255,12 @@ class _Header extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authProvider).user;
     final notificationsAsync = ref.watch(notificationsProvider);
-    // Show the small purple dot only when there's at least one
-    // unread / unseen notification. We don't have a "read" concept on
-    // the model yet, so any non-empty list lights the dot.
+    // Bell dot lights only on unread rows now that the backend
+    // carries an explicit read/unread flag per
+    // docs/NOTIFICATIONS_BACKEND.md. Empty list, or list where the
+    // user has already marked everything read = no dot.
     final hasNotifications = notificationsAsync.maybeWhen(
-      data: (list) => list.isNotEmpty,
+      data: (page) => page.unreadCount > 0,
       orElse: () => false,
     );
     final initial = (user?.name.isNotEmpty == true)

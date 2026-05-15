@@ -5,29 +5,16 @@ import 'package:intl/intl.dart';
 
 import '../../../core/ui/mizdah_design.dart';
 import '../../../data/models/models.dart';
+import '../../../data/repositories/notification_repository.dart';
 import '../../home/notification_provider.dart';
 
 /// Notification types we surface on this screen. Chat / DM
 /// notifications are deliberately excluded — those have their own
 /// unread surface inside the Chats tab and would otherwise double-up.
 ///
-/// Backend `type` strings the app recognises (defaults to "info"
-/// rendering when an unknown string lands):
-///
-///   meeting_invite      — someone invited you to a meeting
-///   meeting_reminder    — your scheduled meeting starts soon
-///   meeting_started     — host opened a meeting you're on the
-///                          invite list for, join now
-///   meeting_cancelled   — host cancelled an upcoming meeting
-///   meeting_rescheduled — host moved an upcoming meeting
-///   recording_ready     — a recording you started is now available
-///   missed_call         — P2P voice/video call you didn't answer
-///   contact_joined      — a phone-contact just signed up for Mizdah
-///   security            — password changed / new-device sign-in
-///   info                — fallback bucket
-///
-/// Everything else (chat:message, chat:mention, chat:reply, …) is
-/// filtered out by `_isChatType`.
+/// Per-type metadata (icon, colour, deep-link route) lives in
+/// `_NotificationTile._meta()` below. See docs/NOTIFICATIONS_BACKEND.md
+/// §3 for the full per-type contract — title / body / data shape.
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
 
@@ -54,6 +41,19 @@ class NotificationsScreen extends ConsumerWidget {
           ),
         ),
         centerTitle: false,
+        actions: [
+          async.maybeWhen(
+            data: (page) => page.unreadCount > 0
+                ? IconButton(
+                    tooltip: 'Mark all as read',
+                    icon: const Icon(Icons.done_all_rounded),
+                    color: MizdahTokens.inkOf(context),
+                    onPressed: () => _markAllRead(context, ref),
+                  )
+                : const SizedBox.shrink(),
+            orElse: () => const SizedBox.shrink(),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: () async => ref.refresh(notificationsProvider.future),
@@ -71,14 +71,19 @@ class NotificationsScreen extends ConsumerWidget {
               ),
             ],
           ),
-          data: (all) {
-            final list = all.where((n) => !_isChatType(n.type)).toList();
+          data: (page) {
+            final list =
+                page.items.where((n) => !_isChatType(n.type)).toList();
             if (list.isEmpty) return const _EmptyState();
             return ListView.separated(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
               itemCount: list.length,
               separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (ctx, i) => _NotificationTile(item: list[i]),
+              itemBuilder: (ctx, i) => _NotificationTile(
+                item: list[i],
+                onTap: () => _onTileTap(ctx, ref, list[i]),
+                onDismiss: () => _onDismiss(ctx, ref, list[i]),
+              ),
             );
           },
         ),
@@ -87,6 +92,9 @@ class NotificationsScreen extends ConsumerWidget {
   }
 
   /// Anything chat-shaped is the Chats tab's job, not this screen.
+  /// Server-side §3 says these types shouldn't be inserted into the
+  /// table at all, but we filter defensively in case a regression
+  /// slips them through.
   bool _isChatType(String type) {
     final t = type.toLowerCase();
     return t == 'chat' ||
@@ -94,6 +102,100 @@ class NotificationsScreen extends ConsumerWidget {
         t == 'dm' ||
         t.startsWith('chat:') ||
         t.startsWith('message:');
+  }
+
+  Future<void> _markAllRead(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(notificationRepositoryProvider).markAllAsRead();
+      ref.invalidate(notificationsProvider);
+    } catch (e) {
+      messenger.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Color(0xFFB42318),
+          content: Text(
+            "Couldn't mark all as read.",
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Tap = mark read on the server (idempotent, harmless for already-
+  /// read rows) AND deep-link based on the row's `type` + `data`
+  /// payload. The mark-read fires-and-forgets so the navigation
+  /// isn't blocked on network.
+  void _onTileTap(BuildContext context, WidgetRef ref, NotificationModel n) {
+    if (!n.isRead) {
+      _markOneReadInBackground(ref, n.id);
+    }
+    final href = _deepLinkFor(n);
+    if (href != null) context.push(href);
+  }
+
+  void _markOneReadInBackground(WidgetRef ref, String id) {
+    // No await, no catch — the next provider refetch will reconcile
+    // the read flag. Worst case the row stays "unread" until next
+    // mark/refresh, which is annoying but not broken.
+    ref.read(notificationRepositoryProvider).markAsRead(id).then((_) {
+      ref.invalidate(notificationsProvider);
+    }).catchError((_) {});
+  }
+
+  Future<void> _onDismiss(
+      BuildContext context, WidgetRef ref, NotificationModel n) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(notificationRepositoryProvider).dismiss(n.id);
+      ref.invalidate(notificationsProvider);
+    } catch (e) {
+      messenger.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Color(0xFFB42318),
+          content: Text(
+            "Couldn't dismiss notification.",
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Picks a deep-link target for the given notification, falling
+  /// back to no-op (returns null) when there's no useful place to
+  /// send the user. Pulls keys from `data` per the type contract in
+  /// docs/NOTIFICATIONS_BACKEND.md §3.
+  String? _deepLinkFor(NotificationModel n) {
+    final data = n.data;
+    String? str(String key) {
+      final v = data[key];
+      return v is String && v.isNotEmpty ? v : null;
+    }
+
+    switch (n.type.toLowerCase()) {
+      case 'meeting_invite':
+      case 'meeting_reminder':
+      case 'meeting_started':
+      case 'meeting_rescheduled':
+        final id = str('meetingId') ?? str('meeting_id');
+        return id != null ? '/pre-join/$id' : '/meetings';
+      case 'meeting_cancelled':
+        return '/meetings';
+      case 'recording_ready':
+        final code = str('meetingCode') ?? str('meeting_code');
+        return code != null ? '/recordings/$code' : null;
+      case 'missed_call':
+        return '/call-history';
+      case 'contact_joined':
+        return '/call-hub';
+      case 'security':
+        return '/settings';
+      default:
+        return null;
+    }
   }
 }
 
@@ -140,79 +242,126 @@ class _EmptyState extends StatelessWidget {
 
 class _NotificationTile extends StatelessWidget {
   final NotificationModel item;
-  const _NotificationTile({required this.item});
+  final VoidCallback onTap;
+  final VoidCallback onDismiss;
+
+  const _NotificationTile({
+    required this.item,
+    required this.onTap,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
     final meta = _meta(item.type);
-    return Container(
-      decoration: BoxDecoration(
-        color: MizdahTokens.surface(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: MizdahTokens.inkOf(context).withValues(alpha: 0.05),
+    final ink = MizdahTokens.inkOf(context);
+    // Unread rows get a subtle accent stripe + slightly stronger
+    // background so the user's eye lands there first.
+    final unreadAccent = !item.isRead;
+
+    return Dismissible(
+      key: ValueKey('notif-${item.id}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: BoxDecoration(
+          color: const Color(0xFFB42318),
+          borderRadius: BorderRadius.circular(14),
         ),
+        child: const Icon(Icons.delete_outline_rounded, color: Colors.white),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 36,
+      onDismissed: (_) => onDismiss(),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Container(
             decoration: BoxDecoration(
-              color: meta.tint.withValues(alpha: 0.15),
-              shape: BoxShape.circle,
+              color: MizdahTokens.surface(context),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: unreadAccent
+                    ? meta.tint.withValues(alpha: 0.35)
+                    : ink.withValues(alpha: 0.05),
+                width: unreadAccent ? 1.2 : 1,
+              ),
             ),
-            child: Icon(meta.icon, color: meta.tint, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        item.title,
-                        style: TextStyle(
-                          color: MizdahTokens.inkOf(context),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(
-                      _timeLabel(item.createdAt),
-                      style: TextStyle(
-                        color:
-                            MizdahTokens.inkOf(context).withValues(alpha: 0.5),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-                if (item.body.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    item.body,
-                    style: TextStyle(
-                      color:
-                          MizdahTokens.inkOf(context).withValues(alpha: 0.65),
-                      fontSize: 12.5,
-                      height: 1.35,
-                    ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: meta.tint.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
                   ),
-                ],
+                  child: Icon(meta.icon, color: meta.tint, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.title,
+                              style: TextStyle(
+                                color: ink,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (unreadAccent) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: meta.tint,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Text(
+                            _timeLabel(item.createdAt),
+                            style: TextStyle(
+                              color: ink.withValues(alpha: 0.5),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (item.body.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          item.body,
+                          style: TextStyle(
+                            color: ink.withValues(alpha: 0.65),
+                            fontSize: 12.5,
+                            height: 1.35,
+                          ),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

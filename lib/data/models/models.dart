@@ -298,6 +298,14 @@ class NotificationModel {
   final String type;
   final DateTime createdAt;
   final bool isRead;
+  final DateTime? readAt;
+  /// Structured payload for deep-linking the row tap. Shape varies
+  /// by `type` — see docs/NOTIFICATIONS_BACKEND.md §3 for the per-
+  /// type contract (e.g. `meetingId` + `meetingCode` for
+  /// meeting_invite, `callerId` + `callType` for missed_call, …).
+  /// Plain map so callers can pull whichever keys they need
+  /// without paying for a strongly-typed sealed-class hierarchy.
+  final Map<String, dynamic> data;
 
   NotificationModel({
     required this.id,
@@ -306,16 +314,86 @@ class NotificationModel {
     required this.type,
     required this.createdAt,
     this.isRead = false,
+    this.readAt,
+    this.data = const {},
   });
 
   factory NotificationModel.fromJson(Map<String, dynamic> json) {
+    final rawData = json['data'];
     return NotificationModel(
       id: json['id']?.toString() ?? '',
       title: json['title'] ?? 'Notification',
       body: json['content'] ?? json['body'] ?? '',
       type: json['type'] ?? 'info',
-      createdAt: (DateTime.tryParse(json['createdAt'] ?? json['created_at'] ?? '') ?? DateTime.now()).toLocal(),
+      createdAt:
+          (DateTime.tryParse(json['createdAt'] ?? json['created_at'] ?? '') ??
+                  DateTime.now())
+              .toLocal(),
       isRead: json['isRead'] ?? json['is_read'] ?? false,
+      readAt: DateTime.tryParse(
+              (json['readAt'] ?? json['read_at'] ?? '').toString())
+          ?.toLocal(),
+      data: rawData is Map ? Map<String, dynamic>.from(rawData) : const {},
+    );
+  }
+}
+
+/// One page of notifications — what GET /api/notifications/user/:id
+/// returns wrapped. Carries the unread count alongside the rows so
+/// the bell badge doesn't need a second round-trip to /unread-count
+/// for the common "user opened home" path.
+///
+/// `nextCursor` is the `created_at` of the oldest row in `items` —
+/// pass it back as `?before=<cursor>` to fetch the next page. Null
+/// when the server has no more rows.
+class NotificationsPage {
+  final List<NotificationModel> items;
+  final String? nextCursor;
+  final int unreadCount;
+
+  const NotificationsPage({
+    required this.items,
+    this.nextCursor,
+    this.unreadCount = 0,
+  });
+
+  /// Tolerates three response shapes for backwards compatibility:
+  ///
+  ///   1. `{ "data": [...], "nextCursor": "...", "unreadCount": N }`
+  ///      — the canonical shape per docs/NOTIFICATIONS_BACKEND.md §4.1
+  ///   2. `{ "data": [...] }`                — older server build
+  ///   3. `[ ... ]`                          — bare-array legacy
+  ///
+  /// `unreadCount` falls back to "count items where !isRead" when
+  /// the server didn't include it, so callers always have a number
+  /// they can render.
+  factory NotificationsPage.fromAny(dynamic raw) {
+    List<dynamic> rows;
+    String? next;
+    int? count;
+
+    if (raw is List) {
+      rows = raw;
+    } else if (raw is Map) {
+      final maybeRows = raw['data'];
+      rows = maybeRows is List ? maybeRows : const [];
+      final c = raw['nextCursor'] ?? raw['next_cursor'];
+      next = c is String ? c : null;
+      final u = raw['unreadCount'] ?? raw['unread_count'];
+      count = u is int ? u : (u is num ? u.toInt() : null);
+    } else {
+      rows = const [];
+    }
+
+    final items = rows
+        .whereType<Map>()
+        .map((m) => NotificationModel.fromJson(Map<String, dynamic>.from(m)))
+        .toList();
+
+    return NotificationsPage(
+      items: items,
+      nextCursor: next,
+      unreadCount: count ?? items.where((n) => !n.isRead).length,
     );
   }
 }
