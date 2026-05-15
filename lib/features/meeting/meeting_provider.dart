@@ -186,6 +186,34 @@ class MeetingState {
     this.permissions = const MeetingPermissions(),
   });
 
+  /// True when the current user can use the + Add flow. Three
+  /// sources of truth, OR-ed together to match the backend's
+  /// auth gate exactly:
+  ///
+  ///   1. We're the host (host bypasses every gate).
+  ///   2. Global toggle `allowParticipantsToInvite` is on.
+  ///   3. Our own participant row has been granted `canInvite`
+  ///      explicitly by the host (§2c/§2d).
+  ///
+  /// Derived rather than stored so we never have a stale snapshot
+  /// — every participants-list patch from the socket
+  /// fan-out re-renders this getter for free.
+  bool get canCurrentUserInvite {
+    if (isHost) return true;
+    if (permissions.allowParticipantsToInvite) return true;
+    final me = userId;
+    if (me == null || me.isEmpty) return false;
+    for (final p in participants) {
+      if (p is! Map) continue;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != me) continue;
+      final flag = p['canInvite'] ?? p['can_invite'];
+      if (flag is bool) return flag;
+      return false;
+    }
+    return false;
+  }
+
   MeetingState copyWith({
     bool? isConnected,
     Map<String, RTCVideoRenderer>? remoteRenderers,
@@ -1328,6 +1356,27 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       // received correctly.
     });
 
+    // Host granted / revoked a specific participant's invite
+    // permission. Patch that participant's row in the local list
+    // so the host's switch + every other client's `+ Add` button
+    // visibility updates in real time. See
+    // docs/ADD_PARTICIPANT_BACKEND.md §2c/§2d.
+    _socket?.on('meeting:participant-permissions-changed', (data) {
+      if (!mounted || _disposed) return;
+      if (data is! Map) return;
+      final affectedUserId =
+          (data['userId'] ?? data['user_id'])?.toString();
+      final flag = data['canInvite'] ?? data['can_invite'];
+      if (affectedUserId == null || affectedUserId.isEmpty) return;
+      if (flag is! bool) return;
+      _log('meeting:participant-permissions-changed '
+          'userId=$affectedUserId canInvite=$flag');
+      state = state.copyWith(
+        participants: _patchParticipantCanInvite(
+          state.participants, affectedUserId, flag),
+      );
+    });
+
     _chatSocket?.on('chat-receive', _handleNewMessage);
     _chatSocket?.on('chat-message', _handleNewMessage);
     _chatSocket?.on('new-message', _handleNewMessage);
@@ -1420,8 +1469,79 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       CannotInviteSelfError() => "You can't invite yourself.",
       MeetingFullError() => 'Meeting is full.',
       RateLimitedError() => 'Too many requests — slow down a bit.',
+      CannotGrantHostSelfError() =>
+        "Host already has invite permission.",
+      ParticipantNotFoundError() =>
+        "That participant isn't in the meeting anymore.",
       _ => 'Could not send invite. Try again.',
     };
+  }
+
+  /// Host-only — grant or revoke a specific participant's
+  /// `can_invite` flag. Optimistic local patch on the participants
+  /// list for instant feedback; the real source of truth comes back
+  /// via the `meeting:participant-permissions-changed` socket event
+  /// the server fans to every participant (including us).
+  /// Returns null on success or the error message for the snackbar.
+  /// See docs/ADD_PARTICIPANT_BACKEND.md §2d.
+  Future<String?> setParticipantCanInvite(
+      String participantUserId, bool value) async {
+    if (!state.isHost) return 'Only the host can do that.';
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    final previous = state.participants;
+    // Optimistic flip so the switch UI is instantaneous.
+    state = state.copyWith(
+      participants:
+          _patchParticipantCanInvite(previous, participantUserId, value),
+    );
+    try {
+      final confirmed = await _ref
+          .read(inCallInviteRepositoryProvider)
+          .setParticipantPermissions(
+            meetingId: meetingId,
+            userId: participantUserId,
+            canInvite: value,
+          );
+      if (!mounted || _disposed) return null;
+      // Reconcile against the server-confirmed value. Usually
+      // identical, but a concurrent revoke from another host
+      // session could land in between — server wins.
+      state = state.copyWith(
+        participants: _patchParticipantCanInvite(
+            state.participants, participantUserId, confirmed),
+      );
+      return null;
+    } on InCallInviteError catch (e) {
+      // Roll back the optimistic flip so the switch reflects truth.
+      if (mounted && !_disposed) {
+        state = state.copyWith(participants: previous);
+      }
+      return _humaniseInviteError(e);
+    } catch (_) {
+      if (mounted && !_disposed) {
+        state = state.copyWith(participants: previous);
+      }
+      return 'Could not save. Try again.';
+    }
+  }
+
+  /// Returns a new participants list with [participantUserId]'s
+  /// `canInvite` flag set to [value]. Other rows untouched, list
+  /// order preserved. Used by both the socket fan-out listener and
+  /// the optimistic-update path.
+  List<dynamic> _patchParticipantCanInvite(
+      List<dynamic> participants, String participantUserId, bool value) {
+    return participants.map((p) {
+      if (p is! Map) return p;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != participantUserId) return p;
+      final patched = Map<String, dynamic>.from(p);
+      patched['canInvite'] = value;
+      return patched;
+    }).toList();
   }
 
   void _handleNewMessage(data) {

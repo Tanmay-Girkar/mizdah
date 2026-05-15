@@ -50,6 +50,14 @@ class RateLimitedError extends InCallInviteError {
   const RateLimitedError(super.message);
 }
 
+class CannotGrantHostSelfError extends InCallInviteError {
+  const CannotGrantHostSelfError(super.message);
+}
+
+class ParticipantNotFoundError extends InCallInviteError {
+  const ParticipantNotFoundError(super.message);
+}
+
 class InCallInviteFailure extends InCallInviteError {
   const InCallInviteFailure(super.message);
 }
@@ -206,6 +214,38 @@ class InCallInviteRepository {
     }
   }
 
+  /// `PATCH /api/meeting/:id/participants/:userId/permissions`
+  ///
+  /// Host-only — flips a single non-host participant's `can_invite`
+  /// row. Additive on top of the global toggle from
+  /// `setPermissions`: when global is OFF, this grant is the
+  /// difference between a participant being able to use the + Add
+  /// flow or not. See docs/ADD_PARTICIPANT_BACKEND.md §2c/§2d.
+  ///
+  /// Backend resets `can_invite` to false automatically when the
+  /// participant row goes inactive (they leave), so re-joining
+  /// requires a fresh grant from the host.
+  Future<bool> setParticipantPermissions({
+    required String meetingId,
+    required String userId,
+    required bool canInvite,
+  }) async {
+    try {
+      final response = await _apiClient.patch(
+        '${ApiConfig.meetingBase}/$meetingId/participants/$userId/permissions',
+        data: {'canInvite': canInvite},
+      );
+      final raw = response.data;
+      if (raw is Map) {
+        final v = raw['canInvite'] ?? raw['can_invite'];
+        if (v is bool) return v;
+      }
+      return canInvite;
+    } on DioException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
   /// Map the backend's typed `code` strings to a typed Dart class
   /// so call sites can `switch` on the failure mode instead of
   /// string-matching error messages.
@@ -232,6 +272,10 @@ class InCallInviteRepository {
         return AlreadyPromotedError(message);
       case 'RATE_LIMITED':
         return RateLimitedError(message);
+      case 'CANNOT_GRANT_HOST_SELF':
+        return CannotGrantHostSelfError(message);
+      case 'PARTICIPANT_NOT_FOUND':
+        return ParticipantNotFoundError(message);
       default:
         return InCallInviteFailure(message);
     }

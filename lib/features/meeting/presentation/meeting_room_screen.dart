@@ -707,32 +707,31 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
         isCaptionsEnabled: ref.watch(captionServiceProvider(widget.meetingId)).isEnabled,
         isOnTheGoMode:
             ref.watch(meetingProvider(widget.meetingId)).isOnTheGoMode,
-        // Add Participant — gated by host's
-        // permissions.allowParticipantsToInvite flag. Host always
-        // sees it; non-hosts only see it when allowed. Setting the
-        // callback to null hides the row entirely.
-        onAddParticipant: () {
-          final mState = ref.read(meetingProvider(widget.meetingId));
-          final allowed = mState.isHost ||
-              mState.permissions.allowParticipantsToInvite;
-          if (!allowed) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Host has disabled invites for participants.'),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-            Navigator.pop(context);
-            return;
-          }
-          Navigator.pop(context);
-          final dbId = mState.meetingId;
-          if (dbId == null || dbId.isEmpty) return;
-          showAddParticipantSheet(
-            context,
-            session: AddParticipantSessionContext.meeting(meetingId: dbId),
-          );
-        },
+        // Add Participant — gated by the three-way OR that mirrors
+        // the backend's auth gate (see ADD_PARTICIPANT_BACKEND §2e):
+        //   • host bypass, OR
+        //   • global allowParticipantsToInvite, OR
+        //   • per-user can_invite grant on my participant row.
+        // canCurrentUserInvite collapses all three into one bool so
+        // every consumer (this gate, the participants-list tile,
+        // etc.) reads the same source of truth. Passing null hides
+        // the row entirely — no point showing a denial snackbar
+        // when the user has no way to use the feature.
+        onAddParticipant:
+            ref.watch(meetingProvider(widget.meetingId)).canCurrentUserInvite
+                ? () {
+                    Navigator.pop(context);
+                    final dbId = ref
+                        .read(meetingProvider(widget.meetingId))
+                        .meetingId;
+                    if (dbId == null || dbId.isEmpty) return;
+                    showAddParticipantSheet(
+                      context,
+                      session: AddParticipantSessionContext.meeting(
+                          meetingId: dbId),
+                    );
+                  }
+                : null,
       ),
     );
   }
@@ -3547,12 +3546,43 @@ class _ParticipantsView extends ConsumerWidget {
                  );
               }
               final p = participants[index - 1];
+              final pUserId = (p['userId'] ?? p['user_id'])?.toString() ?? '';
+              final pIsHost =
+                  pUserId == meetingState.hostId || p['isHost'] == true;
+              // Per-user invite switch is host-only AND only worth
+              // showing when the global toggle is OFF — when global
+              // is ON every non-host can already invite. Hide on
+              // the host's own row (CANNOT_GRANT_HOST_SELF on the
+              // server, no useful affordance here).
+              final globalOn =
+                  meetingState.permissions.allowParticipantsToInvite;
+              final showSwitch =
+                  meetingState.isHost && !globalOn && !pIsHost;
+              final pCanInvite =
+                  (p['canInvite'] ?? p['can_invite']) as bool? ?? false;
               return _ParticipantTile(
                 name: p['name'] ?? 'Unknown',
-                isHost: p['userId'] == meetingState.hostId || p['isHost'] == true,
+                isHost: pIsHost,
                 isMicOn: p['isMicOn'] ?? false,
                 isCameraOn: p['isCameraOn'] ?? false,
                 isMe: false,
+                showInviteSwitch: showSwitch,
+                canInvite: pCanInvite,
+                onToggleCanInvite: showSwitch && pUserId.isNotEmpty
+                    ? (v) async {
+                        final err = await ref
+                            .read(meetingProvider(meetingId).notifier)
+                            .setParticipantCanInvite(pUserId, v);
+                        if (err != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    : null,
               );
             },
             childCount: participants.length + 1,
@@ -3570,12 +3600,25 @@ class _ParticipantTile extends StatelessWidget {
   final bool isCameraOn;
   final bool isMe;
 
+  /// Per-user invite grant — when [showInviteSwitch] is true the
+  /// host sees a Switch on this row that flips can_invite for the
+  /// participant. Hidden in every other context: when global
+  /// permission is ON (everyone can invite anyway), when the row
+  /// is the host's own row, when the viewer isn't the host, and
+  /// when this is the "Me" row.
+  final bool showInviteSwitch;
+  final bool canInvite;
+  final ValueChanged<bool>? onToggleCanInvite;
+
   const _ParticipantTile({
     required this.name,
     this.isHost = false,
     this.isMicOn = true,
     this.isCameraOn = true,
     this.isMe = false,
+    this.showInviteSwitch = false,
+    this.canInvite = false,
+    this.onToggleCanInvite,
   });
 
   @override
@@ -3603,10 +3646,45 @@ class _ParticipantTile extends StatelessWidget {
           fontWeight: isMe ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
-      subtitle: isHost ? const Text('Meeting Host', style: TextStyle(color: MizdahTheme.primaryBlue, fontSize: 11)) : null,
+      subtitle: isHost
+          ? const Text('Meeting Host',
+              style: TextStyle(color: MizdahTheme.primaryBlue, fontSize: 11))
+          : (showInviteSwitch
+              ? Text(
+                  canInvite ? 'Can invite participants' : 'Tap to allow invite',
+                  style: TextStyle(
+                    color: canInvite
+                        ? MizdahTheme.primaryBlue
+                        : (isDark ? Colors.white54 : Colors.black54),
+                    fontSize: 11,
+                  ),
+                )
+              : null),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (showInviteSwitch) ...[
+            // Compact Switch — kept small via shrinkWrap so it
+            // doesn't push the mic/cam icons off-screen on narrow
+            // devices. Per ADD_PARTICIPANT_BACKEND.md §2c, the
+            // grant resets when the participant leaves the meeting,
+            // so this control only persists while they're active.
+            Tooltip(
+              message: canInvite
+                  ? 'Revoke invite permission'
+                  : 'Allow this person to invite others',
+              child: Transform.scale(
+                scale: 0.85,
+                child: Switch(
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  value: canInvite,
+                  activeThumbColor: MizdahTheme.primaryBlue,
+                  onChanged: onToggleCanInvite,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           Icon(
             isMicOn ? Icons.mic_none_rounded : Icons.mic_off_rounded,
             size: 20,
