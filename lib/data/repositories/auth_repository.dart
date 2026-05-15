@@ -136,16 +136,21 @@ class AuthRepository {
   /// Returns the public `fileUrl` on success — that URL can be passed
   /// to `updateProfile(avatarUrl: ...)` to set the user's photo.
   ///
-  /// Documented at `MOBILE_API_DOCS.md` §8.1 (`POST /api/files/upload`,
-  /// multipart/form-data, field name `file`).
+  /// Endpoint: `POST /api/file/upload`, multipart/form-data, field
+  /// name `file`. See "Edit Profile — Flutter Integration Guide" §2
+  /// (the canonical contract shared by the backend team 2026-05-15).
   ///
-  /// Backend workaround: file-service `fileController.js` calls
-  /// `prisma.fileMetadata.create({ data: { uploaderId, ... } })` but
-  /// does NOT extract `uploaderId` from the JWT — so the request
-  /// 500s with `Argument \`uploaderId\` is missing.` unless we send
-  /// it explicitly as a form field. See
-  /// `docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md` for the fix the
-  /// backend should land so this param can go away.
+  /// `uploaderId` is documented as optional — the backend extracts
+  /// the uploader from the JWT — but we still pass it so the row
+  /// is correctly attributed without depending on JWT-extraction
+  /// behaviour the file-service controller has flip-flopped on. The
+  /// older 500 ("Argument `uploaderId` is missing.") regression that
+  /// `docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md` was written against
+  /// is no longer reachable as long as we keep sending the field.
+  ///
+  /// Returns the canonical `fileUrl` field from the JSON response;
+  /// also accepts `url` / `file_url` as legacy fallbacks for older
+  /// server builds.
   Future<String> uploadFile({
     required String filePath,
     String? fileName,

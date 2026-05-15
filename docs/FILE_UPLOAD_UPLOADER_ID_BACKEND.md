@@ -1,8 +1,15 @@
 # File-service: `uploaderId` should come from the JWT, not the form body
 
 **Owner:** file-service / gateway team
-**Status:** mobile workaround shipped; backend fix still pending
-**Endpoint:** `POST /api/files/upload`
+**Status:** RESOLVED — the backend has documented `uploaderId` as an
+optional form field in the "Edit Profile — Flutter Integration
+Guide" (2026-05-15). The mobile client still sends it as an
+attribution hint, but the endpoint no longer 500s when it's
+absent. This doc is kept for history; new readers should defer to
+the integration guide.
+**Endpoint:** `POST /api/file/upload` (the canonical singular path
+per the new integration guide; the older plural `/api/files/upload`
+still routes too but should be considered deprecated).
 **File on backend:** `backend/file-service/src/controllers/fileController.js` (around line 50)
 
 ## What's broken

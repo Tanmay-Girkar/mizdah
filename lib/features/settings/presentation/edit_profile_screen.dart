@@ -386,14 +386,32 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen>
     final file = picked?.files.firstOrNull;
     if (file == null || file.path == null) return;
 
+    // Client-side 5 MB cap per the Edit Profile integration guide §2.
+    // The backend doesn't reject big files itself (no Content-Length
+    // pre-check on multer), so we fail fast here rather than spend
+    // 30s on the wire and then surface a confusing error.
+    const maxBytes = 5 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFB42318),
+          content: Text(
+            'Photo is too large. Pick an image under 5 MB.',
+            style: const TextStyle(color: Colors.white),
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
     setState(() => _uploadingAvatar = true);
     try {
       final repo = AuthRepository();
-      // uploaderId workaround: file-service controller does not pull
-      // the uploader from the JWT, so the multipart form has to carry
-      // it explicitly or the POST 500s with a Prisma
-      // "Argument `uploaderId` is missing." error. See
-      // docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md.
+      // Send uploaderId so the file-service row is attributed even
+      // if the controller's JWT-extraction regresses again — see
+      // docs/FILE_UPLOAD_UPLOADER_ID_BACKEND.md for the history.
       final me = ref.read(authProvider).user;
       final url = await repo.uploadFile(
         filePath: file.path!,

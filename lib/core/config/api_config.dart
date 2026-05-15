@@ -67,8 +67,13 @@ class ApiConfig {
   static const String notifications = '$baseUrl/api/notifications';
   static const String notificationUser = '$baseUrl/api/notifications/user'; // + /{userId}
   
-  static const String fileUpload = '$baseUrl/api/files/upload';
-  static const String files = '$baseUrl/api/files'; // + /{fileId}
+  // File-service routes use a SINGULAR resource path per the backend
+  // doc shared 2026-05-15 (Edit Profile — Flutter Integration Guide,
+  // §2). The plural `/api/files/...` form also currently 200s on the
+  // dev server because both routes exist, but only the singular form
+  // is the documented contract going forward.
+  static const String fileUpload = '$baseUrl/api/file/upload';
+  static const String files = '$baseUrl/api/file'; // + /{fileId}
   
   static const String adminUsers = '$baseUrl/api/admin/users';
 
