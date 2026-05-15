@@ -27,6 +27,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/ui/mizdah_design.dart';
 import '../../auth/auth_provider.dart';
+import '../../meeting/presentation/add_participant_sheet.dart';
 import '../p2p_call_provider.dart';
 
 class P2PCallScreen extends ConsumerStatefulWidget {
@@ -1307,6 +1308,30 @@ class _ControlsDock extends ConsumerWidget {
                     : 'Speaker on',
               ),
               const SizedBox(width: 12),
+              // Add participant — promotes this P2P call to an SFU
+              // meeting and rings the invitee. Hidden while ringing
+              // (no active session to promote). See
+              // docs/ADD_PARTICIPANT_BACKEND.md §3.
+              if ((call.phase == P2PCallPhase.active ||
+                      call.phase == P2PCallPhase.connecting) &&
+                  call.callId != null &&
+                  call.callId!.isNotEmpty) ...[
+                _CircleControl(
+                  icon: Icons.person_add_alt_1_rounded,
+                  active: false,
+                  onTap: () {
+                    showAddParticipantSheet(
+                      context,
+                      session: AddParticipantSessionContext.p2pCall(
+                        callId: call.callId!,
+                        excludePeerUserId: call.remoteUserId,
+                      ),
+                    );
+                  },
+                  tooltip: 'Add to call',
+                ),
+                const SizedBox(width: 12),
+              ],
               if (call.withVideo)
                 _CircleControl(
                   icon: call.localVideo

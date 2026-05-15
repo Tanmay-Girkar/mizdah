@@ -46,8 +46,20 @@ class ApiConfig {
       '$baseUrl/api/feedback/call-rating';
 
   static const String createMeeting = '$baseUrl/api/meetings/create';
-  static const String getMeeting = '$baseUrl/api/meeting'; 
+  static const String getMeeting = '$baseUrl/api/meeting';
   static const String userMeetings = '$baseUrl/api/meetings/user'; // + /{userId}
+
+  // ── Add participant during live session ───────────────────────
+  // See docs/ADD_PARTICIPANT_BACKEND.md. Three endpoints land
+  // together: live-meeting invite, P2P → meeting promotion, and
+  // the host-permission toggle that gates whether non-host
+  // participants can invite.
+  //
+  // Used by InCallInviteRepository — keep these as base URLs;
+  // the repo concatenates `:id`, `:callId` as needed so we don't
+  // need 3 ApiConfig constants per endpoint.
+  static const String meetingBase = '$baseUrl/api/meeting'; // + /{id}/invite-in-call OR /{id}/permissions
+  static const String p2pCallBase = '$baseUrl/api/p2p-call'; // + /{callId}/promote-to-meeting
   
   static const String participantJoin = '$baseUrl/api/participant/join';
   static const String participantLeave = '$baseUrl/api/participant/leave';

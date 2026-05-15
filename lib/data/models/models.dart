@@ -109,6 +109,44 @@ class Contact {
   }
 }
 
+/// Host-controlled permission flags that gate what non-host
+/// participants can do during a live meeting. See
+/// docs/ADD_PARTICIPANT_BACKEND.md §2a. Stored as a JSONB blob
+/// server-side so adding the next toggle (allowScreenShare,
+/// muteOnJoin, lockMeeting, …) is a key-add, not a migration.
+///
+/// Tolerant `fromJson`: missing keys default to `true` so a
+/// pre-feature meeting row (or a server that hasn't included the
+/// blob yet) reads as "permissive" rather than locking the room
+/// down accidentally.
+class MeetingPermissions {
+  final bool allowParticipantsToInvite;
+
+  const MeetingPermissions({
+    this.allowParticipantsToInvite = true,
+  });
+
+  factory MeetingPermissions.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const MeetingPermissions();
+    return MeetingPermissions(
+      allowParticipantsToInvite: json['allowParticipantsToInvite'] as bool? ??
+          json['allow_participants_to_invite'] as bool? ??
+          true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'allowParticipantsToInvite': allowParticipantsToInvite,
+      };
+
+  MeetingPermissions copyWith({bool? allowParticipantsToInvite}) {
+    return MeetingPermissions(
+      allowParticipantsToInvite:
+          allowParticipantsToInvite ?? this.allowParticipantsToInvite,
+    );
+  }
+}
+
 class Meeting {
   final String id;
   final String title;
@@ -116,6 +154,7 @@ class Meeting {
   final String code;
   final List<String> participants;
   final String? hostId;
+  final MeetingPermissions permissions;
 
   Meeting({
     required this.id,
@@ -124,6 +163,7 @@ class Meeting {
     required this.code,
     required this.participants,
     this.hostId,
+    this.permissions = const MeetingPermissions(),
   });
 
   factory Meeting.fromJson(Map<String, dynamic> json) {
@@ -134,6 +174,8 @@ class Meeting {
       code: MeetingUtils.extractCode((json['meeting_code'] ?? json['code'] ?? json['meetingId'] ?? json['id']?.toString() ?? '').toString()),
       participants: (json['participants'] as List?)?.map((e) => e.toString()).toList() ?? [],
       hostId: json['host_id']?.toString() ?? json['hostId']?.toString() ?? json['creator_id']?.toString(),
+      permissions: MeetingPermissions.fromJson(
+          json['permissions'] as Map<String, dynamic>?),
     );
   }
 }

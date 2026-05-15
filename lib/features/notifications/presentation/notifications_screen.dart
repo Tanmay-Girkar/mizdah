@@ -184,6 +184,14 @@ class NotificationsScreen extends ConsumerWidget {
         return id != null ? '/pre-join/$id' : '/meetings';
       case 'meeting_cancelled':
         return '/meetings';
+      case 'in_call_invite':
+        // Added in-call invite — someone tapped + Add in a live
+        // meeting/call. Drop straight into pre-join so the user
+        // sees their camera preview before joining (avoids the
+        // "joined the call with my mic on by accident" surprise).
+        // See docs/ADD_PARTICIPANT_BACKEND.md §3.
+        final code = str('meetingCode') ?? str('meeting_code');
+        return code != null ? '/pre-join/$code' : null;
       case 'recording_ready':
         final code = str('meetingCode') ?? str('meeting_code');
         return code != null ? '/recordings/$code' : null;
@@ -384,6 +392,7 @@ class _NotificationTile extends StatelessWidget {
         return const _TypeMeta(Icons.event_available_rounded, Color(0xFF6C63FF));
       case 'meeting_reminder':
       case 'meeting_started':
+      case 'in_call_invite':
         return const _TypeMeta(Icons.videocam_rounded, Color(0xFF8B5CF6));
       case 'meeting_cancelled':
         return const _TypeMeta(Icons.event_busy_rounded, Color(0xFFB42318));

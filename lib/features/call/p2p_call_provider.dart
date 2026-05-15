@@ -25,10 +25,12 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'dart:async';
 
+import '../../core/navigation/app_router.dart';
 import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
 import '../../core/services/renderer_manager.dart';
 import '../../core/services/ringtone_service.dart';
+import '../../data/repositories/in_call_invite_repository.dart';
 import '../settings/video_preferences_provider.dart';
 import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
@@ -202,6 +204,12 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
   }
 
   ProviderSubscription<OutgoingVideoQuality>? _qualityListenerOff;
+
+  /// Set to true RIGHT before a promoted-to-meeting teardown so the
+  /// `onCallEnded` rating-prompt branch knows to skip. The meeting
+  /// continuation will own the rating event on its own leave.
+  /// Cleared automatically inside `_scheduleResetToIdle`.
+  bool _suppressNextRatingPrompt = false;
 
   final Ref _ref;
   final P2PCallService _service = P2PCallService();
@@ -504,19 +512,25 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
       );
       _scheduleResetToIdle();
 
-      // Fire-and-forget post-call rating eligibility check. All the
-      // gates (duration, sample rate, cooldown) live in the rating
-      // provider; we hand it the context and walk away.
-      // ignore: discarded_futures
-      _ref.read(callRatingProvider.notifier).maybePromptFor(
-            RatingPromptRequest(
-              callId: callId,
-              kind: ratedKind,
-              peerOrMeetingName: ratedPeerName,
-              duration: ratedDuration,
-              wasAnswered: answered,
-            ),
-          );
+      // Skip the rating prompt when this teardown is part of a
+      // P2P→meeting promotion — the meeting will own that event.
+      if (_suppressNextRatingPrompt) {
+        _suppressNextRatingPrompt = false;
+      } else {
+        // Fire-and-forget post-call rating eligibility check. All
+        // the gates (duration, sample rate, cooldown) live in the
+        // rating provider; we hand it the context and walk away.
+        // ignore: discarded_futures
+        _ref.read(callRatingProvider.notifier).maybePromptFor(
+              RatingPromptRequest(
+                callId: callId,
+                kind: ratedKind,
+                peerOrMeetingName: ratedPeerName,
+                duration: ratedDuration,
+                wasAnswered: answered,
+              ),
+            );
+      }
     };
 
     _service.onCalleeOffline = (callId) async {
@@ -544,6 +558,34 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         phase: P2PCallPhase.active,
         mediaConnected: true,
       );
+    };
+
+    // The P2P call was promoted to a meeting (either by us or by
+    // the other peer). Tear down the P2P session WITHOUT firing
+    // the post-call rating prompt — the meeting we're about to
+    // join is the continuation of this call. Then navigate to
+    // the meeting room. See docs/ADD_PARTICIPANT_BACKEND.md §3
+    // (rating-prompt interaction section).
+    _service.onPromotedToMeeting = (meetingId, meetingCode) async {
+      debugPrint('[P2P] onPromotedToMeeting → /meeting/$meetingCode');
+      _stopRingtoneSilently();
+      _cancelLifecycleTimers();
+      // Mark the rating gate so the maybePromptFor that
+      // _scheduleResetToIdle would otherwise queue is skipped —
+      // the meeting will own the rating prompt on its own leave.
+      _suppressNextRatingPrompt = true;
+      await _disposeRenderers();
+      state = state.copyWith(
+        phase: P2PCallPhase.ended,
+        clearRenderers: true,
+        mediaConnected: false,
+        minimized: false,
+      );
+      _scheduleResetToIdle();
+      // Replace the current location with the meeting route. go()
+      // unwinds the navigator stack rather than pushing — no "back
+      // to the now-defunct ringing call screen" affordance.
+      appRouter.go('/meeting/$meetingCode');
     };
 
     _service.onLocalStream = (stream) async {
@@ -902,6 +944,52 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
         'phase=${state.phase}');
     debugPrint('==============================');
     state = state.copyWith(minimized: false);
+  }
+
+  /// Promote the active P2P call to a 3+ way meeting and invite the
+  /// supplied user. Both existing peers receive `p2p:promoted` over
+  /// signaling and transparently move to the new meeting room
+  /// (handled in `onPromotedToMeeting`). The invitee receives an
+  /// `in_call_invite` via FCM + socket.
+  ///
+  /// Returns null on success; a humanised error message on failure
+  /// (caller shows snackbar). See docs/ADD_PARTICIPANT_BACKEND.md §3.
+  Future<String?> promoteToMeeting({
+    String? inviteeUserId,
+    String? inviteeEmail,
+  }) async {
+    final callId = state.callId;
+    if (callId == null || callId.isEmpty) {
+      return "You're not in a call.";
+    }
+    try {
+      await _ref
+          .read(inCallInviteRepositoryProvider)
+          .promoteToMeeting(
+            callId: callId,
+            inviteeUserId: inviteeUserId,
+            inviteeEmail: inviteeEmail,
+          );
+      // No state change here — the navigator transition happens
+      // when `p2p:promoted` arrives over the socket (handled in
+      // onPromotedToMeeting). That keeps the local + remote peer
+      // flows identical, which is critical for the rating
+      // suppression to work on BOTH sides.
+      return null;
+    } on InCallInviteError catch (e) {
+      return switch (e) {
+        AlreadyPromotedError() =>
+          'Already promoted this call. Wait for the other person to join.',
+        CannotInviteSelfError() => "You can't invite yourself.",
+        ForbiddenNotParticipantError() ||
+        ForbiddenNotHostError() =>
+          "You're no longer in this call.",
+        RateLimitedError() => 'Too many invites — slow down a bit.',
+        _ => 'Could not add to call. Try again.',
+      };
+    } catch (_) {
+      return 'Could not add to call. Try again.';
+    }
   }
 
   void toggleAudio() {

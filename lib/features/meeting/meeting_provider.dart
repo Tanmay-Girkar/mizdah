@@ -15,6 +15,8 @@ import '../../core/services/video_quality_profile.dart';
 import '../settings/video_preferences_provider.dart';
 import '../../data/repositories/meeting_repository.dart';
 import '../../data/models/call_rating_models.dart';
+import '../../data/models/models.dart';
+import '../../data/repositories/in_call_invite_repository.dart';
 import '../feedback/call_rating_provider.dart';
 
 // Tag for filtering WebRTC/signaling logs in production builds.
@@ -133,6 +135,17 @@ class MeetingState {
   /// in the consent banner so participants know who initiated.
   final String? recordingHostName;
 
+  /// Host-controlled toggles, currently just
+  /// `allowParticipantsToInvite`. See
+  /// docs/ADD_PARTICIPANT_BACKEND.md §2a. Read whenever the
+  /// meeting JOINED event arrives; updated in real time via the
+  /// `meeting:permissions-changed` socket event so a host flip
+  /// hides/shows the `+ Add` button on every other client within
+  /// one frame. Defaults to permissive (allow-anyone) so a server
+  /// that doesn't yet emit the field reads as the pre-feature
+  /// behaviour.
+  final MeetingPermissions permissions;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -170,6 +183,7 @@ class MeetingState {
     this.isRecordingActive = false,
     this.activeRecordingId,
     this.recordingHostName,
+    this.permissions = const MeetingPermissions(),
   });
 
   MeetingState copyWith({
@@ -215,6 +229,7 @@ class MeetingState {
     bool clearActiveRecordingId = false,
     String? recordingHostName,
     bool clearRecordingHostName = false,
+    MeetingPermissions? permissions,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -268,6 +283,7 @@ class MeetingState {
       recordingHostName: clearRecordingHostName
           ? null
           : (recordingHostName ?? this.recordingHostName),
+      permissions: permissions ?? this.permissions,
     );
   }
 }
@@ -1281,9 +1297,131 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
     });
 
+    // Host flipped the Allow-Participants-to-Invite toggle. Mirror
+    // the new flag into local state so every non-host's `+ Add`
+    // button hides/shows within one frame. See
+    // docs/ADD_PARTICIPANT_BACKEND.md §2b for the event shape.
+    _socket?.on('meeting:permissions-changed', (data) {
+      if (!mounted || _disposed) return;
+      final perms = data is Map ? data['permissions'] : null;
+      if (perms is! Map) return;
+      final updated = MeetingPermissions.fromJson(
+          Map<String, dynamic>.from(perms));
+      _log('meeting:permissions-changed allowParticipantsToInvite=${updated.allowParticipantsToInvite}');
+      state = state.copyWith(permissions: updated);
+    });
+
+    // Someone in the meeting invited a new user via the Add
+    // Participant flow. Surface a quick "Inviting Farhan…" toast
+    // for the rest of the room so the in-meeting UI explains why
+    // a new tile is about to appear. The actual join event still
+    // arrives via the existing `user-joined` flow.
+    _socket?.on('meeting:in-call-invite', (data) {
+      if (!mounted || _disposed) return;
+      final inviterName = (data is Map ? data['callerName'] : null) as String?;
+      final inviteeName =
+          (data is Map ? data['inviteeName'] : null) as String?;
+      _log('meeting:in-call-invite from=$inviterName to=$inviteeName');
+      // No state mutation needed — host-side already saw the
+      // optimistic snackbar from add_participant_sheet. This
+      // listener exists so a debug build can log the fan-out
+      // received correctly.
+    });
+
     _chatSocket?.on('chat-receive', _handleNewMessage);
     _chatSocket?.on('chat-message', _handleNewMessage);
     _chatSocket?.on('new-message', _handleNewMessage);
+  }
+
+  // ── Add participant (Phase 3 of ADD_PARTICIPANT_BACKEND.md) ─────
+
+  /// Wraps the live-meeting invite endpoint with the right error
+  /// translation for the UI. Returns null on success; the error
+  /// message on failure (already humanised — pass straight to a
+  /// snackbar).
+  ///
+  /// Most call sites use [showAddParticipantSheet] which handles
+  /// this internally; this method exists for callers that already
+  /// have a target user picked (e.g. tapping someone in the
+  /// participants list).
+  Future<String?> inviteToLiveMeeting({
+    String? inviteeUserId,
+    String? inviteeEmail,
+  }) async {
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    try {
+      await _ref
+          .read(inCallInviteRepositoryProvider)
+          .inviteToLiveMeeting(
+            meetingId: meetingId,
+            inviteeUserId: inviteeUserId,
+            inviteeEmail: inviteeEmail,
+          );
+      return null;
+    } on InCallInviteError catch (e) {
+      return _humaniseInviteError(e);
+    } catch (_) {
+      return 'Could not send invite. Try again.';
+    }
+  }
+
+  /// Host-only — flip the allowParticipantsToInvite flag. Optimistic
+  /// update on the local state for instant feedback; the real source
+  /// of truth comes back via the meeting:permissions-changed socket
+  /// event the server fans to every participant (including us).
+  /// Returns the error message on failure for snackbar use; null on
+  /// success.
+  Future<String?> setAllowParticipantsToInvite(bool value) async {
+    if (!state.isHost) return 'Only the host can change this.';
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    // Optimistic local flip so the toggle UI is instantaneous.
+    final previous = state.permissions;
+    state = state.copyWith(
+      permissions: previous.copyWith(allowParticipantsToInvite: value),
+    );
+    try {
+      final updated = await _ref
+          .read(inCallInviteRepositoryProvider)
+          .setPermissions(
+            meetingId: meetingId,
+            permissions: previous.copyWith(allowParticipantsToInvite: value),
+          );
+      if (!mounted || _disposed) return null;
+      state = state.copyWith(permissions: updated);
+      return null;
+    } on InCallInviteError catch (e) {
+      // Roll back the optimistic flip so the toggle reflects truth.
+      if (mounted && !_disposed) {
+        state = state.copyWith(permissions: previous);
+      }
+      return _humaniseInviteError(e);
+    } catch (_) {
+      if (mounted && !_disposed) {
+        state = state.copyWith(permissions: previous);
+      }
+      return 'Could not save. Try again.';
+    }
+  }
+
+  String _humaniseInviteError(InCallInviteError e) {
+    return switch (e) {
+      InviteNotAllowedByHostError() =>
+        'Host has disabled invites for participants.',
+      ForbiddenNotParticipantError() =>
+        "You're no longer in this meeting.",
+      ForbiddenNotHostError() => 'Only the host can do that.',
+      AlreadyInMeetingError() => "They're already in the meeting.",
+      CannotInviteSelfError() => "You can't invite yourself.",
+      MeetingFullError() => 'Meeting is full.',
+      RateLimitedError() => 'Too many requests — slow down a bit.',
+      _ => 'Could not send invite. Try again.',
+    };
   }
 
   void _handleNewMessage(data) {

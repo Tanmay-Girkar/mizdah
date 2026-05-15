@@ -295,6 +295,14 @@ class P2PCallService {
   /// Fires when the WebRTC handshake completes (ICE connected).
   void Function()? onMediaConnected;
 
+  /// Fires when the server promotes this P2P call to a meeting room
+  /// (someone in the call tapped `+ Add`). Both peers receive this
+  /// — the existing P2P session tears down and the meeting room
+  /// route is pushed with the supplied [meetingCode]. The new third
+  /// participant joins via a separate `meeting:in-call-invite`.
+  /// See docs/ADD_PARTICIPANT_BACKEND.md §3.
+  void Function(String meetingId, String meetingCode)? onPromotedToMeeting;
+
   /// Fires when the local renderer is wired up.
   void Function(MediaStream)? onLocalStream;
 
@@ -454,6 +462,20 @@ class P2PCallService {
       _log('call-user-offline callId=$callId');
       onCalleeOffline?.call(callId);
       _resetCallState();
+    });
+
+    // Server-side promotion of this P2P call to an SFU meeting room.
+    // Fired on BOTH peers in the call. Payload carries the new
+    // meeting code so the client can push /meeting/:code and the
+    // existing peers transparently become the first two
+    // participants. See docs/ADD_PARTICIPANT_BACKEND.md §3 + §4.
+    socket.on('p2p:promoted', (raw) {
+      if (raw is! Map) return;
+      final meetingId = raw['meetingId']?.toString() ?? '';
+      final meetingCode = raw['meetingCode']?.toString() ?? '';
+      _log('p2p:promoted meetingCode=$meetingCode meetingId=$meetingId');
+      if (meetingCode.isEmpty) return;
+      onPromotedToMeeting?.call(meetingId, meetingCode);
     });
 
     // ── Peer media-state — peer toggled their mic / camera ─────────

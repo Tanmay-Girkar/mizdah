@@ -6,6 +6,7 @@ import '../../../core/services/renderer_manager.dart';
 import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
 import '../../settings/privacy_preferences_provider.dart';
+import 'add_participant_sheet.dart';
 import 'meeting_effects_sheet.dart';
 import 'widgets/present_source_picker.dart';
 import 'widgets/remote_control_dialog.dart';
@@ -706,6 +707,32 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
         isCaptionsEnabled: ref.watch(captionServiceProvider(widget.meetingId)).isEnabled,
         isOnTheGoMode:
             ref.watch(meetingProvider(widget.meetingId)).isOnTheGoMode,
+        // Add Participant — gated by host's
+        // permissions.allowParticipantsToInvite flag. Host always
+        // sees it; non-hosts only see it when allowed. Setting the
+        // callback to null hides the row entirely.
+        onAddParticipant: () {
+          final mState = ref.read(meetingProvider(widget.meetingId));
+          final allowed = mState.isHost ||
+              mState.permissions.allowParticipantsToInvite;
+          if (!allowed) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Host has disabled invites for participants.'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+            Navigator.pop(context);
+            return;
+          }
+          Navigator.pop(context);
+          final dbId = mState.meetingId;
+          if (dbId == null || dbId.isEmpty) return;
+          showAddParticipantSheet(
+            context,
+            session: AddParticipantSessionContext.meeting(meetingId: dbId),
+          );
+        },
       ),
     );
   }
@@ -2685,6 +2712,7 @@ class _MoreOptionsSheet extends StatelessWidget {
   final VoidCallback onToggleCaptions;
   final VoidCallback onToggleOnTheGo;
   final VoidCallback onOpenEffects;
+  final VoidCallback? onAddParticipant;
   final bool isScreenSharing;
   final bool isCaptionsEnabled;
   final bool isOnTheGoMode;
@@ -2700,6 +2728,7 @@ class _MoreOptionsSheet extends StatelessWidget {
     required this.onToggleCaptions,
     required this.onToggleOnTheGo,
     required this.onOpenEffects,
+    this.onAddParticipant,
     required this.isScreenSharing,
     required this.isCaptionsEnabled,
     required this.isOnTheGoMode,
@@ -2798,6 +2827,21 @@ class _MoreOptionsSheet extends StatelessWidget {
                 isWideRow: true,
                 onTap: onOpenEffects,
               ),
+
+              // Add participant — opens the picker bottom sheet,
+              // hits POST /api/meeting/:id/invite-in-call on tap.
+              // Hidden for non-hosts when the host has flipped the
+              // permission toggle off (see HostControlsView). Null
+              // callback in the parent caller hides the row.
+              if (onAddParticipant != null) ...[
+                const SizedBox(height: 8),
+                _SheetButton(
+                  icon: Icons.person_add_alt_1_rounded,
+                  label: 'Add participant',
+                  isWideRow: true,
+                  onTap: onAddParticipant!,
+                ),
+              ],
 
               const SizedBox(height: 8),
 
@@ -3632,6 +3676,34 @@ class _HostControlsViewState extends ConsumerState<_HostControlsView> {
             fontSize: 13,
             fontWeight: FontWeight.bold,
           ),
+        ),
+        const SizedBox(height: 12),
+        // Allow non-hosts to use the Add Participant flow. Backed by
+        // meetings.permissions.allowParticipantsToInvite — flipping
+        // here PATCHes the meeting and fans
+        // meeting:permissions-changed to every participant socket.
+        // See docs/ADD_PARTICIPANT_BACKEND.md §2a/§2b.
+        _ControlToggle(
+          title: 'Allow participants to invite',
+          subtitle:
+              'Anyone in the meeting can add another participant.',
+          value: ref
+              .watch(meetingProvider(widget.meetingId))
+              .permissions
+              .allowParticipantsToInvite,
+          onChanged: (v) async {
+            final err = await ref
+                .read(meetingProvider(widget.meetingId).notifier)
+                .setAllowParticipantsToInvite(v);
+            if (err != null && context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(err),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          },
         ),
         const SizedBox(height: 12),
         _ControlToggle(
