@@ -17,6 +17,9 @@ import 'package:mediasoup_client_flutter/src/handlers/handler_interface.dart'
     show RTCIceServer, RTCIceCredentialType;
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
+import '../../features/settings/video_preferences_provider.dart';
+import 'video_quality_profile.dart';
+
 /// ICE servers handed to the WebRTC transports. Mirrors the deployed
 /// web client's default (Google's public STUN). Mobile previously
 /// sent only host candidates so transports survived a few seconds in
@@ -116,6 +119,14 @@ class SFUService {
   Producer? _audioProducer;
   Producer? _videoProducer;
   Producer? _screenProducer;
+
+  /// Current outgoing-video quality preset. Set by the meeting
+  /// notifier from `outgoingVideoQualityProvider`. Applied to the
+  /// video producer's underlying RTCRtpSender as soon as we have
+  /// one (in `_handleProducerCreated`) AND whenever the user moves
+  /// the dial mid-call (via `applyVideoQuality`). Default Auto
+  /// matches the provider's default.
+  OutgoingVideoQuality _quality = OutgoingVideoQuality.auto;
 
   // Per-kind in-flight gates. produceX() awaits the matching
   // completer and clears it once the producer has been recorded so
@@ -490,8 +501,33 @@ class SFUService {
         _videoProducer = producer;
         _pendingVideo?.complete();
         _pendingVideo = null;
+        // Apply the user's current quality preset to the freshly-
+        // created sender. Fire-and-forget — the bitrate caps don't
+        // need to be in place before the producer is reported back
+        // to the notifier; WebRTC will start with sane defaults
+        // and ramp into our cap on the first congestion check.
+        // ignore: discarded_futures
+        _applyQualityToVideoProducer();
       }
     }
+  }
+
+  Future<void> _applyQualityToVideoProducer() async {
+    final sender = _videoProducer?.rtpSender;
+    if (sender == null) return;
+    final profile = VideoQualityProfile.forQuality(_quality);
+    final ok = await profile.applyToSender(sender);
+    _log('[SFU] applied quality=${_quality.name} '
+        '(maxBitrate=${profile.maxBitrate ~/ 1000}kbps) ok=$ok');
+  }
+
+  /// Push the active video producer's encoder caps to match the
+  /// supplied preset. Called by `MeetingNotifier` when the user
+  /// changes the dial in the effects sheet mid-meeting. Cheap —
+  /// just sets new RTP encoding parameters; no track replace.
+  Future<void> applyVideoQuality(OutgoingVideoQuality q) async {
+    _quality = q;
+    await _applyQualityToVideoProducer();
   }
 
   void _handleExistingProducers(dynamic data) {

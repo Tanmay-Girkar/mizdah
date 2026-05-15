@@ -11,6 +11,8 @@ import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
 import '../../core/services/network_resilience_service.dart';
 import '../../core/services/local_media_service.dart';
+import '../../core/services/video_quality_profile.dart';
+import '../settings/video_preferences_provider.dart';
 import '../../data/repositories/meeting_repository.dart';
 import '../../data/models/call_rating_models.dart';
 import '../feedback/call_rating_provider.dart';
@@ -336,13 +338,33 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   // never re-initialised when navigating between pre-join and the
   // meeting room.
   MeetingNotifier(this._ref)
-      : super(MeetingState(localRenderer: LocalMediaService.instance.renderer));
+      : super(MeetingState(localRenderer: LocalMediaService.instance.renderer)) {
+    // Pre-seed LocalMediaService with whatever Auto/720p/1080p the
+    // user has saved so the FIRST getUserMedia call honors it. Then
+    // listen for live changes and push them to both the camera (no-
+    // op until next acquire) AND the active SFU video producer
+    // (takes effect immediately via setParameters).
+    final initial = _ref.read(outgoingVideoQualityProvider);
+    LocalMediaService.instance.setQuality(initial);
+    _qualityListenerOff = _ref.listen<OutgoingVideoQuality>(
+      outgoingVideoQualityProvider,
+      (_, next) {
+        LocalMediaService.instance.setQuality(next);
+        // ignore: discarded_futures
+        _sfuService?.applyVideoQuality(next);
+      },
+    );
+  }
 
   /// Riverpod ref — used to fire the post-meeting rating prompt
   /// after `leaveMeeting()`. Held as a field because the trigger
   /// fires from arbitrary callback paths (socket end-meeting,
   /// network drop, user-tap-leave) rather than a single build.
   final Ref _ref;
+
+  /// Subscription to the outgoing-video-quality provider; cancelled
+  /// in dispose() so the listener doesn't outlive this notifier.
+  ProviderSubscription<OutgoingVideoQuality>? _qualityListenerOff;
 
   /// When the user actually entered the meeting room (phase
   /// transitioned to `inMeeting`). Used to compute duration for the
@@ -1461,27 +1483,17 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
 
   /// Bumps a video sender's encoder ceiling so peers see a sharp
   /// stream instead of a blurry low-bitrate fallback. Called once
-  /// per peer right after addTrack().
+  /// per peer right after addTrack() on the legacy mesh path
+  /// (pre-SFU mode); the SFU producer has its own apply call in
+  /// `SFUService._applyQualityToVideoProducer`.
   ///
-  /// flutter_webrtc exposes `getParameters` / `setParameters` on
-  /// `RTCRtpSender`. We mutate the first encoding's `maxBitrate`
-  /// (1.5 Mbps) and `minBitrate` (300 kbps), and request that the
-  /// encoder degrade framerate before resolution under congestion
-  /// — sharpness matters more than smoothness for a face-on call.
+  /// Reads the current `outgoingVideoQualityProvider` so the user's
+  /// Auto/720p/1080p choice actually drives the encoder ceiling
+  /// instead of being silently ignored.
   Future<void> _tuneVideoSender(RTCRtpSender sender) async {
-    final params = sender.parameters;
-    final encodings = params.encodings;
-    if (encodings == null || encodings.isEmpty) {
-      // No encoding slot exposed by this build — bail silently.
-      return;
-    }
-    for (final enc in encodings) {
-      enc.maxBitrate = 1500 * 1000; // 1.5 Mbps
-      enc.minBitrate = 300 * 1000;  // 300 kbps
-      enc.maxFramerate = 30;
-    }
-    params.degradationPreference = RTCDegradationPreference.MAINTAIN_RESOLUTION;
-    await sender.setParameters(params);
+    final quality = _ref.read(outgoingVideoQualityProvider);
+    final profile = VideoQualityProfile.forQuality(quality);
+    await profile.applyToSender(sender);
   }
 
   /// Polls every peer connection's `getStats()` for `audioLevel`
@@ -3303,6 +3315,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   @override
   void dispose() {
     _disposed = true;
+    _qualityListenerOff?.close();
+    _qualityListenerOff = null;
     _waitingListTimer?.cancel();
     leaveMeeting();
     // DON'T dispose state.localRenderer — it's the singleton's. Doing

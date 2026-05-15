@@ -72,6 +72,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../config/api_config.dart';
+import '../../features/settings/video_preferences_provider.dart';
+import 'video_quality_profile.dart';
 
 /// RFC-4122 v4 UUID, just enough for callIds. We avoid pulling in the
 /// `uuid` package since the rest of the app doesn't need it.
@@ -251,6 +253,13 @@ class P2PCallService {
   bool _isCaller = false;
 
   RTCPeerConnection? _pc;
+
+  /// Current outgoing-video quality preset. Drives the maxBitrate
+  /// cap we set on the video sender via setParameters. Updated by
+  /// `P2PCallNotifier` from `outgoingVideoQualityProvider` so the
+  /// user's Auto/720p/1080p choice actually affects what the peer
+  /// receives.
+  OutgoingVideoQuality _quality = OutgoingVideoQuality.auto;
   MediaStream? _localStream;
   // Tracks an in-flight `getUserMedia()` so concurrent callers (e.g.
   // the overlay starting a warm-up preview just as the user taps
@@ -1040,6 +1049,13 @@ class P2PCallService {
       if (attachedIds.contains(track.id)) continue;
       await _pc!.addTrack(track, stream);
     }
+    // Apply the user's outgoing-quality preset to the video sender
+    // RIGHT after addTrack — before negotiation, so the SDP carries
+    // the matching bitrate caps. Without this the encoder runs at
+    // WebRTC's defaults (often 3-5 Mbps on a good link) regardless
+    // of what the user picked in the effects sheet.
+    // ignore: discarded_futures
+    _applyQualityToVideoSender();
     // Proactively tell the peer about our starting media state.
     // Without this, the peer doesn't know our camera is on until we
     // first toggle it — which means the peer's `call-media-state`
@@ -1173,5 +1189,32 @@ class P2PCallService {
     _disposed = true;
     await _tearDownPeer();
     await _disconnectSocketOnly();
+  }
+
+  // ── Outgoing video quality ──────────────────────────────────────
+
+  /// Walk the peer connection's senders, find the video one, and
+  /// push the current quality preset's bitrate caps via
+  /// `setParameters`. No-ops silently when there's no video sender
+  /// yet (audio-only call, or addTrack hasn't run).
+  Future<void> _applyQualityToVideoSender() async {
+    final pc = _pc;
+    if (pc == null) return;
+    final senders = await pc.getSenders();
+    final profile = VideoQualityProfile.forQuality(_quality);
+    for (final s in senders) {
+      if (s.track?.kind != 'video') continue;
+      final ok = await profile.applyToSender(s);
+      _log('applied quality=${_quality.name} '
+          '(maxBitrate=${profile.maxBitrate ~/ 1000}kbps) ok=$ok');
+    }
+  }
+
+  /// Public knob the notifier uses to push a new quality preset to
+  /// the live call. Cheap — just an `RTCRtpSender.setParameters`
+  /// call; no track-replace, no re-negotiation.
+  Future<void> applyVideoQuality(OutgoingVideoQuality q) async {
+    _quality = q;
+    await _applyQualityToVideoSender();
   }
 }

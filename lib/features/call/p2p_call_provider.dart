@@ -29,6 +29,7 @@ import '../../core/services/ongoing_call_fg_service.dart';
 import '../../core/services/p2p_call_service.dart';
 import '../../core/services/renderer_manager.dart';
 import '../../core/services/ringtone_service.dart';
+import '../settings/video_preferences_provider.dart';
 import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
 import '../auth/auth_provider.dart';
@@ -186,7 +187,21 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
     _ref.listen<AuthState>(authProvider, (prev, next) {
       _onAuthChanged(prev, next);
     }, fireImmediately: true);
+    // Mirror the outgoing-video-quality preference into the live
+    // P2P sender whenever the user moves the dial. Without this the
+    // setting is just decorative — see video_quality_profile.dart
+    // for what the bitrate caps actually do.
+    _service.applyVideoQuality(_ref.read(outgoingVideoQualityProvider));
+    _qualityListenerOff = _ref.listen<OutgoingVideoQuality>(
+      outgoingVideoQualityProvider,
+      (_, next) {
+        // ignore: discarded_futures
+        _service.applyVideoQuality(next);
+      },
+    );
   }
+
+  ProviderSubscription<OutgoingVideoQuality>? _qualityListenerOff;
 
   final Ref _ref;
   final P2PCallService _service = P2PCallService();
@@ -1166,6 +1181,8 @@ class P2PCallNotifier extends StateNotifier<P2PCallState> {
 
   @override
   void dispose() {
+    _qualityListenerOff?.close();
+    _qualityListenerOff = null;
     _cancelLifecycleTimers();
     _stopRingtoneSilently();
     _disposeRenderers();

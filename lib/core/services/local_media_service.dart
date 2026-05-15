@@ -2,6 +2,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../../features/settings/video_preferences_provider.dart';
+import 'video_quality_profile.dart';
+
 /// App-wide owner of the local camera + microphone and the
 /// RTCVideoRenderer that displays them.
 ///
@@ -57,11 +60,32 @@ class LocalMediaService {
   /// detects that an underlying track has died (camera-app stole
   /// the device, OS reclaimed mic on resume, etc.) — without this
   /// the cache would happily return the dead stream forever.
+  /// Remember the active profile across calls so `_doInit` knows
+  /// which constraints to ask for. Defaults to Auto until a notifier
+  /// passes in something more specific.
+  OutgoingVideoQuality _quality = OutgoingVideoQuality.auto;
+
+  /// Update the cached profile. Called from MeetingNotifier /
+  /// P2PCallNotifier when the user moves the dial mid-call, OR at
+  /// initialize-time via the [quality] arg. Note: changing this on
+  /// an already-running camera does NOT auto-re-acquire the stream —
+  /// re-acquire is heavy and would interrupt the call. The bitrate
+  /// half of the profile is applied to the live sender separately
+  /// via `VideoQualityProfile.applyToSender`, which DOES take effect
+  /// immediately. The new resolution kicks in on the next acquire.
+  void setQuality(OutgoingVideoQuality q) {
+    _quality = q;
+  }
+
+  OutgoingVideoQuality get quality => _quality;
+
   Future<void> initialize({
     bool video = true,
     bool audio = true,
     bool force = false,
+    OutgoingVideoQuality? quality,
   }) async {
+    if (quality != null) _quality = quality;
     _shutdownTimer?.cancel();
     _shutdownTimer = null;
 
@@ -122,17 +146,16 @@ class LocalMediaService {
       _log('renderer initialised (textureId=${_renderer!.textureId})');
     }
 
-    // Camera.
+    // Camera — resolution + framerate hints come from the active
+    // quality profile (Auto / 720p / 1080p) instead of being
+    // hardcoded. See video_quality_profile.dart for the mapping.
+    final profile = VideoQualityProfile.forQuality(_quality);
     final constraints = <String, dynamic>{
       'audio': _audioRequested,
-      'video': _videoRequested
-          ? {
-              'facingMode': 'user',
-              'width': {'ideal': 1280},
-              'height': {'ideal': 720},
-            }
-          : false,
+      'video': _videoRequested ? profile.cameraConstraints : false,
     };
+    _log('getUserMedia with quality=${_quality.name} '
+        '(${profile.width}×${profile.height} @${profile.maxFramerate}fps)');
     final stream = await navigator.mediaDevices.getUserMedia(constraints);
     _stream = stream;
     _renderer!.srcObject = stream;

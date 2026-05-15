@@ -104,11 +104,17 @@ class MeetingEffectsSheet extends ConsumerWidget {
 
               // ── Touch up appearance ────────────────────────────
               // Continuous slider — different shape from the picker
-              // rows below, kept as-is.
-              _TouchUpRow(
-                value: touchUp,
-                onChanged: (v) =>
-                    ref.read(touchUpIntensityProvider.notifier).set(v),
+              // rows below, kept as-is. Wrapped in `_ComingSoonOverlay`
+              // because the real-time skin-smoothing shader is still
+              // in native R&D (see docs/VIDEO_EFFECTS_BACKEND.md).
+              // The slider still works locally so users can preview
+              // the affordance; the value never reaches the wire.
+              _ComingSoonOverlay(
+                child: _TouchUpRow(
+                  value: touchUp,
+                  onChanged: (v) =>
+                      ref.read(touchUpIntensityProvider.notifier).set(v),
+                ),
               ),
               const SizedBox(height: 12),
 
@@ -125,36 +131,40 @@ class MeetingEffectsSheet extends ConsumerWidget {
                 ),
                 child: Column(
                   children: [
-                    MizdahPickerRow<BackgroundBlurLevel>(
-                      icon: Icons.blur_on_rounded,
-                      label: 'Background blur',
-                      sublabel: _blurSubtitle(blur),
-                      value: blur,
-                      sheetTitle: 'Background blur',
-                      sheetSubtitle:
-                          'Hide what\'s behind you while you\'re on camera.',
-                      options: const [
-                        MizdahPickerOption(
-                          value: BackgroundBlurLevel.none,
-                          label: 'None',
-                          description: 'Show the room behind you.',
-                        ),
-                        MizdahPickerOption(
-                          value: BackgroundBlurLevel.light,
-                          label: 'Light',
-                          description:
-                              'Mild blur — subject stays crisp, room becomes soft.',
-                        ),
-                        MizdahPickerOption(
-                          value: BackgroundBlurLevel.strong,
-                          label: 'Strong',
-                          description:
-                              'Heavy blur — background reads as a soft colour wash.',
-                        ),
-                      ],
-                      onChanged: (v) => ref
-                          .read(backgroundBlurProvider.notifier)
-                          .set(v),
+                    // Background blur — segmentation model + custom
+                    // VideoCapturer needed; native R&D track.
+                    _ComingSoonOverlay(
+                      child: MizdahPickerRow<BackgroundBlurLevel>(
+                        icon: Icons.blur_on_rounded,
+                        label: 'Background blur',
+                        sublabel: _blurSubtitle(blur),
+                        value: blur,
+                        sheetTitle: 'Background blur',
+                        sheetSubtitle:
+                            'Hide what\'s behind you while you\'re on camera.',
+                        options: const [
+                          MizdahPickerOption(
+                            value: BackgroundBlurLevel.none,
+                            label: 'None',
+                            description: 'Show the room behind you.',
+                          ),
+                          MizdahPickerOption(
+                            value: BackgroundBlurLevel.light,
+                            label: 'Light',
+                            description:
+                                'Mild blur — subject stays crisp, room becomes soft.',
+                          ),
+                          MizdahPickerOption(
+                            value: BackgroundBlurLevel.strong,
+                            label: 'Strong',
+                            description:
+                                'Heavy blur — background reads as a soft colour wash.',
+                          ),
+                        ],
+                        onChanged: (v) => ref
+                            .read(backgroundBlurProvider.notifier)
+                            .set(v),
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -332,5 +342,49 @@ class _TouchUpRow extends StatelessWidget {
     if (v < 31) return 'Light skin smoothing — looks natural.';
     if (v < 71) return 'Stronger smoothing with a brightness lift.';
     return 'Aggressive smoothing — can look painterly.';
+  }
+}
+
+/// Wraps a row with a small "Coming soon" pill in the top-right
+/// corner. Used on Touch up + Background blur until the native
+/// segmentation + skin-smoothing plugin lands. The control underneath
+/// still receives taps + saves the value so the affordance demos
+/// cleanly, but nothing is applied to the outgoing video.
+class _ComingSoonOverlay extends StatelessWidget {
+  final Widget child;
+  const _ComingSoonOverlay({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(
+          top: 10,
+          right: 14,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: MizdahTokens.iconTileBg(context),
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(
+                color: MizdahTokens.border(context),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              'Coming soon',
+              style: TextStyle(
+                color: MizdahTokens.mutedOf(context),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
