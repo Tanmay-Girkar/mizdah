@@ -18,6 +18,7 @@ import '../../call/contacts_provider.dart';
 import '../../call/invite_service.dart';
 import '../chats_provider.dart';
 import '../data/chat_models.dart';
+import '../peer_profile_provider.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
   const ChatsScreen({super.key});
@@ -374,7 +375,7 @@ class _SearchBar extends StatelessWidget {
   }
 }
 
-class _ChatRow extends StatelessWidget {
+class _ChatRow extends ConsumerWidget {
   final Conversation conversation;
   final String selfEmail;
   final String selfUserId;
@@ -396,11 +397,30 @@ class _ChatRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final peer = conversation.peerOf(selfEmail);
+    // The conversations endpoint only ships email addresses for
+    // participants — no avatar, no display name. Resolve the peer's
+    // profile via the search endpoint so the tile shows their photo
+    // instead of just initials. Cached cross-tab so we don't refetch
+    // on every chats-tab open. See peer_profile_provider.dart.
+    final peerProfile = ref.watch(peerProfileProvider(peer.toLowerCase()));
+    final peerAvatar = peerProfile.maybeWhen(
+      data: (u) => (u?.avatarUrl?.trim().isNotEmpty ?? false)
+          ? u!.avatarUrl
+          : null,
+      orElse: () => null,
+    );
+    final peerDisplayName = peerProfile.maybeWhen(
+      data: (u) => u?.displayName?.trim().isNotEmpty == true
+          ? u!.displayName!.trim()
+          : null,
+      orElse: () => null,
+    );
     final name = (conversation.title?.isNotEmpty ?? false)
         ? conversation.title!
-        : (peer.contains('@') ? peer.split('@').first : peer);
+        : (peerDisplayName ??
+            (peer.contains('@') ? peer.split('@').first : peer));
     final last = conversation.lastMessage;
     final lastFromMe = last != null &&
         last.isMine(selfUserId: selfUserId, selfEmail: selfEmail);
@@ -416,7 +436,7 @@ class _ChatRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          MizdahAvatar(name: name, size: 48),
+          MizdahAvatar(name: name, avatarUrl: peerAvatar, size: 48),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -806,7 +826,7 @@ class _StartChatRow extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          MizdahAvatar(name: hit.label, size: 46),
+          MizdahAvatar(name: hit.label, avatarUrl: hit.avatarUrl, size: 46),
           const SizedBox(width: 14),
           Expanded(
             child: Column(

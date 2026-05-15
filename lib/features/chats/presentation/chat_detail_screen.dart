@@ -24,6 +24,7 @@ import '../../../core/ui/mizdah_design.dart';
 import '../../auth/auth_provider.dart';
 import '../chats_provider.dart';
 import '../data/chat_models.dart';
+import '../peer_profile_provider.dart';
 
 class ChatDetailScreen extends ConsumerStatefulWidget {
   final String conversationId;
@@ -631,13 +632,24 @@ class _DateDivider extends StatelessWidget {
   }
 }
 
-class _TopBar extends StatelessWidget {
+class _TopBar extends ConsumerWidget {
   final String peerName;
   final String peerEmail;
   const _TopBar({required this.peerName, required this.peerEmail});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Same peer-profile lookup the chat list row uses, so the
+    // avatar in the conversation header matches the avatar in the
+    // list (cache shared by email key).
+    final peerProfile =
+        ref.watch(peerProfileProvider(peerEmail.toLowerCase()));
+    final peerAvatar = peerProfile.maybeWhen(
+      data: (u) => (u?.avatarUrl?.trim().isNotEmpty ?? false)
+          ? u!.avatarUrl
+          : null,
+      orElse: () => null,
+    );
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
       decoration: BoxDecoration(
@@ -655,7 +667,7 @@ class _TopBar extends StatelessWidget {
                 color: MizdahTokens.inkOf(context), size: 18),
             splashRadius: 22,
           ),
-          MizdahAvatar(name: peerName, size: 38),
+          MizdahAvatar(name: peerName, avatarUrl: peerAvatar, size: 38),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
