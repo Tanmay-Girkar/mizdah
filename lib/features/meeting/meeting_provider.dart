@@ -11,6 +11,7 @@ import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
 import '../../core/services/network_resilience_service.dart';
 import '../../core/services/local_media_service.dart';
+import '../../core/services/push_notification_service.dart';
 import '../../core/services/renderer_manager.dart';
 import '../../core/services/video_quality_profile.dart';
 import '../settings/video_preferences_provider.dart';
@@ -466,6 +467,26 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         _sfuService?.applyVideoQuality(next);
       },
     );
+
+    // Host resume tokens — fires when an FCM host_resume_token
+    // arrives while THIS notifier is alive. The bootstrap path
+    // also pulls any pre-existing token via consumeResumeToken
+    // (for the cold-start race), but this subscription catches
+    // tokens that land AFTER the meeting is already mounted —
+    // e.g. host's network blip while sitting in the meeting.
+    _resumeTokenSub = PushNotificationService.instance.hostResumeTokens
+        .listen((event) {
+      final myMeetingId = state.meetingId;
+      if (myMeetingId == null) return;
+      if (event.meetingId != myMeetingId) return;
+      // Only attempt resume if we're nominally the host (server
+      // will 403 anyway, but skipping the round-trip keeps logs
+      // clean).
+      if (!state.isHost) return;
+      _log('[HOST] live resume-token arrived for $myMeetingId');
+      // ignore: discarded_futures
+      tryResumeHost(event.sessionToken);
+    });
   }
 
   /// Riverpod ref — used to fire the post-meeting rating prompt
@@ -477,6 +498,14 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
   /// Subscription to the outgoing-video-quality provider; cancelled
   /// in dispose() so the listener doesn't outlive this notifier.
   ProviderSubscription<OutgoingVideoQuality>? _qualityListenerOff;
+
+  /// Subscription to the host-resume-token stream from
+  /// PushNotificationService. Lives for the whole meeting and is
+  /// cancelled on dispose. See the host_resume_token comment in
+  /// the constructor for why this exists alongside the bootstrap
+  /// consumeResumeToken() call.
+  StreamSubscription<({String meetingId, String sessionToken})>?
+      _resumeTokenSub;
 
   /// When the user actually entered the meeting room (phase
   /// transitioned to `inMeeting`). Used to compute duration for the
@@ -877,6 +906,22 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
         phase: MeetingPhase.inMeeting,
       );
       _meetingJoinedAt ??= DateTime.now();
+
+      // If the user is the host and we have a pending resume token
+      // (set by an FCM host_resume_token message during the grace
+      // window), claim the host slot back. Silent on success — the
+      // server emits meeting:host_reconnected which clears the
+      // banner. Silent on RESUME_WINDOW_EXPIRED — the grace already
+      // ran out and someone else is host now.
+      if (isHostConfirmed) {
+        final token = PushNotificationService.instance
+            .consumeResumeToken(realMeetingId);
+        if (token != null) {
+          _log('[HOST] consuming resume token for $realMeetingId');
+          // ignore: discarded_futures
+          tryResumeHost(token);
+        }
+      }
 
       if (isHostConfirmed) {
         _startWaitingListPolling(realMeetingId);
@@ -4028,6 +4073,8 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _disposed = true;
     _qualityListenerOff?.close();
     _qualityListenerOff = null;
+    _resumeTokenSub?.cancel();
+    _resumeTokenSub = null;
     _waitingListTimer?.cancel();
     leaveMeeting();
     // DON'T dispose state.localRenderer — it's the singleton's. Doing

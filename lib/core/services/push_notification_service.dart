@@ -130,6 +130,45 @@ class PushNotificationService {
   final _tapCtrl = StreamController<PushPayload>.broadcast();
   final _localNotifications = FlutterLocalNotificationsPlugin();
 
+  /// Per-meeting host-resume tokens stashed from FCM data-messages
+  /// with `kind: "host_resume_token"`. See
+  /// docs/HOST_MANAGEMENT_BACKEND.md §6 — the server mints a
+  /// one-time `sessionToken` when the host's socket drops, fires
+  /// it via this push, and expects the host's app to call
+  /// `POST /resume-host` within the 45 s grace.
+  ///
+  /// Last-write-wins per meetingId. Tokens self-expire (the
+  /// backend ignores them after 45 s) so we don't need a TTL on
+  /// the client side — the worst case is a stale token that
+  /// gets sent and gets a 410, which the action silently swallows.
+  ///
+  /// Stash is in-memory only — survives backgrounding (app stays
+  /// alive on FCM wake-ups) but cleared on process kill. That's
+  /// correct: if the host's process was killed and is now cold-
+  /// starting, the token will arrive either via
+  /// `getInitialMessage` (terminated-app launch) or
+  /// `onMessageOpenedApp` (background tap) and get re-stashed.
+  final Map<String, String> _resumeTokensByMeetingId = {};
+
+  /// Live stream of host-resume tokens as they arrive — fires
+  /// once per FCM `kind: "host_resume_token"` message. Used by
+  /// [MeetingNotifier] which subscribes for the duration of the
+  /// meeting and calls `tryResumeHost` on every event whose
+  /// `meetingId` matches the active meeting.
+  ///
+  /// Tokens are ALSO stashed in [_resumeTokensByMeetingId] so a
+  /// notifier that hasn't subscribed yet (e.g. one that mounts
+  /// AFTER the token arrived during cold-start) can pull the
+  /// most-recent token via [consumeResumeToken] at bootstrap.
+  /// Belt-and-braces — the live stream catches the
+  /// in-meeting-fast-reconnect race, the bootstrap consume
+  /// catches the cold-start race.
+  final _resumeTokenCtrl =
+      StreamController<({String meetingId, String sessionToken})>
+          .broadcast();
+  Stream<({String meetingId, String sessionToken})>
+      get hostResumeTokens => _resumeTokenCtrl.stream;
+
   /// Fires for messages received while the app is in the foreground.
   /// FCM does NOT auto-display these — we draw a system notification
   /// via flutter_local_notifications AND emit on this stream so the
@@ -224,13 +263,17 @@ class PushNotificationService {
       // ── 5. Foreground messages ─────────────────────────────────
       // Emit on the broadcast stream AND draw a system notification
       // (FCM doesn't auto-display in foreground).
-      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+      FirebaseMessaging.onMessage.listen((m) {
+        _maybeStashResumeToken(m);
+        _handleForegroundMessage(m);
+      });
 
       // ── 6. Background tap → onMessageOpenedApp ────────────────
       // Fires when the user taps the system tray notification while
       // the app was running in the background.
       FirebaseMessaging.onMessageOpenedApp.listen((m) {
         debugPrint('[push] tap (background) data=${m.data}');
+        _maybeStashResumeToken(m);
         _tapCtrl.add(PushPayload.fromRemote(m));
       });
 
@@ -241,6 +284,7 @@ class PushNotificationService {
       final initial = await messaging.getInitialMessage();
       if (initial != null) {
         debugPrint('[push] initial-launch tap data=${initial.data}');
+        _maybeStashResumeToken(initial);
         Future.delayed(const Duration(milliseconds: 300), () {
           _tapCtrl.add(PushPayload.fromRemote(initial));
         });
@@ -357,6 +401,38 @@ class PushNotificationService {
   }
 
   bool _tzInitialised = false;
+
+  /// If the incoming FCM data-message is the host-resume token push
+  /// (`kind: "host_resume_token"`), cache it keyed by meetingId so
+  /// the meeting bootstrap can consume it on socket reconnect via
+  /// [consumeResumeToken]. No-op for every other message kind. Safe
+  /// to call repeatedly — last-write-wins per meetingId.
+  void _maybeStashResumeToken(RemoteMessage m) {
+    final data = m.data;
+    if (data['kind']?.toString() != 'host_resume_token') return;
+    final meetingId = data['meetingId']?.toString();
+    final token = data['sessionToken']?.toString();
+    if (meetingId == null || meetingId.isEmpty) return;
+    if (token == null || token.isEmpty) return;
+    debugPrint('[push] stashing host_resume_token for $meetingId');
+    _resumeTokensByMeetingId[meetingId] = token;
+    // Also fan to live subscribers so a meeting that's already
+    // mounted (host's fast reconnect) reacts immediately.
+    _resumeTokenCtrl.add((meetingId: meetingId, sessionToken: token));
+  }
+
+  /// Pull (and remove) the cached host-resume token for [meetingId].
+  /// Returns null when no pending token. Single-use semantics — the
+  /// caller is responsible for actually firing the resume request;
+  /// if the call fails the token isn't restored (the backend has
+  /// likely expired it already, calling again would 410 anyway).
+  String? consumeResumeToken(String meetingId) {
+    final t = _resumeTokensByMeetingId.remove(meetingId);
+    if (t != null) {
+      debugPrint('[push] consumed host_resume_token for $meetingId');
+    }
+    return t;
+  }
 
   void _handleForegroundMessage(RemoteMessage m) {
     debugPrint('[push] foreground message data=${m.data}');
