@@ -57,10 +57,16 @@ class _CallHubScreenState extends ConsumerState<CallHubScreen>
   @override
   void initState() {
     super.initState();
+    // Skip the staggered fade-up entry animation on tab switches.
+    // Controller stays alive (children of MizdahFadeUp still listen
+    // to it) but starts at 1.0 = fully visible / no offset, so tab
+    // switches feel instant. The 700ms fade was perceived by users
+    // as a 2-second blurry lag on the Call tab.
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
-    )..forward();
+      value: 1.0,
+    );
   }
 
   @override

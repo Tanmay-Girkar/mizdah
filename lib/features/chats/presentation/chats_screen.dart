@@ -50,10 +50,14 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen>
   @override
   void initState() {
     super.initState();
+    // Skip the staggered fade-up — see CallHubScreen for the
+    // rationale. Children of MizdahFadeUp render fully on first
+    // frame so tab switches feel instant.
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
-    )..forward();
+      value: 1.0,
+    );
     WidgetsBinding.instance.addObserver(this);
     // Pull once now and then every 8s while we're on this screen.
     // Cancelled in dispose. Errors are swallowed inside the repo;

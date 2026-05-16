@@ -119,12 +119,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       duration: const Duration(seconds: 6),
       vsync: this,
     )..repeat(reverse: true);
-    // Single 700ms forward run drives the staggered fade-up entry
-    // animation on each section.
+    // Entry animation disabled — the staggered fade-up was running
+    // on every tab switch and reading as "blurry first 2 seconds"
+    // because MizdahFadeUp listens to this controller and starts
+    // children at opacity 0 / offset 14px. Starting at value 1.0
+    // means the children render fully on first frame; tab swaps
+    // feel instant.
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
-    )..forward();
+      value: 1.0,
+    );
 
     // FCM-driven inbox refresh per docs/NOTIFICATIONS_BACKEND.md §6.
     // Every persisted-notification emit also fires an FCM data-only

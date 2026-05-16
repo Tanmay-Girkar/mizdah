@@ -35,10 +35,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   @override
   void initState() {
     super.initState();
+    // Skip the staggered fade-up — see CallHubScreen for the
+    // rationale. Children of MizdahFadeUp render fully on first
+    // frame so tab switches feel instant.
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
-    )..forward();
+      value: 1.0,
+    );
   }
 
   @override

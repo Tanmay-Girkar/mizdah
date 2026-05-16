@@ -374,16 +374,37 @@ class _NotificationTile extends StatelessWidget {
     );
   }
 
-  /// "Today" → time, this week → "Mon 9:14 AM", older → date.
+  /// Relative-time label matching the WhatsApp / iOS Mail style:
+  ///
+  ///   < 1 min   → "Just now"
+  ///   < 60 min  → "5 min ago"
+  ///   < 24 h    → "3 hr ago"
+  ///   < 7 days  → "2 d ago"
+  ///   < 1 year  → "Mar 14"
+  ///   else      → "Mar 14, 2024"
+  ///
+  /// Singular vs plural handled inline ("1 min ago" not "1 mins
+  /// ago") so the row reads naturally regardless of value.
   String _timeLabel(DateTime ts) {
     final now = DateTime.now();
     final diff = now.difference(ts);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inHours < 24 && ts.day == now.day) {
-      return DateFormat('h:mm a').format(ts);
+    if (diff.isNegative || diff.inSeconds < 60) return 'Just now';
+    if (diff.inMinutes < 60) {
+      final m = diff.inMinutes;
+      return '$m min ago';
     }
-    if (diff.inDays < 7) return DateFormat('E h:mm a').format(ts);
-    return DateFormat('MMM d').format(ts);
+    if (diff.inHours < 24) {
+      final h = diff.inHours;
+      return '$h hr ago';
+    }
+    if (diff.inDays < 7) {
+      final d = diff.inDays;
+      return '$d ${d == 1 ? 'day' : 'days'} ago';
+    }
+    if (now.year == ts.year) {
+      return DateFormat('MMM d').format(ts);
+    }
+    return DateFormat('MMM d, y').format(ts);
   }
 
   _TypeMeta _meta(String type) {

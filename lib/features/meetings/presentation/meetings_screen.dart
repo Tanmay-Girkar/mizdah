@@ -49,10 +49,14 @@ class _MeetingsScreenState extends ConsumerState<MeetingsScreen>
   void initState() {
     super.initState();
     _segment = widget.initialSegment.clamp(0, 1);
+    // Skip the staggered fade-up — see CallHubScreen for the
+    // rationale. Children of MizdahFadeUp render fully on first
+    // frame so tab switches feel instant.
     _entryCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
-    )..forward();
+      value: 1.0,
+    );
   }
 
   @override
