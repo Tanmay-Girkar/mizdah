@@ -11,6 +11,7 @@ import '../../data/repositories/participant_repository.dart';
 import '../../core/services/sfu_service.dart';
 import '../../core/services/network_resilience_service.dart';
 import '../../core/services/local_media_service.dart';
+import '../../core/services/renderer_manager.dart';
 import '../../core/services/video_quality_profile.dart';
 import '../settings/video_preferences_provider.dart';
 import '../../data/repositories/meeting_repository.dart';
@@ -2826,38 +2827,103 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
     _waitingListTimer?.cancel();
     _audioLevelTimer?.cancel();
     _diagTimer?.cancel();
+
+    // ── DETACH RENDERERS FIRST (synchronous, immediate) ───────────
+    // Critical ordering: every renderer needs srcObject=null BEFORE
+    // we close the tracks/transport/socket. If we close the track
+    // first, the renderer keeps trying to pull frames from a now-
+    // detached source and the EglRenderer Frames-received log
+    // continues until GC eventually finalises the renderer — which
+    // can be tens of seconds on Android. Detaching first means the
+    // renderer stops pulling immediately, no log spam.
+    try {
+      LocalMediaService.instance.detachRendererFromStream();
+    } catch (_) {}
+    for (final r in state.remoteRenderers.values) {
+      try {
+        r.srcObject = null;
+      } catch (_) {}
+    }
+    for (final r in state.remoteScreenRenderers.values) {
+      try {
+        r.srcObject = null;
+      } catch (_) {}
+    }
+    // Local screen-share renderer (only set while WE are
+    // presenting). Leaving mid-share would otherwise leak.
+    try {
+      state.screenRenderer?.srcObject = null;
+    } catch (_) {}
+
+    // ── DISCONNECT SOCKETS so no late events re-attach anything ──
     _socket?.disconnect();
     _chatSocket?.disconnect();
     _mediaSocket?.disconnect();
+
+    // ── Close LEGACY MESH peer connections ────────────────────────
     for (final pc in _peerConnections.values) {
       pc.close();
     }
     _peerConnections.clear();
     _pendingIce.clear();
     _remoteStreams.clear();
-    // Dispose every per-participant remote video renderer. Each
-    // gets srcObject cleared before dispose() to avoid the JNI race
-    // where a late frame callback fires after dispose with the
-    // stream still attached (Android crash path).
+
+    // ── Dispose REMOTE renderers (already detached above) ────────
     for (final r in state.remoteRenderers.values) {
-      try { r.srcObject = null; } catch (_) {}
-      try { r.dispose(); } catch (_) {}
+      try {
+        r.dispose();
+      } catch (_) {}
     }
-    // Same for screen-share renderers. These used to leak — they
-    // were stored in state.remoteScreenRenderers but never disposed,
-    // which is one of the renderer leaks that surfaces as
-    // BLASTBufferQueue spam after a meeting ends.
     for (final r in state.remoteScreenRenderers.values) {
-      try { r.srcObject = null; } catch (_) {}
-      try { r.dispose(); } catch (_) {}
+      try {
+        r.dispose();
+      } catch (_) {}
     }
-    // Don't touch the local camera here — the LocalMediaService owns
-    // it. Schedule a delayed shutdown so the next screen (re-create
-    // an instant meeting, return to home) gets a free camera reuse.
-    LocalMediaService.instance.scheduleShutdown();
+    // ignore: discarded_futures
+    state.screenRenderer?.dispose().catchError((_) {});
+
+    // ── Force IMMEDIATE camera shutdown ──────────────────────────
+    // Pre-feature behaviour scheduled a 5s grace shutdown to bridge
+    // pre-join → meeting-room handoff. After leaveMeeting there is
+    // no next screen waiting on the camera, so the 5s window just
+    // kept CameraStatistics + the MediaCodec encoder running on the
+    // home tab burning CPU/battery. shutdownNow stops the camera
+    // capturer, stops + disposes every local track, and detaches
+    // the renderer immediately.
+    LocalMediaService.instance.shutdownNow();
+
+    // ── Tear down the SFU service ────────────────────────────────
+    // Internally walks every active Consumer and calls close() +
+    // track.stop() before closing transports, so the MediaCodec
+    // decoder threads release. Without that explicit per-consumer
+    // close, transport.close() alone left the underlying
+    // RTCRtpReceivers alive — the PipelineWatcher / EglRenderer
+    // / MediaCodec log spam reported after leave.
     _networkResilienceService?.dispose();
     _sfuService?.dispose();
     _hasJoinedRoom = false;
+
+    // ── 10-second post-leave watchdog ────────────────────────────
+    // If anything is still alive 10s after leave, log it loudly so
+    // the next round of debugging knows where to start. Each entry
+    // here is a real leak: by 10s post-leave every dispose path
+    // should have completed.
+    Future<void>.delayed(const Duration(seconds: 10), () {
+      if (!kDebugMode) return;
+      final aliveRenderers = RendererManager.instance.keys
+          .where((k) =>
+              k.startsWith('meeting-remote-') ||
+              k.startsWith('meeting-screen-'))
+          .toList();
+      final cameraAlive = LocalMediaService.instance.hasStream;
+      if (aliveRenderers.isEmpty && !cameraAlive) {
+        _log('[CLEANUP] ✓ 10s post-leave: all clear');
+      } else {
+        _log('[CLEANUP] ⚠️ 10s post-leave LEAK — '
+            'renderers=$aliveRenderers cameraAlive=$cameraAlive');
+        RendererManager.instance.dump();
+      }
+    });
     if (mounted && !_disposed) {
       state = state.copyWith(phase: MeetingPhase.ended);
     }

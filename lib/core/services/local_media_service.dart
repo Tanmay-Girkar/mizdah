@@ -197,12 +197,31 @@ class LocalMediaService {
   }
 
   /// Schedule a delayed camera shutdown. The grace window lets the
-  /// next screen reuse the running camera without reopening it.
+  /// next screen reuse the running camera without reopening it
+  /// (pre-join → meeting room handoff). Pass `Duration.zero` to
+  /// fire immediately — the post-leaveMeeting path uses that
+  /// because there's no next screen waiting on the camera.
   void scheduleShutdown(
       {Duration delay = const Duration(seconds: 5)}) {
     _shutdownTimer?.cancel();
+    if (delay <= Duration.zero) {
+      _log('shutdown firing immediately');
+      _hardShutdown();
+      return;
+    }
     _log('shutdown scheduled in ${delay.inSeconds}s');
     _shutdownTimer = Timer(delay, _hardShutdown);
+  }
+
+  /// Force-close the camera + detach the renderer NOW. Use after
+  /// `leaveMeeting` where there's no handoff to the next screen
+  /// and the 5s scheduleShutdown grace just keeps the
+  /// CameraStatistics / EglRenderer / MediaCodec threads alive
+  /// burning CPU. Idempotent — safe to call when nothing's open.
+  void shutdownNow() {
+    _shutdownTimer?.cancel();
+    _shutdownTimer = null;
+    _hardShutdown();
   }
 
   /// Cancel a pending shutdown. Called from initialize() but exposed
@@ -212,20 +231,44 @@ class LocalMediaService {
     _shutdownTimer = null;
   }
 
+  /// Detach the renderer from the active stream without touching
+  /// the camera itself. Used the moment leaveMeeting starts so the
+  /// EglRenderer stops pumping frames while we tear down the rest
+  /// of the meeting plumbing — the actual camera shutdown happens
+  /// a few ms later in [shutdownNow], but the renderer needs to
+  /// detach FIRST or it'll keep rendering whatever's in its buffer.
+  void detachRendererFromStream() {
+    if (_renderer == null) return;
+    _renderer!.srcObject = null;
+  }
+
   void _hardShutdown() {
     _log('camera shutdown');
     final s = _stream;
     if (s != null) {
+      // Detach the renderer FIRST so it stops pulling frames before
+      // we yank the tracks out from under it (avoids the JNI race
+      // where a late frame callback hits a stopped track).
+      _renderer?.srcObject = null;
       for (final t in s.getTracks()) {
-        t.stop();
+        // enabled=false drops the kernel-side audio/video frame
+        // delivery callbacks; stop() releases the camera capturer
+        // and tells WebRTC to release the MediaCodec encoder.
+        try {
+          t.enabled = false;
+        } catch (_) {}
+        try {
+          t.stop();
+        } catch (_) {}
       }
-      s.dispose();
+      try {
+        s.dispose();
+      } catch (_) {}
     }
     _stream = null;
-    // Detach but DO NOT dispose the renderer — keep the texture alive
-    // so the next initialize() reuses it without another platform-
-    // channel round-trip.
-    _renderer?.srcObject = null;
+    // Renderer is intentionally NOT disposed — the texture is
+    // reused across screens (pre-join → meeting room). Only the
+    // explicit dispose() path tears it down.
   }
 
   /// Hard-stop and dispose everything, including the renderer.

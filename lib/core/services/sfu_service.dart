@@ -119,6 +119,15 @@ class SFUService {
   // Cleared on consumer close + service dispose.
   final Map<String, Consumer> _audioConsumersBySocketId = {};
 
+  // Master registry of every active Consumer keyed by consumerId.
+  // Required so dispose() can explicitly close each one — without
+  // this, `transport.close()` alone cleans up Dart-side state but
+  // leaves the underlying RTCRtpReceiver + MediaStreamTrack alive,
+  // which keeps the MediaCodec decoder threads (and PipelineWatcher
+  // / EglRenderer log spam) running forever after meeting leave.
+  // Cleaned in [_handleConsumerClosed] + [dispose].
+  final Map<String, Consumer> _allConsumersById = {};
+
   // Track our own active producers so we can replace tracks on
   // mute/unmute and screen-share. Mediasoup-client delivers each
   // producer via `producerCallback` on the send transport — we
@@ -323,23 +332,68 @@ class SFUService {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _log('[SFU] dispose()');
+    _log('[SFU] dispose() — ${_allConsumersById.length} consumer(s) to close, '
+        '${_audioProducer != null || _videoProducer != null || _screenProducer != null ? "producers active" : "no producers"}');
     _keyframePumpTimer?.cancel();
     _keyframePumpTimer = null;
-    _videoConsumerIds.clear();
-    _audioConsumersBySocketId.clear();
     _socket.off('existingProducers', _handleExistingProducers);
     _socket.off('newProducer', _handleNewProducer);
     _socket.off('consumerClosed', _handleConsumerClosed);
-    try {
-      _audioProducer?.close();
-      _videoProducer?.close();
-      _screenProducer?.close();
-    } catch (_) {}
+
+    // ── Close every CONSUMER first ────────────────────────────────
+    // Order matters: closing consumers BEFORE the transport gives
+    // mediasoup-client a chance to tear down each RTCRtpReceiver +
+    // its underlying MediaStreamTrack cleanly. If we only closed
+    // the transport, the receivers would linger and their native
+    // MediaCodec decoder threads would keep dequeuing frames into
+    // an EglRenderer that's still bound to a track — the source of
+    // the "PipelineWatcher onInputBufferReleased / EglRenderer
+    // Frames received" log spam reported after leaveMeeting.
+    //
+    // We snapshot then drain because consumer.close() can fire its
+    // own callbacks that mutate the map.
+    final consumersSnapshot = _allConsumersById.values.toList();
+    _allConsumersById.clear();
+    _audioConsumersBySocketId.clear();
+    _videoConsumerIds.clear();
+    for (final c in consumersSnapshot) {
+      // Stop the underlying track explicitly. consumer.close() does
+      // some of this internally, but explicit stop() on the
+      // MediaStreamTrack guarantees the encoder/decoder side
+      // releases — without it some Android codec impls keep the
+      // PipelineWatcher running until GC eventually finalizes the
+      // track (which can be minutes).
+      try {
+        c.track.enabled = false;
+      } catch (_) {}
+      // ignore: discarded_futures
+      c.track.stop().catchError((_) {});
+      // ignore: discarded_futures
+      c.close().catchError((_) {});
+    }
+
+    // ── Close PRODUCERS next ──────────────────────────────────────
+    // Same reasoning as consumers — close the senders explicitly so
+    // the local MediaCodec encoder and camera capturer release
+    // their resources. The camera ITSELF is still owned by
+    // LocalMediaService and shut down separately on the meeting
+    // notifier's leaveMeeting path.
+    for (final p in [_audioProducer, _videoProducer, _screenProducer]) {
+      if (p == null) continue;
+      try {
+        p.track.enabled = false;
+      } catch (_) {}
+      try {
+        p.close();
+      } catch (_) {}
+    }
+
+    // ── Close TRANSPORTS last ─────────────────────────────────────
     try {
       _sendTransport?.close();
       _recvTransport?.close();
     } catch (_) {}
+
     _audioProducer = null;
     _videoProducer = null;
     _screenProducer = null;
@@ -626,6 +680,10 @@ class SFUService {
     _videoConsumerIds.remove(id);
     // Drop the corresponding audio consumer if this id matched one.
     _audioConsumersBySocketId.removeWhere((_, c) => c.id == id);
+    // Server-initiated close: the Consumer's track + native receiver
+    // teardown is fired by mediasoup-client when it processes this
+    // event. We only need to drop the Dart-side reference.
+    _allConsumersById.remove(id);
     onRemoteTrackClosed(id);
   }
 
@@ -694,10 +752,17 @@ class SFUService {
     final consumer = await completer.future;
     onRemoteTrack(remoteSocketId, consumer.track, appData);
 
+    // Master registry — needed so dispose() can explicitly close
+    // every Consumer (mediasoup-client's transport.close() leaves
+    // the underlying RTCRtpReceiver + MediaStreamTrack alive, which
+    // keeps the MediaCodec decoder running and the EglRenderer
+    // pumping frames forever).
+    _allConsumersById[consumer.id] = consumer;
+
     // Stash audio consumers so the audio-level poll can read their
     // RTCRtpReceiver stats without walking every peer connection.
     // Last-write-wins per socketId (a peer reconnecting replaces
-    // their stale consumer). Cleaned up in [removeConsumer].
+    // their stale consumer). Cleaned up in [_handleConsumerClosed].
     if (consumer.kind == 'audio') {
       _audioConsumersBySocketId[remoteSocketId] = consumer;
     }
