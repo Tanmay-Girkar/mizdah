@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import '../../../core/services/renderer_manager.dart';
 import '../../settings/audio_preferences_provider.dart';
 import '../../settings/meeting_layout_provider.dart';
 import '../../settings/privacy_preferences_provider.dart';
+import '../../../data/repositories/host_management_repository.dart';
 import 'add_participant_sheet.dart';
 import 'meeting_effects_sheet.dart';
 import 'widgets/present_source_picker.dart';
@@ -130,6 +132,22 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
     with WidgetsBindingObserver {
   bool _isRecording = false;
 
+  /// Look up a participant's display name from the live list by
+  /// userId. Used by the host-changed snackbar to render the new
+  /// host's name without re-fetching from the backend. Falls back
+  /// to "A participant" when the row isn't there yet (rare race
+  /// where host_changed lands before participants-update did).
+  String _participantName(List<dynamic> participants, String userId) {
+    for (final p in participants) {
+      if (p is! Map) continue;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != userId) continue;
+      final name = p['name']?.toString();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return 'A participant';
+  }
+
   /// Captured-once reference to the meeting notifier. We can't call
   /// `ref.read(...)` from `dispose()` — Riverpod throws
   /// `Bad state: Cannot use "ref" after the widget was disposed`
@@ -244,6 +262,33 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
       },
     );
 
+    // ── Host-changed toast ────────────────────────────────────────
+    // Fired on every host transition (manual transfer / disconnect
+    // grace expired / auto-pick on host-leave). We watch hostId
+    // separately so we don't run the listener on unrelated state
+    // changes. Different copy when *you* become the host vs.
+    // someone else.
+    final me = ref.read(authProvider).user?.id;
+    ref.listen<String?>(
+      meetingProvider(widget.meetingId).select((s) => s.hostId),
+      (prev, next) {
+        if (prev == null || next == null || prev == next) return;
+        if (!context.mounted) return;
+        final youAreHost = me != null && next == me;
+        final newHostName = _participantName(
+            ref.read(meetingProvider(widget.meetingId)).participants, next);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+            content: Text(youAreHost
+                ? "You're now the host"
+                : "$newHostName is now the host"),
+          ),
+        );
+      },
+    );
+
     // Inbound remote-control request — pop the grant/deny dialog
     // the moment notifier state has it, regardless of which panel
     // is currently open.
@@ -279,6 +324,21 @@ class _MeetingRoomScreenState extends ConsumerState<MeetingRoomScreen>
           bottom: false,
           child: Stack(
             children: [
+              // Host-reconnecting banner — strip across the top
+              // while lifecycleState == 'HOST_RECONNECTING'. Shown
+              // above the meeting chrome so it's unmissable but
+              // doesn't block any video tile. Auto-dismisses when
+              // state flips back to ACTIVE (host resumed) OR the
+              // grace expires and host_changed fires.
+              if (meetingState.lifecycleState == 'HOST_RECONNECTING')
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: _HostReconnectingBanner(
+                    expiresAt: meetingState.hostReconnectingExpiresAt,
+                  ),
+                ),
               // Main body — single layout, cross-faded internally so
               // we never tear down and rebuild the surrounding chrome
               // when a peer joins or their video starts arriving.
@@ -3451,6 +3511,35 @@ class _ParticipantsView extends ConsumerWidget {
   final String meetingId;
   const _ParticipantsView({required this.meetingId});
 
+  /// Confirmation dialog before transferring host. Once confirmed
+  /// the swap is atomic + irreversible-ish (the new host has to
+  /// transfer back if it was a mistake).
+  Future<bool> _confirmTransferHost(
+      BuildContext context, String? targetName) async {
+    final name = (targetName ?? '').trim().isEmpty
+        ? 'this participant'
+        : targetName!.trim();
+    final answer = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Transfer host?'),
+        content: Text(
+            "$name will become the new host. You'll lose host controls.\n\nThis can be undone by the new host."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Transfer'),
+          ),
+        ],
+      ),
+    );
+    return answer == true;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -3549,6 +3638,8 @@ class _ParticipantsView extends ConsumerWidget {
               final pUserId = (p['userId'] ?? p['user_id'])?.toString() ?? '';
               final pIsHost =
                   pUserId == meetingState.hostId || p['isHost'] == true;
+              final pRole = (p['role'] ?? '').toString().toLowerCase();
+              final pIsCoHost = !pIsHost && pRole == 'co_host';
               // Per-user invite switch is host-only AND only worth
               // showing when the global toggle is OFF — when global
               // is ON every non-host can already invite. Hide on
@@ -3560,9 +3651,16 @@ class _ParticipantsView extends ConsumerWidget {
                   meetingState.isHost && !globalOn && !pIsHost;
               final pCanInvite =
                   (p['canInvite'] ?? p['can_invite']) as bool? ?? false;
+              // Host-only per-row overflow menu — promote /
+              // demote / transfer. Only the host (not co-hosts)
+              // can transfer host role per the capability matrix.
+              // Hide on the host's own row and on the "Me" row.
+              final viewerIsHost = meetingState.isHost;
+              final showOverflow = viewerIsHost && !pIsHost && pUserId.isNotEmpty;
               return _ParticipantTile(
                 name: p['name'] ?? 'Unknown',
                 isHost: pIsHost,
+                isCoHost: pIsCoHost,
                 isMicOn: p['isMicOn'] ?? false,
                 isCameraOn: p['isCameraOn'] ?? false,
                 isMe: false,
@@ -3573,6 +3671,56 @@ class _ParticipantsView extends ConsumerWidget {
                         final err = await ref
                             .read(meetingProvider(meetingId).notifier)
                             .setParticipantCanInvite(pUserId, v);
+                        if (err != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    : null,
+                onMakeCoHost: showOverflow && !pIsCoHost
+                    ? () async {
+                        final err = await ref
+                            .read(meetingProvider(meetingId).notifier)
+                            .setParticipantRole(
+                                pUserId, MeetingRole.coHost);
+                        if (err != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    : null,
+                onRemoveCoHost: showOverflow && pIsCoHost
+                    ? () async {
+                        final err = await ref
+                            .read(meetingProvider(meetingId).notifier)
+                            .setParticipantRole(
+                                pUserId, MeetingRole.participant);
+                        if (err != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    : null,
+                onTransferHost: showOverflow
+                    ? () async {
+                        final confirmed =
+                            await _confirmTransferHost(context, p['name']);
+                        if (!confirmed || !context.mounted) return;
+                        final err = await ref
+                            .read(meetingProvider(meetingId).notifier)
+                            .transferHost(pUserId);
                         if (err != null && context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -3596,6 +3744,7 @@ class _ParticipantsView extends ConsumerWidget {
 class _ParticipantTile extends StatelessWidget {
   final String name;
   final bool isHost;
+  final bool isCoHost;
   final bool isMicOn;
   final bool isCameraOn;
   final bool isMe;
@@ -3610,16 +3759,34 @@ class _ParticipantTile extends StatelessWidget {
   final bool canInvite;
   final ValueChanged<bool>? onToggleCanInvite;
 
+  /// Host's per-row actions menu. When any of these are non-null,
+  /// a 3-dot overflow icon shows on the row with the matching
+  /// entries. Hosts see these on every non-host non-self row; co-
+  /// hosts + participants never see them (the call site sets all
+  /// callbacks to null for them).
+  final VoidCallback? onMakeCoHost;
+  final VoidCallback? onRemoveCoHost;
+  final VoidCallback? onTransferHost;
+
   const _ParticipantTile({
     required this.name,
     this.isHost = false,
+    this.isCoHost = false,
     this.isMicOn = true,
     this.isCameraOn = true,
     this.isMe = false,
     this.showInviteSwitch = false,
     this.canInvite = false,
     this.onToggleCanInvite,
+    this.onMakeCoHost,
+    this.onRemoveCoHost,
+    this.onTransferHost,
   });
+
+  bool get _hasOverflowMenu =>
+      onMakeCoHost != null ||
+      onRemoveCoHost != null ||
+      onTransferHost != null;
 
   @override
   Widget build(BuildContext context) {
@@ -3649,7 +3816,11 @@ class _ParticipantTile extends StatelessWidget {
       subtitle: isHost
           ? const Text('Meeting Host',
               style: TextStyle(color: MizdahTheme.primaryBlue, fontSize: 11))
-          : (showInviteSwitch
+          : isCoHost
+              ? const Text('Co-host',
+                  style: TextStyle(
+                      color: MizdahTheme.primaryBlue, fontSize: 11))
+              : (showInviteSwitch
               ? Text(
                   canInvite ? 'Can invite participants' : 'Tap to allow invite',
                   style: TextStyle(
@@ -3696,6 +3867,49 @@ class _ParticipantTile extends StatelessWidget {
             size: 20,
             color: isCameraOn ? (isDark ? Colors.white38 : Colors.black38) : Colors.redAccent,
           ),
+          if (_hasOverflowMenu) ...[
+            const SizedBox(width: 8),
+            // Host-only per-row overflow — promote / demote / transfer.
+            // The call site provides only the callbacks that make
+            // sense for this row's current role (e.g. no
+            // onRemoveCoHost on a participant who isn't co-host).
+            PopupMenuButton<String>(
+              tooltip: 'Manage participant',
+              padding: EdgeInsets.zero,
+              icon: Icon(
+                Icons.more_vert_rounded,
+                size: 20,
+                color: isDark ? Colors.white54 : Colors.black45,
+              ),
+              onSelected: (action) {
+                switch (action) {
+                  case 'make_cohost':
+                    onMakeCoHost?.call();
+                  case 'remove_cohost':
+                    onRemoveCoHost?.call();
+                  case 'transfer_host':
+                    onTransferHost?.call();
+                }
+              },
+              itemBuilder: (ctx) => [
+                if (onMakeCoHost != null)
+                  const PopupMenuItem(
+                    value: 'make_cohost',
+                    child: Text('Make co-host'),
+                  ),
+                if (onRemoveCoHost != null)
+                  const PopupMenuItem(
+                    value: 'remove_cohost',
+                    child: Text('Remove co-host'),
+                  ),
+                if (onTransferHost != null)
+                  const PopupMenuItem(
+                    value: 'transfer_host',
+                    child: Text('Make host (transfer)'),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -4841,6 +5055,98 @@ class _PipLayout extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Banner that appears across the top of the meeting screen
+/// whenever `state.lifecycleState == 'HOST_RECONNECTING'`. Shows
+/// a live countdown until the grace expires, after which the
+/// server auto-transfers host. Tick driver is a 1s periodic
+/// timer that disposes when the state leaves HOST_RECONNECTING.
+///
+/// See docs/HOST_MANAGEMENT_BACKEND.md §6.
+class _HostReconnectingBanner extends StatefulWidget {
+  final DateTime? expiresAt;
+  const _HostReconnectingBanner({required this.expiresAt});
+
+  @override
+  State<_HostReconnectingBanner> createState() =>
+      _HostReconnectingBannerState();
+}
+
+class _HostReconnectingBannerState
+    extends State<_HostReconnectingBanner> {
+  Timer? _tick;
+  int _secondsLeft = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _recompute();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      _recompute();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _HostReconnectingBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expiresAt != widget.expiresAt) _recompute();
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _recompute() {
+    final expiresAt = widget.expiresAt;
+    if (expiresAt == null) {
+      if (_secondsLeft != 0) setState(() => _secondsLeft = 0);
+      return;
+    }
+    final delta = expiresAt.difference(DateTime.now()).inSeconds;
+    final clamped = delta < 0 ? 0 : delta;
+    if (clamped != _secondsLeft) {
+      setState(() => _secondsLeft = clamped);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF1F1B5C),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _secondsLeft > 0
+                    ? 'Host is reconnecting… ${_secondsLeft}s'
+                    : 'Reassigning host…',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

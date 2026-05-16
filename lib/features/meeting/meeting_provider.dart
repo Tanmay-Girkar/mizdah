@@ -18,6 +18,7 @@ import '../../data/repositories/meeting_repository.dart';
 import '../../data/models/call_rating_models.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/in_call_invite_repository.dart';
+import '../../data/repositories/host_management_repository.dart';
 import '../feedback/call_rating_provider.dart';
 
 // Tag for filtering WebRTC/signaling logs in production builds.
@@ -147,6 +148,22 @@ class MeetingState {
   /// behaviour.
   final MeetingPermissions permissions;
 
+  /// Meeting lifecycle state per docs/HOST_MANAGEMENT_BACKEND.md
+  /// §4. Mirror of `meetings.lifecycle_state` on the server,
+  /// synced via `meeting:state_changed` socket events. The UI
+  /// uses this to render the "Host is reconnecting…" banner
+  /// (HOST_RECONNECTING) and to enable/disable controls during
+  /// the grace window. Defaults to 'ACTIVE' for backwards-compat
+  /// with servers that don't yet emit the field.
+  final String lifecycleState;
+
+  /// When set, the meeting is currently in HOST_RECONNECTING.
+  /// Mobile UI uses [hostReconnectingExpiresAt] to render a live
+  /// countdown ("Host is reconnecting… 32s"). Cleared on the
+  /// `meeting:host_reconnected` event or on lifecycle transition
+  /// back to ACTIVE.
+  final DateTime? hostReconnectingExpiresAt;
+
   MeetingState({
     this.isConnected = false,
     required this.localRenderer,
@@ -185,22 +202,27 @@ class MeetingState {
     this.activeRecordingId,
     this.recordingHostName,
     this.permissions = const MeetingPermissions(),
+    this.lifecycleState = 'ACTIVE',
+    this.hostReconnectingExpiresAt,
   });
 
-  /// True when the current user can use the + Add flow. Three
-  /// sources of truth, OR-ed together to match the backend's
-  /// auth gate exactly:
+  /// True when the current user can use the + Add flow. FOUR
+  /// sources of truth now (host management widened the bypass
+  /// branch to include co-hosts):
   ///
   ///   1. We're the host (host bypasses every gate).
-  ///   2. Global toggle `allowParticipantsToInvite` is on.
-  ///   3. Our own participant row has been granted `canInvite`
-  ///      explicitly by the host (§2c/§2d).
+  ///   2. We're a co-host (per the capability matrix in
+  ///      docs/HOST_MANAGEMENT_BACKEND.md §15 — co-hosts can
+  ///      invite without checking the global toggle).
+  ///   3. Global toggle `allowParticipantsToInvite` is on.
+  ///   4. Our own participant row has been granted `canInvite`
+  ///      explicitly by the host (ADD_PARTICIPANT_BACKEND §2c/§2d).
   ///
   /// Derived rather than stored so we never have a stale snapshot
   /// — every participants-list patch from the socket
   /// fan-out re-renders this getter for free.
   bool get canCurrentUserInvite {
-    if (isHost) return true;
+    if (hasHostPowers) return true;
     if (permissions.allowParticipantsToInvite) return true;
     final me = userId;
     if (me == null || me.isEmpty) return false;
@@ -259,6 +281,9 @@ class MeetingState {
     String? recordingHostName,
     bool clearRecordingHostName = false,
     MeetingPermissions? permissions,
+    String? lifecycleState,
+    DateTime? hostReconnectingExpiresAt,
+    bool clearHostReconnectingExpiry = false,
   }) {
     return MeetingState(
       isConnected: isConnected ?? this.isConnected,
@@ -313,8 +338,50 @@ class MeetingState {
           ? null
           : (recordingHostName ?? this.recordingHostName),
       permissions: permissions ?? this.permissions,
+      lifecycleState: lifecycleState ?? this.lifecycleState,
+      hostReconnectingExpiresAt: clearHostReconnectingExpiry
+          ? null
+          : (hostReconnectingExpiresAt ?? this.hostReconnectingExpiresAt),
     );
   }
+
+  /// Current user's role in this meeting per
+  /// docs/HOST_MANAGEMENT_BACKEND.md §1. Derived from the
+  /// participants list each time it changes — never stored
+  /// separately, so socket fan-outs (role_updated, host_changed)
+  /// that patch the participants list automatically update this.
+  ///
+  /// Returns [MeetingRole.host] for the host (which is also the
+  /// truth source — `meetings.host_id` mirrors this row's user),
+  /// [MeetingRole.coHost] for co-hosts, otherwise
+  /// [MeetingRole.participant]. Defaults to participant when the
+  /// user's row isn't found (still loading, just left, etc).
+  MeetingRole get myRole {
+    final me = userId;
+    if (me == null || me.isEmpty) return MeetingRole.participant;
+    // Self-side check: hostId is the easy answer when the server
+    // has already mirrored the swap. Without this, between an
+    // optimistic role update and the server confirmation the
+    // user could briefly see themselves as participant.
+    if (hostId != null && hostId == me) return MeetingRole.host;
+    for (final p in participants) {
+      if (p is! Map) continue;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != me) continue;
+      final roleStr = p['role']?.toString();
+      return MeetingRole.parse(roleStr);
+    }
+    return MeetingRole.participant;
+  }
+
+  /// True for both host AND co-host — the two roles that can
+  /// invite, change permissions, and grant per-user grants. Used
+  /// by the meeting screen to gate host-only controls so co-hosts
+  /// see the same affordances as the host (minus end-for-all and
+  /// host-transfer). See docs/HOST_MANAGEMENT_BACKEND.md §15
+  /// open-question 4 for the capability matrix.
+  bool get hasHostPowers =>
+      myRole == MeetingRole.host || myRole == MeetingRole.coHost;
 }
 
 class MeetingNotifier extends StateNotifier<MeetingState> {
@@ -1378,6 +1445,100 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       );
     });
 
+    // ── Host management socket events ──────────────────────────────
+    // See docs/HOST_MANAGEMENT_BACKEND.md §8.
+
+    // Host changed — either manual transfer, disconnect-grace
+    // expiry, or host leaving. Patch hostId + the two affected
+    // participant rows' roles + emit a one-shot UI toast via the
+    // host-change banner state.
+    _socket?.on('meeting:host_changed', (data) {
+      if (!mounted || _disposed) return;
+      if (data is! Map) return;
+      final newHostUserId = data['newHostUserId']?.toString();
+      final previousHostUserId = data['previousHostUserId']?.toString();
+      final reason = data['reason']?.toString() ?? 'manual';
+      if (newHostUserId == null || newHostUserId.isEmpty) return;
+      _log('meeting:host_changed new=$newHostUserId '
+          'previous=$previousHostUserId reason=$reason');
+      state = state.copyWith(
+        hostId: newHostUserId,
+        // Reset to ACTIVE — host_changed always exits the
+        // HOST_RECONNECTING state.
+        lifecycleState: 'ACTIVE',
+        clearHostReconnectingExpiry: true,
+        // Patch the two affected participant rows.
+        participants: _patchTwoRoles(
+          state.participants,
+          newHostUserId: newHostUserId,
+          oldHostUserId: previousHostUserId,
+        ),
+      );
+    });
+
+    // Host's socket just dropped. Grace timer is running on the
+    // server. Render the "Host is reconnecting…" banner with a
+    // live countdown; participants can still talk to each other
+    // but can't be promoted/kicked until the host returns or the
+    // grace expires.
+    _socket?.on('meeting:host_reconnecting', (data) {
+      if (!mounted || _disposed) return;
+      if (data is! Map) return;
+      final expiresAtRaw = data['expiresAt']?.toString();
+      final expiresAt =
+          expiresAtRaw != null ? DateTime.tryParse(expiresAtRaw) : null;
+      _log('meeting:host_reconnecting expiresAt=$expiresAt');
+      state = state.copyWith(
+        lifecycleState: 'HOST_RECONNECTING',
+        hostReconnectingExpiresAt: expiresAt ??
+            DateTime.now().add(const Duration(seconds: 45)),
+      );
+    });
+
+    // Host re-claimed their slot within the grace window. Clear
+    // the banner and return to normal operation.
+    _socket?.on('meeting:host_reconnected', (data) {
+      if (!mounted || _disposed) return;
+      _log('meeting:host_reconnected');
+      state = state.copyWith(
+        lifecycleState: 'ACTIVE',
+        clearHostReconnectingExpiry: true,
+      );
+    });
+
+    // A non-transfer role change (promote/demote to/from co-host).
+    // Patch the affected participant's row.
+    _socket?.on('meeting:role_updated', (data) {
+      if (!mounted || _disposed) return;
+      if (data is! Map) return;
+      final affectedUserId =
+          (data['userId'] ?? data['user_id'])?.toString();
+      final roleStr = data['role']?.toString();
+      if (affectedUserId == null || affectedUserId.isEmpty) return;
+      if (roleStr == null || roleStr.isEmpty) return;
+      _log('meeting:role_updated userId=$affectedUserId role=$roleStr');
+      state = state.copyWith(
+        participants: _patchParticipantRole(
+            state.participants, affectedUserId, roleStr),
+      );
+    });
+
+    // Lifecycle pure-information event — useful as a fallback if
+    // we ever miss a host_changed / host_reconnecting (e.g. UDP
+    // burst loss on the socket).
+    _socket?.on('meeting:state_changed', (data) {
+      if (!mounted || _disposed) return;
+      if (data is! Map) return;
+      final nextState = data['lifecycleState']?.toString();
+      if (nextState == null || nextState.isEmpty) return;
+      _log('meeting:state_changed → $nextState');
+      // Don't blindly trust the lifecycle field for clearing the
+      // expiry banner — host_reconnected does that explicitly.
+      // We just sync the string so any UI that switches on it
+      // gets the latest value.
+      state = state.copyWith(lifecycleState: nextState);
+    });
+
     _chatSocket?.on('chat-receive', _handleNewMessage);
     _chatSocket?.on('chat-message', _handleNewMessage);
     _chatSocket?.on('new-message', _handleNewMessage);
@@ -1543,6 +1704,189 @@ class MeetingNotifier extends StateNotifier<MeetingState> {
       patched['canInvite'] = value;
       return patched;
     }).toList();
+  }
+
+  /// Patch a single participant's `role` field. Used by
+  /// meeting:role_updated fan-outs + optimistic local updates
+  /// from the promote/demote actions.
+  List<dynamic> _patchParticipantRole(
+      List<dynamic> participants, String participantUserId, String role) {
+    return participants.map((p) {
+      if (p is! Map) return p;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != participantUserId) return p;
+      final patched = Map<String, dynamic>.from(p);
+      patched['role'] = role;
+      return patched;
+    }).toList();
+  }
+
+  /// Atomic role swap for a host_changed event — patches the new
+  /// host's row to `role: host` AND demotes the previous host
+  /// (if known) to `participant`. Single list-walk so the swap
+  /// is observed atomically by every UI consumer.
+  List<dynamic> _patchTwoRoles(
+    List<dynamic> participants, {
+    required String newHostUserId,
+    String? oldHostUserId,
+  }) {
+    return participants.map((p) {
+      if (p is! Map) return p;
+      final pid = (p['userId'] ?? p['user_id'])?.toString();
+      if (pid != newHostUserId &&
+          (oldHostUserId == null || pid != oldHostUserId)) {
+        return p;
+      }
+      final patched = Map<String, dynamic>.from(p);
+      if (pid == newHostUserId) {
+        patched['role'] = 'host';
+      } else if (pid == oldHostUserId) {
+        // Previous host falls back to participant — promoting
+        // them back to co-host is a separate explicit action by
+        // the new host if they want.
+        patched['role'] = 'participant';
+      }
+      return patched;
+    }).toList();
+  }
+
+  // ── Host management actions ─────────────────────────────────────
+  // See docs/HOST_MANAGEMENT_BACKEND.md §7. Host-only (or co-host
+  // for non-transfer role changes per the capability matrix).
+  // Each returns null on success or a human-readable error string
+  // for caller snackbar.
+
+  /// Host-only: promote or demote a participant between `co_host`
+  /// and `participant`. Setting `host` is rejected here — use
+  /// [transferHost] for that. Optimistic local patch with rollback
+  /// on server failure.
+  Future<String?> setParticipantRole(
+      String participantUserId, MeetingRole role) async {
+    if (state.myRole != MeetingRole.host) {
+      return 'Only the host can do that.';
+    }
+    if (role == MeetingRole.host) {
+      return 'Use transferHost to change the host.';
+    }
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    final previous = state.participants;
+    // Optimistic flip — render the new badge instantly.
+    state = state.copyWith(
+      participants:
+          _patchParticipantRole(previous, participantUserId, role.wire),
+    );
+    try {
+      final confirmed = await _ref
+          .read(hostManagementRepositoryProvider)
+          .setRole(
+            meetingId: meetingId,
+            participantUserId: participantUserId,
+            role: role,
+          );
+      if (!mounted || _disposed) return null;
+      state = state.copyWith(
+        participants: _patchParticipantRole(
+            state.participants, participantUserId, confirmed.wire),
+      );
+      return null;
+    } on HostManagementError catch (e) {
+      if (mounted && !_disposed) {
+        state = state.copyWith(participants: previous);
+      }
+      return _humaniseHostError(e);
+    } catch (_) {
+      if (mounted && !_disposed) {
+        state = state.copyWith(participants: previous);
+      }
+      return 'Could not save. Try again.';
+    }
+  }
+
+  /// Host-only: explicit transfer of host role to [toUserId].
+  /// Server-side this is atomic (transaction over meeting + both
+  /// participant rows). We do NOT optimistically flip the local
+  /// state — instead we wait for the `meeting:host_changed` fan-
+  /// out so EVERY peer sees the swap at the same moment. Worst
+  /// case the host taps Transfer, sees the action complete, and
+  /// the swap appears within the round-trip.
+  Future<String?> transferHost(String toUserId) async {
+    if (state.myRole != MeetingRole.host) {
+      return 'Only the host can transfer host.';
+    }
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    try {
+      await _ref
+          .read(hostManagementRepositoryProvider)
+          .transferHost(
+            meetingId: meetingId,
+            toUserId: toUserId,
+          );
+      // Don't patch state here — meeting:host_changed will arrive
+      // momentarily and do the patch via the socket listener.
+      return null;
+    } on HostManagementError catch (e) {
+      return _humaniseHostError(e);
+    } catch (_) {
+      return 'Could not transfer host. Try again.';
+    }
+  }
+
+  /// Host's reconnect path — submit the one-time `sessionToken`
+  /// from the FCM data-message during the grace window. Caller is
+  /// usually `PushNotificationService` consuming a pending token
+  /// once the user re-enters the meeting, OR the meeting bootstrap
+  /// itself if it can detect the host's own reconnection. Returns
+  /// null on success; descriptive error string otherwise.
+  Future<String?> tryResumeHost(String sessionToken) async {
+    final meetingId = state.meetingId;
+    if (meetingId == null || meetingId.isEmpty) {
+      return 'Not in a meeting.';
+    }
+    try {
+      await _ref
+          .read(hostManagementRepositoryProvider)
+          .resumeHost(
+            meetingId: meetingId,
+            sessionToken: sessionToken,
+          );
+      // State update arrives via meeting:host_reconnected.
+      return null;
+    } on ResumeWindowExpiredError catch (_) {
+      // Grace already expired — the auto-transfer fired. Silent
+      // failure (the user already sees the new host).
+      return null;
+    } on HostManagementError catch (e) {
+      return _humaniseHostError(e);
+    } catch (_) {
+      return 'Could not resume host. Try again.';
+    }
+  }
+
+  String _humaniseHostError(HostManagementError e) {
+    return switch (e) {
+      InvalidRoleError() => 'That role is not allowed.',
+      CannotDemoteHostViaRoleError() =>
+        "Use transfer host to change the host.",
+      CannotTransferToSelfError() =>
+        "You can't transfer the host role to yourself.",
+      TargetNotActiveError() =>
+        "That person isn't in the meeting anymore.",
+      HostManagementForbiddenError() => 'Only the host can do that.',
+      HostManagementNotFoundError() =>
+        "Meeting isn't available anymore.",
+      ResumeTokenInvalidError() =>
+        "Resume token isn't valid — the grace window has ended.",
+      ResumeWindowExpiredError() =>
+        'Reconnect window expired.',
+      MeetingNotActiveError() => 'Meeting is not active.',
+      _ => 'Something went wrong. Try again.',
+    };
   }
 
   void _handleNewMessage(data) {
